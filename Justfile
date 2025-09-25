@@ -55,6 +55,14 @@ exec-bench:
   && kubectl cp  ./run.sh {{NAMESPACE}}/benchmark-interactive:/app/run.sh \
   && {{KN}} exec -it benchmark-interactive -- /bin/bash
 
+exec-poker:
+  mkdir -p ./.tmp \
+  && echo "MODEL := \"{{MODEL}}\"" > .tmp/Justfile.remote.tmp \
+  && sed -e 's#__BASE_URL__#\"http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local\"#g' Justfile.remote >> .tmp/Justfile.remote.tmp \
+  && kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/poker:/app/Justfile \
+  && kubectl cp  ./run.sh {{NAMESPACE}}/poker:/app/run.sh \
+  && {{KN}} exec -it poker -- /bin/zsh
+
 run-bench NAME:
   mkdir -p ./.tmp \
   && echo $(date +%m%d%H%M) > .tmp/TIMESTAMP \
@@ -79,7 +87,8 @@ start:
       -n {{NAMESPACE}} \
       -f inferencepool.values.yaml \
       oci://us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-inference-extension/charts/inferencepool --version v0.5.1 \
-  && {{KN}} apply -k ./manifests/gateway/istio
+  && {{KN}} apply -k ./manifests/gateway/istio \
+  && {{KN}} apply -f ./destinationRule.yaml
 
 
 stop:

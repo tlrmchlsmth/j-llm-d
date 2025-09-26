@@ -3,12 +3,12 @@ BASE_URL := __BASE_URL__
 # Use this Justfile within the cluster.
 
 eval:
-    lm_eval --model local-completions --tasks gsm8k \
+    .lm_eval/bin/lm_eval --model local-completions --tasks gsm8k \
     --model_args model={{MODEL}},base_url={{BASE_URL}}/v1/completions,num_concurrent=2000,max_retries=3,tokenized_requests=False \
     --num_fewshot 10 \
 
 benchmark MC NUM_REQUESTS INPUT_LEN OUTPUT_LEN:
-    python vllm/benchmarks/benchmark_serving.py \
+    vllm bench serve \
         --base-url {{BASE_URL}} \
         --model {{MODEL}} \
         --dataset-name random \
@@ -19,6 +19,14 @@ benchmark MC NUM_REQUESTS INPUT_LEN OUTPUT_LEN:
         --seed $(date +%M%H%M%S) \
         --num-prompts {{NUM_REQUESTS}} \
         --ignore-eos
+
+# Run N waves of X concurrent requests (wraps `benchmark`)
+# Usage: just run-benchmark N X INPUT_LEN OUTPUT_LEN
+# Optional: set OUTFILE=/path/to/log to control the log destination.
+benchmark-a N X INPUT_LEN OUTPUT_LEN:
+    N_X=$(( {{N}} * {{X}} ))
+    outfile="${OUTFILE:-run_benchmark_{{N}}x{{X}}_$(date +%Y%m%d_%H%M%S).log}"
+    just benchmark "{{X}}" "$N_X" "{{INPUT_LEN}}" "{{OUTPUT_LEN}}" |& tee "$outfile"
 
 benchmark_g MC NUM_REQUESTS INPUT_LEN OUTPUT_LEN:
   GUIDELLM__REQUEST_TIMEOUT="900" \
@@ -33,7 +41,7 @@ benchmark_g MC NUM_REQUESTS INPUT_LEN OUTPUT_LEN:
 # Simulates a pure decode workload, for measuring output token throughput and TTFT.
 # Designed to approximate the decode side of a P/D deployment in a steady state.
 benchmark_decode_workload NUM_REQUESTS OUTPUT_LEN:
-    python vllm/benchmarks/benchmark_serving.py \
+    vllm bench serve \
         --base-url {{BASE_URL}} \
         --model {{MODEL}} \
         --dataset-name random \
@@ -45,7 +53,7 @@ benchmark_decode_workload NUM_REQUESTS OUTPUT_LEN:
 
 # For hitting an individual vLLM instance while deploying a P/D setup
 benchmark_no_pd POD_IP RR NUM_REQUESTS INPUT_LEN OUTPUT_LEN:
-    python vllm/benchmarks/benchmark_serving.py \
+    vllm bench serve \
         --base-url http://{{POD_IP}}:8000 \
         --model {{MODEL}} \
         --dataset-name random \

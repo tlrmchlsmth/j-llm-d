@@ -47,15 +47,7 @@ create-secrets:
 start-bench:
     {{KN}} apply -f benchmark-interactive-pod.yaml
   
-exec-bench:
-  mkdir -p ./.tmp \
-  && echo "MODEL := \"{{MODEL}}\"" > .tmp/Justfile.remote.tmp \
-  && sed -e 's#__BASE_URL__#\"http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local\"#g' Justfile.remote >> .tmp/Justfile.remote.tmp \
-  && kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/benchmark-interactive:/app/Justfile \
-  && kubectl cp  ./run.sh {{NAMESPACE}}/benchmark-interactive:/app/run.sh \
-  && {{KN}} exec -it benchmark-interactive -- /bin/bash
-
-exec-poker:
+poke:
   mkdir -p ./.tmp \
   && echo "MODEL := \"{{MODEL}}\"" > .tmp/Justfile.remote.tmp \
   && sed -e 's#__BASE_URL__#\"http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local\"#g' Justfile.remote >> .tmp/Justfile.remote.tmp \
@@ -86,7 +78,7 @@ start:
   && helm install deepseek-r1 \
       -n {{NAMESPACE}} \
       -f inferencepool.values.yaml \
-      oci://us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-inference-extension/charts/inferencepool --version v0.5.1 \
+      oci://us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-inference-extension/charts/inferencepool --version v1.0.0 \
   && {{KN}} apply -k ./manifests/gateway/istio \
   && {{KN}} apply -f ./destinationRule.yaml
 

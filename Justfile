@@ -55,7 +55,6 @@ poke:
   && echo "MODEL := \"{{MODEL}}\"" > .tmp/Justfile.remote.tmp \
   && sed -e 's#__BASE_URL__#\"http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local\"#g' Justfile.remote >> .tmp/Justfile.remote.tmp \
   && kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/poker:/app/Justfile \
-  && kubectl cp  ./run.sh {{NAMESPACE}}/poker:/app/run.sh \
   && {{KN}} exec -it poker -- /bin/zsh
 
 

@@ -11,7 +11,7 @@ spec:
 
   containers:
     - name: poker
-      image: quay.io/tms/poker:0.0.9
+      image: quay.io/tms/poker:0.0.10
       imagePullPolicy: Always
       stdin: true
       tty: true

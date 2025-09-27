@@ -11,6 +11,9 @@ KN := "kubectl -n tms-llm-d-wide-ep"
 
 EXAMPLE_DIR := "llm-d/guides/wide-ep-lws"
 
+default:
+  just --list
+
 @print-gpus:
   kubectl get pods -A -o json | jq -r ' \
     .items \
@@ -44,8 +47,8 @@ create-secrets:
   kubectl create secret generic hf-secret --from-literal=HF_TOKEN={{HF_TOKEN}} -n {{NAMESPACE}} \
   && kubectl create secret generic gh-token-secret --from-literal=GH_TOKEN={{GH_TOKEN}} -n {{NAMESPACE}}
 
-start-bench:
-    {{KN}} apply -f benchmark-interactive-pod.yaml
+start-poker:
+    {{KN}} apply -f poker.yaml
   
 poke:
   mkdir -p ./.tmp \
@@ -55,22 +58,15 @@ poke:
   && kubectl cp  ./run.sh {{NAMESPACE}}/poker:/app/run.sh \
   && {{KN}} exec -it poker -- /bin/zsh
 
-run-bench NAME:
-  mkdir -p ./.tmp \
-  && echo $(date +%m%d%H%M) > .tmp/TIMESTAMP \
-  && echo "{{NAME}}" > .tmp/NAME \
-  && echo "MODEL := \"{{MODEL}}\"" > .tmp/Justfile.remote \
-  && sed -e 's#__BASE_URL__#\"http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local\"#g' Justfile.remote >> .tmp/Justfile.remote \
-  && kubectl cp .tmp/TIMESTAMP {{NAMESPACE}}/benchmark-interactive:/app/TIMESTAMP \
-  && kubectl cp .tmp/NAME {{NAMESPACE}}/benchmark-interactive:/app/NAME \
-  && kubectl cp .tmp/Justfile.remote {{NAMESPACE}}/benchmark-interactive:/app/Justfile \
-  && kubectl cp  ./run.sh {{NAMESPACE}}/benchmark-interactive:/app/run.sh \
-  && kubectl cp  ./ms-wide-ep/values.yaml {{NAMESPACE}}/benchmark-interactive:/app/values.yaml \
-  && {{KN}} exec benchmark-interactive -- bash /app/run.sh
 
-cp-results:
-  kubectl cp benchmark-interactive:/app/results/$(cat ./.tmp/TIMESTAMP) \
-    results/$(cat ./.tmp/TIMESTAMP)
+guidellm-job CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_LEN='128' OUTPUT_LEN='1000' N_WORKERS='4':
+  env \
+    N_WORKERS={{N_WORKERS}} \
+    MAX_CONCURRENCY={{CONCURRENT_PER_WORKER}} \
+    NUM_REQUESTS={{REQUESTS_PER_WORKER}} \
+    INPUT_LEN={{INPUT_LEN}} \
+    OUTPUT_LEN={{OUTPUT_LEN}} \
+    envsubst < guidellm-job.yaml | kubectl apply -f -
 
 start:
   cd {{EXAMPLE_DIR}} \
@@ -91,15 +87,3 @@ stop:
 
 restart:
   just stop && just start
-
-print-results DIR STR:
-  grep "{{STR}}" {{DIR}}/*.log \
-    | awk -F'[/_]' '{print $3, $0}' \
-    | sort -n \
-    | cut -d' ' -f2-
-
-print-throughput DIR:
-  just print-results {{DIR}} "Output token throughput"
-
-print-tpot DIR:
-  just print-results {{DIR}} "Median TPOT"

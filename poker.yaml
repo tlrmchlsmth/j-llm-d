@@ -28,3 +28,12 @@ spec:
               name: hf-secret
               key: HF_TOKEN
               optional: true
+
+      volumeMounts:
+        - name: guide-llm
+          mountPath: /guide-llm
+
+  volumes:
+    - name: guide-llm
+      persistentVolumeClaim:
+        claimName: guide-llm

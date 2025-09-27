@@ -2,6 +2,9 @@ BASE_URL := __BASE_URL__
 
 # Use this Justfile within the cluster.
 
+default:
+  just --list
+
 eval:
     .lm_eval/bin/lm_eval --model local-completions --tasks gsm8k \
     --model_args model={{MODEL}},base_url={{BASE_URL}}/v1/completions,num_concurrent=2000,max_retries=3,tokenized_requests=False \

@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: poker
+  name: parallel-guidellm
   labels:
     app: poker
 spec:
@@ -35,7 +35,7 @@ spec:
             - --max-requests
             - "${NUM_REQUESTS}"
             - --data
-            - '{"prompt_tokens": ${INPUT_LEN}}, "output_tokens": ${OUTPUT_LEN}}}'
+            - '{"prompt_tokens": ${INPUT_LEN}, "output_tokens": ${OUTPUT_LEN}}'
 
           env:
             - name: GUIDELLM_MAX_CONCURRENCY

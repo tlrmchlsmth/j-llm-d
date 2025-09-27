@@ -59,14 +59,15 @@ poke:
   && {{KN}} exec -it poker -- /bin/zsh
 
 
-guidellm-job CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_LEN='128' OUTPUT_LEN='1000' N_WORKERS='4':
-  env \
+par-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_LEN='128' OUTPUT_LEN='1000' N_WORKERS='4':
+  {{KN}} delete job par-guidellm --ignore-not-found=true \
+  && env \
     N_WORKERS={{N_WORKERS}} \
     MAX_CONCURRENCY={{CONCURRENT_PER_WORKER}} \
     NUM_REQUESTS={{REQUESTS_PER_WORKER}} \
     INPUT_LEN={{INPUT_LEN}} \
     OUTPUT_LEN={{OUTPUT_LEN}} \
-    envsubst < guidellm-job.yaml | kubectl apply -f -
+    envsubst < par-guidellm.yaml | kubectl apply -f -
 
 start:
   cd {{EXAMPLE_DIR}} \

@@ -32,6 +32,10 @@ spec:
               #  --cooldown-percent "0.20" \
               
               mkdir -p /guide-llm/${OUTPUT_PATH}
+
+              # For experiment tracking
+              echo "GUIDELLM__MAX_CONCURRENCY=${GUIDELLM__MAX_CONCURRENCY}" > /guide-llm/${OUTPUT_PATH}/cmd
+              echo "GUIDELLM__REQUEST_TIMEOUT=${GUIDELLM__REQUEST_TIMEOUT}" >> /guide-llm/${OUTPUT_PATH}/cmd
               echo "exec guidellm benchmark \
                 --target "http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local" \
                 --rate-type constant \
@@ -43,7 +47,8 @@ spec:
                 --output-path "/guide-llm/${OUTPUT_PATH}/${JOB_COMPLETION_INDEX}.json" \
                 --output-sampling 500 \
                 --disable-console-outputs \
-                --disable-progress" > /guide-llm/${OUTPUT_PATH}/cmd
+                --disable-progress" >> /guide-llm/${OUTPUT_PATH}/cmd
+
 
               
               exec guidellm benchmark \

@@ -84,8 +84,9 @@ start:
 stop:
   cd {{EXAMPLE_DIR}} \
   && helm uninstall deepseek-r1 || true \
-  && {{KN}} delete -k ./manifests/modelserver/coreweave || true \
-  && {{KN}} delete -k ./manifests/gateway/istio || true
+  && {{KN}} delete -k ./manifests/modelserver/coreweave --ignore-not-found=true \
+  && {{KN}} delete -k ./manifests/gateway/istio --ignore-not-found=true \
+  && {{KN}} delete job parallel-guidellm --ignore-not-found=true
 
 restart:
   just stop && just start

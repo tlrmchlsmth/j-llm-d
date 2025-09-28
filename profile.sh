@@ -89,8 +89,11 @@ printf "%s\n" "$PAIRS" | while read -r name ip; do
     "$PREFIX"-prefill-*) port="$PREFILL_PORT" ;;
     *) continue ;;
   esac
+  echo "(curl -sS -m 3 --connect-timeout 1 -X POST "http://$ip:$port/stop_profile" >/dev/null 2>&1 &)"
   (curl -sS -m 3 --connect-timeout 1 -X POST "http://$ip:$port/stop_profile" >/dev/null 2>&1 &)
 done
 SH
+
+kubectl -n "${NAMESPACE}" logs -f profiler-oneshot
 
 echo ">> Done."

@@ -77,8 +77,7 @@ start:
       -n {{NAMESPACE}} \
       -f inferencepool.values.yaml \
       oci://us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-inference-extension/charts/inferencepool --version v1.0.0 \
-  && {{KN}} apply -k ./manifests/gateway/istio \
-  && {{KN}} apply -f ./destinationRule.yaml
+  && {{KN}} apply -k ./manifests/gateway/istio
 
 
 stop:

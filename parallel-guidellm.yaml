@@ -40,7 +40,7 @@ spec:
                 --target "http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local" \
                 --rate-type constant \
                 --max-requests "${NUM_REQUESTS}" \
-                --rate "128" \
+                --rate "1024" \
                 --data '{"prompt_tokens": ${INPUT_LEN}, 
                          "output_tokens": ${OUTPUT_LEN},
                          "output_tokens_stdev": "200"}' \
@@ -55,7 +55,7 @@ spec:
                 --target "http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local" \
                 --rate-type constant \
                 --max-requests "${NUM_REQUESTS}" \
-                --rate "128" \
+                --rate "1024" \
                 --data '{"prompt_tokens": ${INPUT_LEN}, 
                          "output_tokens": ${OUTPUT_LEN},
                          "output_tokens_stdev": "200"}' \

@@ -42,8 +42,7 @@ spec:
                 --max-requests "${NUM_REQUESTS}" \
                 --rate "1024" \
                 --data '{"prompt_tokens": ${INPUT_LEN}, 
-                         "output_tokens": ${OUTPUT_LEN},
-                         "output_tokens_stdev": "200"}' \
+                         "output_tokens": ${OUTPUT_LEN}}' \
                 --output-path "/guide-llm/${OUTPUT_PATH}/${JOB_COMPLETION_INDEX}.json" \
                 --output-sampling 500 \
                 --disable-console-outputs \
@@ -57,8 +56,7 @@ spec:
                 --max-requests "${NUM_REQUESTS}" \
                 --rate "1024" \
                 --data '{"prompt_tokens": ${INPUT_LEN}, 
-                         "output_tokens": ${OUTPUT_LEN},
-                         "output_tokens_stdev": "200"}' \
+                         "output_tokens": ${OUTPUT_LEN}}' \
                 --output-path "/guide-llm/${OUTPUT_PATH}/${JOB_COMPLETION_INDEX}.json" \
                 --output-sampling 500 \
                 --disable-console-outputs \

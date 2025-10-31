@@ -49,13 +49,30 @@ create-secrets:
 
 start-poker:
     {{KN}} apply -f poker.yaml
-  
+
+# Fetch decode pod names and IPs and cache them
+get-decode-pods:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  mkdir -p ./.tmp
+  echo "Fetching decode pod information..."
+  {{KN}} get pods -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | "\(.metadata.name) \(.status.podIP)"' > .tmp/decode_pods.txt
+  echo "Decode pods:"
+  cat .tmp/decode_pods.txt
+
 poke:
-  mkdir -p ./.tmp \
-  && echo "MODEL := \"{{MODEL}}\"" > .tmp/Justfile.remote.tmp \
-  && sed -e 's#__BASE_URL__#\"http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local\"#g' Justfile.remote >> .tmp/Justfile.remote.tmp \
-  && kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/poker:/app/Justfile \
-  && {{KN}} exec -it poker -- /bin/zsh
+  #!/usr/bin/env bash
+  set -euo pipefail
+  just get-decode-pods
+  mkdir -p ./.tmp
+  echo "MODEL := \"{{MODEL}}\"" > .tmp/Justfile.remote.tmp
+  DECODE_IPS=$(cat .tmp/decode_pods.txt | awk '{print $2}' | tr '\n' ' ')
+  echo "Injecting decode pod IPs into Justfile: $DECODE_IPS"
+  sed -e 's#__BASE_URL__#"http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local"#g' \
+      -e "s#__DECODE_POD_IPS__#\"$DECODE_IPS\"#g" \
+      Justfile.remote >> .tmp/Justfile.remote.tmp
+  kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/poker:/app/Justfile
+  {{KN}} exec -it poker -- /bin/zsh
 
 
 parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_LEN='128' OUTPUT_LEN='1000' N_WORKERS='4':
@@ -71,7 +88,7 @@ parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_
       < parallel-guidellm.yaml | kubectl apply -f -
 
 deploy_inferencepool:
-  cd {{EXAMPLE_DIR}} \
+  cd {{EXAMPLE_DIR}} && \
   helm install deepseek-r1 \
     -n {{NAMESPACE}} \
     -f inferencepool.values.yaml \
@@ -94,3 +111,37 @@ stop:
 
 restart:
   just stop && just start
+
+# Copy PyTorch traces from all decode pods to local ./traces/N directory
+copy-traces:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  # Ensure we have fresh pod info
+  if [ ! -f .tmp/decode_pods.txt ]; then
+    echo "Pod info not cached, fetching..."
+    just get-decode-pods
+  fi
+
+  # Find next available serial number
+  N=0
+  while [ -d "./traces/$N" ]; do
+    N=$((N + 1))
+  done
+
+  TRACE_DIR="./traces/$N"
+  mkdir -p "$TRACE_DIR"
+  echo "Copying traces to $TRACE_DIR"
+
+  # Copy traces from each pod
+  while read -r POD_NAME POD_IP; do
+    echo "Copying traces from $POD_NAME..."
+    POD_DIR="$TRACE_DIR/$POD_NAME"
+    mkdir -p "$POD_DIR"
+    {{KN}} cp "$POD_NAME:/traces" "$POD_DIR" 2>/dev/null || echo "  No traces found in $POD_NAME or copy failed"
+  done < .tmp/decode_pods.txt
+
+  echo "Traces copied to $TRACE_DIR"
+  if [ -d "$TRACE_DIR" ]; then
+    echo "Total size: $(du -sh $TRACE_DIR | cut -f1)"
+  fi

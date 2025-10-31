@@ -1,4 +1,5 @@
 BASE_URL := __BASE_URL__
+DECODE_POD_IPS := __DECODE_POD_IPS__
 
 # Use this Justfile within the cluster.
 
@@ -77,3 +78,37 @@ profile URL:
   just start_profile {{URL}} \
   && sleep 1 \
   && just stop_profile {{URL}}
+
+# Profile all decode pods (IPs injected during 'just poke')
+profile_all_decode:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  DECODE_IPS="{{DECODE_POD_IPS}}"
+
+  if [ -z "$DECODE_IPS" ] || [ "$DECODE_IPS" = "__DECODE_POD_IPS__" ]; then
+    echo "No decode pod IPs found. Make sure you ran 'just poke' to inject the IPs."
+    exit 1
+  fi
+
+  echo "Decode pod IPs: $DECODE_IPS"
+  echo "Starting profile on all decode pods asynchronously..."
+
+  for IP in $DECODE_IPS; do
+    echo "  Starting profile on $IP..."
+    curl -s -X POST http://$IP:8200/start_profile &
+  done
+  wait
+
+  echo "All decode pods started profiling"
+  echo "Sleeping for 1 second..."
+  sleep 1
+
+  echo "Stopping profile on all decode pods asynchronously..."
+  for IP in $DECODE_IPS; do
+    echo "  Stopping profile on $IP..."
+    curl -s -X POST http://$IP:8200/stop_profile &
+  done
+  wait
+
+  echo "Profiling complete on all decode pods!"

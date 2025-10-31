@@ -70,21 +70,24 @@ parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_
     envsubst '${N_WORKERS} ${MAX_CONCURRENCY} ${NUM_REQUESTS} ${INPUT_LEN} ${OUTPUT_LEN} ${OUTPUT_PATH}' \
       < parallel-guidellm.yaml | kubectl apply -f -
 
+deploy_inferencepool:
+  cd {{EXAMPLE_DIR}} \
+  helm install deepseek-r1 \
+    -n {{NAMESPACE}} \
+    -f inferencepool.values.yaml \
+    --set "provider.name=istio" \
+    --set "inferenceExtension.monitoring.prometheus.enable=true" \
+    oci://us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-inference-extension/charts/inferencepool --version v1.0.1
+
 start:
   cd {{EXAMPLE_DIR}} \
   && {{KN}} apply -k ./manifests/modelserver/coreweave \
-  && helm install deepseek-r1 \
-      -n {{NAMESPACE}} \
-      -f inferencepool.values.yaml \
-      oci://us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-inference-extension/charts/inferencepool \
-      --version v1.0.1 \
-      --set "provider.name=istio" \
+  && just deploy_inferencepool \
   && {{KN}} apply -k ./manifests/gateway/istio
-
 
 stop:
   cd {{EXAMPLE_DIR}} \
-  && helm uninstall deepseek-r1 || true \
+  && helm uninstall deepseek-r1 --ignore-not-found=true \
   && {{KN}} delete -k ./manifests/modelserver/coreweave --ignore-not-found=true \
   && {{KN}} delete -k ./manifests/gateway/istio --ignore-not-found=true \
   && {{KN}} delete job parallel-guidellm --ignore-not-found=true

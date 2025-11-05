@@ -1,5 +1,6 @@
-BASE_URL := __BASE_URL__
-DECODE_POD_IPS := __DECODE_POD_IPS__
+MODEL := "${MODEL}"
+BASE_URL := "${BASE_URL}"
+DECODE_POD_IPS := "${DECODE_POD_IPS}"
 
 # Use this Justfile within the cluster.
 
@@ -86,7 +87,7 @@ profile_all_decode:
 
   DECODE_IPS="{{DECODE_POD_IPS}}"
 
-  if [ -z "$DECODE_IPS" ] || [ "$DECODE_IPS" = "__DECODE_POD_IPS__" ]; then
+  if [[ -z "$DECODE_IPS" || "$DECODE_IPS" =~ \$ ]]; then
     echo "No decode pod IPs found. Make sure you ran 'just poke' to inject the IPs."
     exit 1
   fi

@@ -65,12 +65,15 @@ poke:
   set -euo pipefail
   just get-decode-pods
   mkdir -p ./.tmp
-  echo "MODEL := \"{{MODEL}}\"" > .tmp/Justfile.remote.tmp
-  DECODE_IPS=$(cat .tmp/decode_pods.txt | awk '{print $2}' | tr '\n' ' ')
-  echo "Injecting decode pod IPs into Justfile: $DECODE_IPS"
-  sed -e 's#__BASE_URL__#"http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local"#g' \
-      -e "s#__DECODE_POD_IPS__#\"$DECODE_IPS\"#g" \
-      Justfile.remote >> .tmp/Justfile.remote.tmp
+
+  # Export variables for envsubst
+  export MODEL="{{MODEL}}"
+  export BASE_URL="http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local"
+  export DECODE_POD_IPS=$(cat .tmp/decode_pods.txt | awk '{print $2}' | tr '\n' ' ')
+
+  echo "Injecting decode pod IPs into Justfile: $DECODE_POD_IPS"
+
+  envsubst '${MODEL} ${BASE_URL} ${DECODE_POD_IPS}' < Justfile.remote > .tmp/Justfile.remote.tmp
   kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/poker:/app/Justfile
   {{KN}} exec -it poker -- /bin/zsh
 

@@ -23,9 +23,12 @@ default:
         pod: .metadata.name, \
         node: .spec.nodeName, \
         gpus: ([ .spec.containers[]? \
-                 | ( .resources.limits."nvidia.com/gpu" \
-                     // .resources.requests."nvidia.com/gpu" \
-                     // "0" ) | tonumber ] | add) \
+                 | ( (.resources.limits."nvidia.com/gpu" \
+                      // .resources.requests."nvidia.com/gpu" \
+                      // "0" | tonumber) \
+                   + (.resources.limits."amd.com/gpu" \
+                      // .resources.requests."amd.com/gpu" \
+                      // "0" | tonumber) ) ] | add) \
       }) \
     | map(select(.gpus>0 and .node != null)) \
     | sort_by(.node, .ns, .pod) \

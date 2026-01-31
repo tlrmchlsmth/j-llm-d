@@ -46,7 +46,7 @@ RUN git clone --depth=1 --filter=blob:none \
 
 # lm_eval
 RUN uv venv .lm_eval -p 3.12
-RUN uv pip install --python "/app/.lm_eval/bin/python" "lm_eval[api]"
+RUN uv pip install --python "/app/.lm_eval/bin/python" "lm_eval[api]" transformers
 RUN echo "alias lm_eval=/app/.lm_eval/bin/lm_eval" >> .dotfiles/zshrc
 
 # Make first time neovim startup seamless

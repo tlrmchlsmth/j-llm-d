@@ -8,7 +8,14 @@ default:
 
 # Detect model from vLLM endpoint
 @_model:
-  curl -s {{BASE_URL}}/v1/models | jq -r '.data[0].id'
+  #!/usr/bin/env bash
+  RESP=$(curl -s {{BASE_URL}}/v1/models)
+  MODEL=$(echo "$RESP" | jq -r '.data[0].id' 2>/dev/null)
+  if [[ -z "$MODEL" || "$MODEL" == "null" ]]; then
+    echo "ERROR: Could not detect model. Response: $RESP" >&2
+    exit 1
+  fi
+  echo "$MODEL"
 
 eval:
     .lm_eval/bin/lm_eval --model local-completions --tasks gsm8k \

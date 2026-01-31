@@ -14,7 +14,6 @@ RUN apt-get update && \
         git \
         tmux zsh \
         nodejs npm \
-        neovim \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -31,11 +30,11 @@ ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 # Install rust-just
 RUN uv pip install rust-just
 
-# Install dotfiles (|| true to handle nvim arch issues on arm64)
+# Install dotfiles
 RUN git clone --depth=1 --filter=blob:none https://github.com/tlrmchlsmth/dotfiles .dotfiles \
     && cd .dotfiles \
-    && PIP_BREAK_SYSTEM_PACKAGES=1 bash install.sh || true
-RUN rm -rf .dotfiles/.git
+    && PIP_BREAK_SYSTEM_PACKAGES=1 bash install.sh \
+    && rm -rf .git
 
 # guidellm
 RUN git clone --depth=1 --filter=blob:none \

@@ -50,7 +50,7 @@ create-secrets:
   && kubectl create secret generic gh-token-secret --from-literal=GH_TOKEN={{GH_TOKEN}} -n {{NAMESPACE}}
 
 start-poker:
-    {{KN}} apply -f poker.yaml
+    {{KN}} apply -f poker/poker.yaml
 
 # Fetch decode pod names and IPs and cache them
 get-decode-pods:

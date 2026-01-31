@@ -1,4 +1,3 @@
-# poker/values.yaml
 apiVersion: v1
 kind: Pod
 metadata:
@@ -11,7 +10,7 @@ spec:
 
   containers:
     - name: poker
-      image: quay.io/tms/poker:0.0.10
+      image: quay.io/tms/poker:0.0.11
       imagePullPolicy: Always
       stdin: true
       tty: true

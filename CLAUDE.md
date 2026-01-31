@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Preferences
+
+- Use `podman` instead of `docker` for container builds
+
 ## Repository Overview
 
 This is a development workspace for llm-d (https://github.com/llm-d/llm-d), a Kubernetes-native distributed inference serving stack for large language models. The repository contains:

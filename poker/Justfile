@@ -1,0 +1,36 @@
+IMAGE := "quay.io/tms/poker"
+
+default:
+  just --list
+
+# Build for a specific arch (arm64 or amd64)
+build-arch VERSION ARCH:
+  podman build --platform linux/{{ARCH}} -t {{IMAGE}}:{{VERSION}}-{{ARCH}} .
+
+# Build both architectures
+build VERSION:
+  just build-arch {{VERSION}} arm64
+  just build-arch {{VERSION}} amd64
+
+# Push arch-specific images
+push-arch VERSION ARCH:
+  podman push {{IMAGE}}:{{VERSION}}-{{ARCH}}
+
+# Push both arch images
+push-images VERSION:
+  just push-arch {{VERSION}} arm64
+  just push-arch {{VERSION}} amd64
+
+# Create and push multi-arch manifest
+push-manifest VERSION:
+  podman manifest create {{IMAGE}}:{{VERSION}}
+  podman manifest add {{IMAGE}}:{{VERSION}} {{IMAGE}}:{{VERSION}}-arm64
+  podman manifest add {{IMAGE}}:{{VERSION}} {{IMAGE}}:{{VERSION}}-amd64
+  podman manifest push {{IMAGE}}:{{VERSION}}
+
+# Build and release (full workflow)
+release VERSION:
+  just build {{VERSION}}
+  just push-images {{VERSION}}
+  just push-manifest {{VERSION}}
+  @echo "Released {{IMAGE}}:{{VERSION}}"

@@ -9,6 +9,7 @@ GH_TOKEN := "$GH_TOKEN"
 KN := "kubectl -n " + NAMESPACE
 
 EXAMPLE_DIR := "llm-d/guides/wide-ep-lws"
+GATEWAY_DIR := "llm-d/guides/recipes/gateway"
 
 default:
   just --list
@@ -69,7 +70,7 @@ poke:
   mkdir -p ./.tmp
 
   # Export variables for envsubst
-  export BASE_URL="http://wide-ep-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
+  export BASE_URL="http://llm-d-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
   export DECODE_POD_IPS=$(cat .tmp/decode_pods.txt | awk '{print $2}' | tr '\n' ' ')
 
   echo "Injecting decode pod IPs into Justfile: $DECODE_POD_IPS"
@@ -93,24 +94,24 @@ parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_
 
 deploy_inferencepool:
   cd {{EXAMPLE_DIR}} && \
-  helm install deepseek-r1 \
+  helm install llm-d-infpool \
     -n {{NAMESPACE}} \
-    -f inferencepool.values.yaml \
+    -f manifests/inferencepool.values.yaml \
     --set "provider.name=istio" \
-    --set "inferenceExtension.monitoring.prometheus.enable=true" \
-    oci://us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-inference-extension/charts/inferencepool --version v1.0.1
+    --set "inferenceExtension.monitoring.prometheus.enabled=true" \
+    oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool --version v1.2.0
 
 start:
   cd {{EXAMPLE_DIR}} \
   && {{KN}} apply -k ./manifests/modelserver/coreweave \
   && just deploy_inferencepool \
-  && {{KN}} apply -k ./manifests/gateway/istio
+  && {{KN}} apply -k ../../recipes/gateway/istio
 
 stop:
   cd {{EXAMPLE_DIR}} \
-  && helm uninstall deepseek-r1 --ignore-not-found=true \
+  && helm uninstall llm-d-infpool -n {{NAMESPACE}} --ignore-not-found=true \
   && {{KN}} delete -k ./manifests/modelserver/coreweave --ignore-not-found=true \
-  && {{KN}} delete -k ./manifests/gateway/istio --ignore-not-found=true \
+  && {{KN}} delete -k ../../recipes/gateway/istio --ignore-not-found=true \
   && {{KN}} delete job parallel-guidellm --ignore-not-found=true
 
 restart:

@@ -1,5 +1,5 @@
 BASE_URL := "${BASE_URL}"
-DECODE_POD_IPS := "${DECODE_POD_IPS}"
+NAMESPACE := "${NAMESPACE}"
 
 # Use this Justfile within the cluster.
 
@@ -83,15 +83,16 @@ profile URL:
   && sleep 1 \
   && just stop_profile {{URL}}
 
-# Profile all decode pods (IPs injected during 'just poke')
+# Profile all decode pods (detected at runtime via kubectl)
 profile_all_decode:
   #!/usr/bin/env bash
   set -euo pipefail
 
-  DECODE_IPS="{{DECODE_POD_IPS}}"
+  echo "Detecting decode pods..."
+  DECODE_IPS=$(kubectl get pods -n {{NAMESPACE}} -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | .status.podIP' | tr '\n' ' ')
 
-  if [[ -z "$DECODE_IPS" || "$DECODE_IPS" =~ \$ ]]; then
-    echo "No decode pod IPs found. Make sure you ran 'just poke' to inject the IPs."
+  if [[ -z "$DECODE_IPS" ]]; then
+    echo "No decode pods found in namespace {{NAMESPACE}}"
     exit 1
   fi
 

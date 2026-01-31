@@ -66,16 +66,13 @@ get-decode-pods:
 poke:
   #!/usr/bin/env bash
   set -euo pipefail
-  just get-decode-pods
   mkdir -p ./.tmp
 
   # Export variables for envsubst
   export BASE_URL="http://llm-d-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
-  export DECODE_POD_IPS=$(cat .tmp/decode_pods.txt | awk '{print $2}' | tr '\n' ' ')
+  export NAMESPACE="{{NAMESPACE}}"
 
-  echo "Injecting decode pod IPs into Justfile: $DECODE_POD_IPS"
-
-  envsubst '${BASE_URL} ${DECODE_POD_IPS}' < Justfile.remote > .tmp/Justfile.remote.tmp
+  envsubst '${BASE_URL} ${NAMESPACE}' < Justfile.remote > .tmp/Justfile.remote.tmp
   kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/poker:/app/Justfile
   {{KN}} exec -it poker -- /bin/zsh
 

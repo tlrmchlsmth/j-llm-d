@@ -1,4 +1,3 @@
-MODEL := "${MODEL}"
 BASE_URL := "${BASE_URL}"
 DECODE_POD_IPS := "${DECODE_POD_IPS}"
 
@@ -7,15 +6,19 @@ DECODE_POD_IPS := "${DECODE_POD_IPS}"
 default:
   just --list
 
+# Detect model from vLLM endpoint
+@_model:
+  curl -s {{BASE_URL}}/v1/models | jq -r '.data[0].id'
+
 eval:
     .lm_eval/bin/lm_eval --model local-completions --tasks gsm8k \
-    --model_args model={{MODEL}},base_url={{BASE_URL}}/v1/completions,num_concurrent=2000,max_retries=3,tokenized_requests=False \
+    --model_args model=$(just _model),base_url={{BASE_URL}}/v1/completions,num_concurrent=2000,max_retries=3,tokenized_requests=False \
     --num_fewshot 10 \
 
 benchmark MC NUM_REQUESTS INPUT_LEN OUTPUT_LEN:
     vllm bench serve \
         --base-url {{BASE_URL}} \
-        --model {{MODEL}} \
+        --model $(just _model) \
         --dataset-name random \
         --random-input-len {{INPUT_LEN}} \
         --random-output-len {{OUTPUT_LEN}}  \
@@ -48,7 +51,7 @@ benchmark_g MC NUM_REQUESTS INPUT_LEN OUTPUT_LEN:
 benchmark_decode_workload NUM_REQUESTS OUTPUT_LEN:
     vllm bench serve \
         --base-url {{BASE_URL}} \
-        --model {{MODEL}} \
+        --model $(just _model) \
         --dataset-name random \
         --random-input-len 1 \
         --random-output-len {{OUTPUT_LEN}}  \
@@ -60,7 +63,7 @@ benchmark_decode_workload NUM_REQUESTS OUTPUT_LEN:
 benchmark_no_pd POD_IP RR NUM_REQUESTS INPUT_LEN OUTPUT_LEN:
     vllm bench serve \
         --base-url http://{{POD_IP}}:8000 \
-        --model {{MODEL}} \
+        --model $(just _model) \
         --dataset-name random \
         --random-input-len {{INPUT_LEN}} \
         --random-output-len {{OUTPUT_LEN}}  \

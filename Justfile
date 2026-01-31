@@ -1,13 +1,12 @@
 set dotenv-load
 set dotenv-required
 
-NAMESPACE := "tms-llm-d-wide-ep"
+NAMESPACE := "vllm"
 HF_TOKEN := "$HF_TOKEN"
 GH_TOKEN := "$GH_TOKEN"
 
-MODEL := "deepseek-ai/DeepSeek-R1-0528"
 
-KN := "kubectl -n tms-llm-d-wide-ep"
+KN := "kubectl -n " + NAMESPACE
 
 EXAMPLE_DIR := "llm-d/guides/wide-ep-lws"
 
@@ -70,13 +69,12 @@ poke:
   mkdir -p ./.tmp
 
   # Export variables for envsubst
-  export MODEL="{{MODEL}}"
-  export BASE_URL="http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local"
+  export BASE_URL="http://wide-ep-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
   export DECODE_POD_IPS=$(cat .tmp/decode_pods.txt | awk '{print $2}' | tr '\n' ' ')
 
   echo "Injecting decode pod IPs into Justfile: $DECODE_POD_IPS"
 
-  envsubst '${MODEL} ${BASE_URL} ${DECODE_POD_IPS}' < Justfile.remote > .tmp/Justfile.remote.tmp
+  envsubst '${BASE_URL} ${DECODE_POD_IPS}' < Justfile.remote > .tmp/Justfile.remote.tmp
   kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/poker:/app/Justfile
   {{KN}} exec -it poker -- /bin/zsh
 

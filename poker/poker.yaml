@@ -7,6 +7,8 @@ metadata:
 
 spec:
   restartPolicy: Never
+  nodeSelector:
+    node.kubernetes.io/instance-type: BM.GPU.GB200.4
 
   containers:
     - name: poker
@@ -28,11 +30,3 @@ spec:
               key: HF_TOKEN
               optional: true
 
-      volumeMounts:
-        - name: guide-llm
-          mountPath: /guide-llm
-
-  volumes:
-    - name: guide-llm
-      persistentVolumeClaim:
-        claimName: guide-llm

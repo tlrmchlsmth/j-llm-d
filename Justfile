@@ -69,7 +69,7 @@ poke:
   mkdir -p ./.tmp
 
   # Export variables for envsubst
-  export BASE_URL="http://llm-d-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
+  export BASE_URL="http://wide-ep-gb200-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
   export NAMESPACE="{{NAMESPACE}}"
 
   envsubst '${BASE_URL} ${NAMESPACE}' < Justfile.remote > .tmp/Justfile.remote.tmp

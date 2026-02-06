@@ -5,11 +5,10 @@ NAMESPACE := "vllm"
 HF_TOKEN := "$HF_TOKEN"
 GH_TOKEN := "$GH_TOKEN"
 
-
 KN := "kubectl -n " + NAMESPACE
 
-EXAMPLE_DIR := "llm-d/guides/wide-ep-lws"
-GATEWAY_DIR := "llm-d/guides/recipes/gateway"
+GB200_DIR := "llm-d/guides/wide-ep-lws/manifests/modelserver/gb200"
+MONITORING_DIR := "monitoring"
 
 default:
   just --list
@@ -90,25 +89,23 @@ parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_
       < parallel-guidellm.yaml | kubectl apply -f -
 
 deploy_inferencepool:
-  cd {{EXAMPLE_DIR}} && \
-  helm install llm-d-infpool \
-    -n {{NAMESPACE}} \
-    -f manifests/inferencepool.values.yaml \
-    --set "provider.name=istio" \
-    --set "inferenceExtension.monitoring.prometheus.enabled=true" \
-    oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool --version v1.2.0
+  helm upgrade --install wide-ep-gb200-infpool \
+    oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
+    --version v1.2.0 \
+    -f {{GB200_DIR}}/inferencepool.values.yaml \
+    -n {{NAMESPACE}}
 
 start:
-  cd {{EXAMPLE_DIR}} \
-  && {{KN}} apply -k ./manifests/modelserver/coreweave \
+  {{KN}} apply -k {{GB200_DIR}} \
+  && {{KN}} apply -f {{GB200_DIR}}/gateway.yaml \
   && just deploy_inferencepool \
-  && {{KN}} apply -k ../../recipes/gateway/istio
+  && {{KN}} apply -f {{GB200_DIR}}/httproute.yaml
 
 stop:
-  cd {{EXAMPLE_DIR}} \
-  && helm uninstall llm-d-infpool -n {{NAMESPACE}} --ignore-not-found=true \
-  && {{KN}} delete -k ./manifests/modelserver/coreweave --ignore-not-found=true \
-  && {{KN}} delete -k ../../recipes/gateway/istio --ignore-not-found=true \
+  helm uninstall wide-ep-gb200-infpool -n {{NAMESPACE}} 2>/dev/null || true \
+  && {{KN}} delete -f {{GB200_DIR}}/httproute.yaml --ignore-not-found=true \
+  && {{KN}} delete -f {{GB200_DIR}}/gateway.yaml --ignore-not-found=true \
+  && {{KN}} delete -k {{GB200_DIR}} --ignore-not-found=true \
   && {{KN}} delete job parallel-guidellm --ignore-not-found=true
 
 restart:
@@ -147,3 +144,35 @@ copy-traces:
   if [ -d "$TRACE_DIR" ]; then
     echo "Total size: $(du -sh $TRACE_DIR | cut -f1)"
   fi
+
+# === Monitoring ===
+
+# Install Prometheus and Grafana (namespace-scoped, no cluster permissions needed)
+start-monitoring:
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update && helm repo add grafana https://grafana.github.io/helm-charts --force-update && helm repo update && kubectl apply -f {{MONITORING_DIR}}/prometheus-rbac.yaml && kubectl apply -f {{MONITORING_DIR}}/grafana-rbac.yaml && helm upgrade --install prometheus prometheus-community/prometheus -n {{NAMESPACE}} -f {{MONITORING_DIR}}/prometheus-values.yaml --set rbac.create=false && helm upgrade --install grafana grafana/grafana -n {{NAMESPACE}} -f {{MONITORING_DIR}}/grafana-values.yaml --set rbac.create=false
+
+# Uninstall monitoring stack
+stop-monitoring:
+  helm uninstall prometheus -n {{NAMESPACE}} --ignore-not-found && helm uninstall grafana -n {{NAMESPACE}} --ignore-not-found && kubectl delete -f {{MONITORING_DIR}}/prometheus-rbac.yaml --ignore-not-found && kubectl delete -f {{MONITORING_DIR}}/grafana-rbac.yaml --ignore-not-found
+
+# Port-forward Grafana to localhost:3000
+grafana:
+  kubectl port-forward -n {{NAMESPACE}} svc/grafana 3000:80
+
+# Port-forward Prometheus to localhost:9090
+prometheus:
+  kubectl port-forward -n {{NAMESPACE}} svc/prometheus-server 9090:80
+
+# Load llm-d Grafana dashboards
+load-dashboards:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  DASHBOARD_DIR="llm-d/docs/monitoring/grafana/dashboards"
+  for f in "$DASHBOARD_DIR"/*.json; do
+    NAME=$(basename "$f" .json)
+    echo "Creating ConfigMap for dashboard: $NAME"
+    {{KN}} create configmap "grafana-dashboard-$NAME" --from-file="$NAME.json=$f" --dry-run=client -o yaml | \
+      {{KN}} label -f - --local -o yaml grafana_dashboard=1 | \
+      {{KN}} apply -f -
+  done
+  echo "Dashboards loaded. Grafana will auto-discover them within 30 seconds."

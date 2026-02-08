@@ -17,6 +17,7 @@
 results-*/
 guide-llm-results/
 traces/
+*.csv
 
 # Python
 __pycache__/

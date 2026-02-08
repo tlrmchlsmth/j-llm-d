@@ -7,6 +7,7 @@ via transient reader pods.
 
 Usage:
     python3 pd-config/collect.py [-n NAMESPACE] [-o OUTPUT_DIR]
+    python3 pd-config/collect.py [-n NAMESPACE] --sheets "Spreadsheet Title"
 """
 
 import argparse
@@ -256,14 +257,13 @@ def parse_job_name(filename: str) -> tuple[str, int] | None:
     return None
 
 
-def write_csv(
+def build_scaling_table(
     results: list[BenchResult],
     workload_type: str,
     isl: int,
     osl: int,
-    output_path: str,
-) -> None:
-    """Write results in spreadsheet format matching the reference CSVs."""
+) -> list[list]:
+    """Build the scaling table as a list of rows (for both CSV and Sheets)."""
     by_tp: dict[int, list[BenchResult]] = defaultdict(list)
     for r in results:
         by_tp[r.tp].append(r)
@@ -273,27 +273,206 @@ def write_csv(
 
     max_cols = max(len(runs) for runs in by_tp.values())
 
+    label = "Prefill" if workload_type == "prefill" else "Decode"
+    rows = []
+    rows.append(["", label, f"ISL: {isl}", f"OSL: {osl}"] + [""] * max_cols)
+    rows.append([""] * (max_cols + 4))
+
+    for tp in sorted(by_tp.keys()):
+        runs = by_tp[tp]
+        concurrencies = [r.concurrency for r in runs]
+        throughputs = [int(round(r.raw_throughput)) for r in runs]
+        tpsgs = [int(round(r.tpsg)) for r in runs]
+        tpsus = [int(round(r.tpsu)) for r in runs]
+
+        rows.append(["", "GPUs", "Concurrency"] + concurrencies)
+        rows.append(["", "", f"TP={tp}"] + throughputs)
+        rows.append(["", tp, "TPSG"] + tpsgs)
+        rows.append(["", "", "TPSU"] + tpsus)
+        rows.append([""] * (max_cols + 4))
+
+    return rows
+
+
+def build_pareto_data(results: list[BenchResult]) -> list[list]:
+    """Build Pareto chart data in sparse layout for Google Sheets scatter chart.
+
+    Each TP level gets its own block of rows. Column A = TPSU, and exactly one
+    of the TP columns has the TPSG value (others blank). This lets the chart
+    use column A as the shared X-axis while each series has independent points.
+    """
+    tp_values = sorted(set(r.tp for r in results))
+    header = ["TPSU (tok/s/user)"] + [f"TP={tp} TPSG" for tp in tp_values]
+    rows = [header]
+    for tp in tp_values:
+        tp_results = sorted(
+            [r for r in results if r.tp == tp], key=lambda r: r.concurrency
+        )
+        col_idx = tp_values.index(tp)
+        for r in tp_results:
+            row = [int(round(r.tpsu))] + [""] * len(tp_values)
+            row[col_idx + 1] = int(round(r.tpsg))
+            rows.append(row)
+    return rows
+
+
+def upload_to_sheets(
+    all_results: list[BenchResult],
+    isl_osl: dict[str, tuple[int, int]],
+    spreadsheet_title: str,
+) -> str:
+    """Upload results to Google Sheets with Pareto charts. Returns spreadsheet URL."""
+    try:
+        import gspread
+    except ImportError:
+        print(
+            "gspread is not installed. Run: uv pip install gspread google-auth-oauthlib",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    gc = gspread.oauth()
+
+    # Create or open spreadsheet
+    try:
+        sh = gc.open(spreadsheet_title)
+        # Clear existing sheets for a fresh upload
+        print(f"Opened existing spreadsheet: {spreadsheet_title}")
+    except gspread.exceptions.SpreadsheetNotFound:
+        sh = gc.create(spreadsheet_title)
+        print(f"Created new spreadsheet: {spreadsheet_title}")
+
+    for wt in ["prefill", "decode"]:
+        wt_results = [r for r in all_results if r.workload_type == wt]
+        if not wt_results:
+            continue
+
+        isl, osl = isl_osl.get(
+            wt, (4096 if wt == "prefill" else 2, 1 if wt == "prefill" else 256)
+        )
+
+        # Get or create worksheet
+        ws_title = wt.title()
+        try:
+            ws = sh.worksheet(ws_title)
+            ws.clear()
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=ws_title, rows=100, cols=20)
+
+        # 1. Write scaling table
+        table_rows = build_scaling_table(wt_results, wt, isl, osl)
+        ws.update(range_name="A1", values=table_rows)
+
+        # 2. Write Pareto data + chart (decode only)
+        if wt == "decode":
+            pareto_start_row = len(table_rows) + 2  # 1-indexed, with gap
+            pareto_rows = build_pareto_data(wt_results)
+            ws.update(range_name=f"A{pareto_start_row}", values=pareto_rows)
+
+            tp_values = sorted(set(r.tp for r in wt_results))
+            num_data_rows = len(pareto_rows) - 1  # exclude header
+            pareto_start_idx = pareto_start_row - 1  # 0-indexed
+            pareto_end_idx = pareto_start_idx + len(pareto_rows)
+
+            series = []
+            for i, tp in enumerate(tp_values):
+                series.append({
+                    "series": {
+                        "sourceRange": {
+                            "sources": [{
+                                "sheetId": ws.id,
+                                "startRowIndex": pareto_start_idx,
+                                "endRowIndex": pareto_end_idx,
+                                "startColumnIndex": i + 1,
+                                "endColumnIndex": i + 2,
+                            }]
+                        }
+                    },
+                    "targetAxis": "LEFT_AXIS",
+                })
+
+            chart_request = {
+                "requests": [{
+                    "addChart": {
+                        "chart": {
+                            "spec": {
+                                "title": "Decode: GPU Efficiency vs User Throughput",
+                                "basicChart": {
+                                    "chartType": "SCATTER",
+                                    "legendPosition": "BOTTOM_LEGEND",
+                                    "domains": [{
+                                        "domain": {
+                                            "sourceRange": {
+                                                "sources": [{
+                                                    "sheetId": ws.id,
+                                                    "startRowIndex": pareto_start_idx,
+                                                    "endRowIndex": pareto_end_idx,
+                                                    "startColumnIndex": 0,
+                                                    "endColumnIndex": 1,
+                                                }]
+                                            }
+                                        }
+                                    }],
+                                    "series": series,
+                                    "axis": [
+                                        {
+                                            "position": "BOTTOM_AXIS",
+                                            "title": "Throughput per User (tok/s)",
+                                        },
+                                        {
+                                            "position": "LEFT_AXIS",
+                                            "title": "Throughput per GPU (tok/s)",
+                                        },
+                                    ],
+                                    "headerCount": 1,
+                                },
+                            },
+                            "position": {
+                                "overlayPosition": {
+                                    "anchorCell": {
+                                        "sheetId": ws.id,
+                                        "rowIndex": pareto_end_idx + 1,
+                                        "columnIndex": 0,
+                                    },
+                                    "widthPixels": 800,
+                                    "heightPixels": 500,
+                                }
+                            },
+                        }
+                    }
+                }]
+            }
+            sh.batch_update(chart_request)
+            print(f"  {ws_title}: table ({len(table_rows)} rows) + "
+                  f"Pareto chart ({num_data_rows} points, {len(tp_values)} series)")
+        else:
+            print(f"  {ws_title}: table ({len(table_rows)} rows)")
+
+    # Remove the default "Sheet1" if we created new sheets
+    try:
+        default_sheet = sh.worksheet("Sheet1")
+        if len(sh.worksheets()) > 1:
+            sh.del_worksheet(default_sheet)
+    except gspread.exceptions.WorksheetNotFound:
+        pass
+
+    print(f"\nSpreadsheet URL: {sh.url}")
+    return sh.url
+
+
+def write_csv(
+    results: list[BenchResult],
+    workload_type: str,
+    isl: int,
+    osl: int,
+    output_path: str,
+) -> None:
+    """Write results in spreadsheet format matching the reference CSVs."""
+    rows = build_scaling_table(results, workload_type, isl, osl)
     with open(output_path, "w", newline="") as f:
         w = csv.writer(f)
-
-        label = "Prefill" if workload_type == "prefill" else "Decode"
-        header = ["", label, f"ISL: {isl}", f"OSL: {osl}"] + [""] * max_cols
-        w.writerow(header)
-        w.writerow([""] * (max_cols + 4))
-
-        for tp in sorted(by_tp.keys()):
-            runs = by_tp[tp]
-            concurrencies = [r.concurrency for r in runs]
-            throughputs = [int(round(r.raw_throughput)) for r in runs]
-            tpsgs = [int(round(r.tpsg)) for r in runs]
-            tpsus = [int(round(r.tpsu)) for r in runs]
-
-            w.writerow(["", "GPUs", "Concurrency"] + concurrencies)
-            w.writerow(["", "", f"TP={tp}"] + throughputs)
-            w.writerow(["", tp, "TPSG"] + tpsgs)
-            w.writerow(["", "", "TPSU"] + tpsus)
-            w.writerow([""] * (max_cols + 4))
-
+        for row in rows:
+            w.writerow(row)
     print(f"Written: {output_path}")
 
 
@@ -306,6 +485,10 @@ def main():
     )
     parser.add_argument(
         "--output-dir", "-o", default=".", help="Directory for output CSVs"
+    )
+    parser.add_argument(
+        "--sheets", metavar="TITLE",
+        help="Upload results to a Google Spreadsheet with Pareto charts",
     )
     args = parser.parse_args()
 
@@ -366,6 +549,10 @@ def main():
         write_csv(wt_results, wt, isl, osl, output_path)
 
     print(f"\nTotal: {len(all_results)} benchmark results collected")
+
+    # Upload to Google Sheets if requested
+    if args.sheets:
+        upload_to_sheets(all_results, isl_osl, args.sheets)
 
 
 if __name__ == "__main__":

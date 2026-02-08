@@ -72,6 +72,10 @@ wait:
 collect:
   python3 collect.py -n {{NAMESPACE}}
 
+# Collect results and upload to Google Sheets with Pareto charts
+collect-sheets TITLE="PD Config Benchmark Results":
+  python3 collect.py -n {{NAMESPACE}} --sheets "{{TITLE}}"
+
 # Full workflow: launch benchmarks, wait, collect results
 run:
   just bench

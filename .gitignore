@@ -38,3 +38,6 @@ build/
 # Logs
 *.log
 logs/
+
+# Local scripts (may contain IPs, credentials, etc.)
+local/

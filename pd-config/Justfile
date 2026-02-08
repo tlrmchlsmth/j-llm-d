@@ -1,0 +1,89 @@
+set dotenv-load
+set dotenv-path := "../.env"
+
+NAMESPACE := "tms"
+KN := "kubectl -n " + NAMESPACE
+
+# Benchmark configuration
+MODEL := "openai/gpt-oss-120b"
+IMAGE := "ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.6-debug"
+GPU_MEM_UTIL := "0.95"
+TARGET_DURATION := "60"
+MIN_PROMPTS := "200"
+HF_CACHE := "/mnt/local/hf-cache"
+
+# Prefill workload
+PREFILL_ISL := "4096"
+PREFILL_OSL := "1"
+PREFILL_CONCURRENCIES := "1 4 8 16"
+
+# Decode workload
+DECODE_ISL := "2"
+DECODE_OSL := "256"
+DECODE_CONCURRENCIES := "4 16 32 64 128 256 512"
+
+default:
+  just --list
+
+# Launch a single benchmark Job
+_job JOB_NAME TP WORKLOAD_TYPE ISL OSL CONCURRENCY_LEVELS:
+  env \
+    JOB_NAME={{JOB_NAME}} \
+    TP={{TP}} \
+    GPU_COUNT={{TP}} \
+    MODEL="{{MODEL}}" \
+    VLLM_IMAGE="{{IMAGE}}" \
+    WORKLOAD_TYPE={{WORKLOAD_TYPE}} \
+    ISL={{ISL}} \
+    OSL={{OSL}} \
+    CONCURRENCY_LEVELS="{{CONCURRENCY_LEVELS}}" \
+    TARGET_DURATION={{TARGET_DURATION}} \
+    MIN_PROMPTS={{MIN_PROMPTS}} \
+    GPU_MEM_UTIL={{GPU_MEM_UTIL}} \
+    HF_CACHE_HOST_PATH="{{HF_CACHE}}" \
+    envsubst '${JOB_NAME} ${TP} ${GPU_COUNT} ${MODEL} ${VLLM_IMAGE} ${WORKLOAD_TYPE} ${ISL} ${OSL} ${CONCURRENCY_LEVELS} ${TARGET_DURATION} ${MIN_PROMPTS} ${GPU_MEM_UTIL} ${HF_CACHE_HOST_PATH}' \
+      < job.yaml | {{KN}} apply -f -
+
+# Launch all benchmark Jobs (prefill + decode at TP=1,2,4,8)
+bench:
+  {{KN}} delete jobs -l app=pd-config-bench --ignore-not-found=true
+  just _job pd-config-prefill-tp1 1 prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
+  just _job pd-config-prefill-tp2 2 prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
+  just _job pd-config-prefill-tp4 4 prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
+  just _job pd-config-prefill-tp8 8 prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
+  just _job pd-config-decode-tp1 1 decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
+  just _job pd-config-decode-tp2 2 decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
+  just _job pd-config-decode-tp4 4 decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
+  just _job pd-config-decode-tp8 8 decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
+
+# Wait for all benchmark Jobs to complete
+wait:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "Waiting for all pd-config benchmark jobs to complete..."
+  for job in $({{KN}} get jobs -l app=pd-config-bench -o jsonpath='{.items[*].metadata.name}'); do
+    echo "  Waiting for $job..."
+    {{KN}} wait --for=condition=complete --timeout=3h "job/$job" || \
+      echo "  WARNING: $job did not complete successfully"
+  done
+  echo "All jobs finished."
+
+# Collect results from completed Jobs and generate CSVs
+collect:
+  python3 collect.py -n {{NAMESPACE}}
+
+# Full workflow: launch benchmarks, wait, collect results
+run:
+  just bench
+  just wait
+  just collect
+
+# Show status of benchmark Jobs and Pods
+status:
+  {{KN}} get jobs -l app=pd-config-bench
+  @echo ""
+  {{KN}} get pods -l app=pd-config-bench -o wide
+
+# Clean up all benchmark Jobs
+clean:
+  {{KN}} delete jobs -l app=pd-config-bench --ignore-not-found=true

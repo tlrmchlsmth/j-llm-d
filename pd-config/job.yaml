@@ -1,0 +1,172 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  labels:
+    app: pd-config-bench
+    pd-config/workload: ${WORKLOAD_TYPE}
+    pd-config/tp: "${TP}"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 14400
+  template:
+    metadata:
+      labels:
+        app: pd-config-bench
+        pd-config/workload: ${WORKLOAD_TYPE}
+        pd-config/tp: "${TP}"
+    spec:
+      restartPolicy: Never
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - pd-config-bench
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: bench
+          image: ${VLLM_IMAGE}
+          imagePullPolicy: Always
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+
+              RESULTS_FILE="/results/${JOB_NAME}.log"
+              mkdir -p /results
+
+              # Tee all structured output to both stdout and results file
+              exec > >(tee -a "$RESULTS_FILE") 2>&1
+
+              echo "PD_CONFIG_START"
+              echo "CONFIG: model=${MODEL} tp=${TP} workload=${WORKLOAD_TYPE} isl=${ISL} osl=${OSL}"
+              echo "TARGET_DURATION: ${TARGET_DURATION}s  MIN_PROMPTS: ${MIN_PROMPTS}"
+              echo "CONCURRENCY_LEVELS: ${CONCURRENCY_LEVELS}"
+
+              # Start vLLM server in the background
+              vllm serve ${MODEL} \
+                --port 8000 \
+                --tensor-parallel-size ${TP} \
+                --gpu-memory-utilization ${GPU_MEM_UTIL} \
+                --disable-uvicorn-access-log \
+                2>&1 &
+              VLLM_PID=$!
+
+              # Wait for vLLM to be healthy (up to 30 minutes)
+              echo "Waiting for vLLM server to start..."
+              MAX_WAIT=1800
+              ELAPSED=0
+              while ! curl -s http://localhost:8000/health > /dev/null 2>&1; do
+                if ! kill -0 $VLLM_PID 2>/dev/null; then
+                  echo "ERROR: vLLM process died during startup"
+                  exit 1
+                fi
+                sleep 5
+                ELAPSED=$((ELAPSED + 5))
+                if [ $ELAPSED -ge $MAX_WAIT ]; then
+                  echo "ERROR: vLLM failed to start within ${MAX_WAIT}s"
+                  kill $VLLM_PID 2>/dev/null || true
+                  exit 1
+                fi
+                if [ $((ELAPSED % 60)) -eq 0 ]; then
+                  echo "  waiting... ${ELAPSED}s"
+                fi
+              done
+              echo "vLLM server is ready after ${ELAPSED}s"
+
+              # Run benchmarks at each concurrency level
+              for MC in ${CONCURRENCY_LEVELS}; do
+                echo ""
+
+                # Calibration run to estimate throughput and compute num_prompts
+                CALIB_N=$((MC > 20 ? MC : 20))
+                echo "CALIBRATION: concurrency=$MC num_prompts=$CALIB_N"
+                CALIB_START=$(python3 -c "import time; print(time.time())")
+                vllm bench serve \
+                  --base-url http://localhost:8000 \
+                  --model ${MODEL} \
+                  --dataset-name random \
+                  --random-input-len ${ISL} \
+                  --random-output-len ${OSL} \
+                  --max-concurrency $MC \
+                  --num-prompts $CALIB_N \
+                  --ignore-eos \
+                  --seed 42
+                CALIB_END=$(python3 -c "import time; print(time.time())")
+
+                NP=$(python3 -c "import math
+              calib_secs = max(0.1, $CALIB_END - $CALIB_START)
+              rate = $CALIB_N / calib_secs
+              np = max(${MIN_PROMPTS}, math.ceil(rate * ${TARGET_DURATION}))
+              print(np)")
+                echo "COMPUTED_NUM_PROMPTS: $NP (rate=$(python3 -c "print(f'{$CALIB_N / max(0.1, $CALIB_END - $CALIB_START):.1f}')")  req/s)"
+
+                echo "BENCH_RUN: concurrency=$MC tp=${TP} workload=${WORKLOAD_TYPE} num_prompts=$NP"
+                vllm bench serve \
+                  --base-url http://localhost:8000 \
+                  --model ${MODEL} \
+                  --dataset-name random \
+                  --random-input-len ${ISL} \
+                  --random-output-len ${OSL} \
+                  --max-concurrency $MC \
+                  --num-prompts $NP \
+                  --ignore-eos \
+                  --seed 42
+                echo "BENCH_RUN_END: concurrency=$MC"
+              done
+
+              echo ""
+              echo "PD_CONFIG_END"
+
+              # Cleanup
+              kill $VLLM_PID 2>/dev/null || true
+              wait $VLLM_PID 2>/dev/null || true
+
+          resources:
+            limits:
+              amd.com/gpu: "${GPU_COUNT}"
+              cpu: "32"
+              memory: 100Gi
+            requests:
+              amd.com/gpu: "${GPU_COUNT}"
+              cpu: "32"
+              memory: 100Gi
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-secret
+                  key: HF_TOKEN
+                  optional: true
+            - name: VLLM_LOGGING_LEVEL
+              value: WARNING
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+            - name: torch-compile-cache
+              mountPath: /.cache
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: results
+              mountPath: /results
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 20Gi
+        - name: torch-compile-cache
+          emptyDir: {}
+        - name: hf-cache
+          hostPath:
+            path: ${HF_CACHE_HOST_PATH}
+            type: DirectoryOrCreate
+        - name: results
+          hostPath:
+            path: /mnt/local/pd-config-results
+            type: DirectoryOrCreate

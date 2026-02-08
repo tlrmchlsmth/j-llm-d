@@ -1,0 +1,20 @@
+persistence:
+  enabled: false
+
+adminPassword: admin
+
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    searchNamespace: vllm
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus-server.vllm.svc.cluster.local
+        access: proxy
+        isDefault: true

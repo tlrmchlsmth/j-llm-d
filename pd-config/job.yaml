@@ -49,12 +49,21 @@ spec:
               echo "TARGET_DURATION: ${TARGET_DURATION}s  MIN_PROMPTS: ${MIN_PROMPTS}"
               echo "CONCURRENCY_LEVELS: ${CONCURRENCY_LEVELS}"
 
+              # Configure decode specialization: DecodeBenchConnector fills KV cache
+              # with dummy values so decode runs against a realistic ISL without
+              # actually computing the prefill.
+              KV_ARGS=""
+              if [ "${WORKLOAD_TYPE}" = "decode" ]; then
+                KV_ARGS='--kv-transfer-config {"kv_connector":"DecodeBenchConnector","kv_role":"kv_both"}'
+              fi
+
               # Start vLLM server in the background
               vllm serve ${MODEL} \
                 --port 8000 \
                 --tensor-parallel-size ${TP} \
                 --gpu-memory-utilization ${GPU_MEM_UTIL} \
                 --disable-uvicorn-access-log \
+                $KV_ARGS \
                 2>&1 &
               VLLM_PID=$!
 
@@ -80,6 +89,16 @@ spec:
               done
               echo "vLLM server is ready after ${ELAPSED}s"
 
+              # Scale decode concurrency by TP (more GPUs can serve more concurrent users)
+              if [ "${WORKLOAD_TYPE}" = "decode" ]; then
+                SCALED=""
+                for C in ${CONCURRENCY_LEVELS}; do
+                  SCALED="$SCALED $((C * ${TP}))"
+                done
+                CONCURRENCY_LEVELS=$SCALED
+                echo "SCALED_CONCURRENCIES: ${CONCURRENCY_LEVELS} (base * TP=${TP})"
+              fi
+
               # Run benchmarks at each concurrency level
               for MC in ${CONCURRENCY_LEVELS}; do
                 echo ""
@@ -87,8 +106,7 @@ spec:
                 # Calibration run to estimate throughput and compute num_prompts
                 CALIB_N=$((MC > 20 ? MC : 20))
                 echo "CALIBRATION: concurrency=$MC num_prompts=$CALIB_N"
-                CALIB_START=$(python3 -c "import time; print(time.time())")
-                vllm bench serve \
+                CALIB_OUTPUT=$(vllm bench serve \
                   --base-url http://localhost:8000 \
                   --model ${MODEL} \
                   --dataset-name random \
@@ -97,15 +115,23 @@ spec:
                   --max-concurrency $MC \
                   --num-prompts $CALIB_N \
                   --ignore-eos \
-                  --seed 42
-                CALIB_END=$(python3 -c "import time; print(time.time())")
+                  --seed 42 2>&1)
+                echo "$CALIB_OUTPUT"
 
-                NP=$(python3 -c "import math
-              calib_secs = max(0.1, $CALIB_END - $CALIB_START)
-              rate = $CALIB_N / calib_secs
-              np = max(${MIN_PROMPTS}, math.ceil(rate * ${TARGET_DURATION}))
-              print(np)")
-                echo "COMPUTED_NUM_PROMPTS: $NP (rate=$(python3 -c "print(f'{$CALIB_N / max(0.1, $CALIB_END - $CALIB_START):.1f}')")  req/s)"
+                # Parse vllm-reported throughput (accurate, excludes client overhead)
+                if [ "${WORKLOAD_TYPE}" = "decode" ]; then
+                  THROUGHPUT=$(echo "$CALIB_OUTPUT" | grep -i "Output token throughput" | grep -oE '[0-9]+\.[0-9]+' | tail -1)
+                  TOKENS_PER_REQ=${OSL}
+                else
+                  THROUGHPUT=$(echo "$CALIB_OUTPUT" | grep -i "Total Token throughput" | grep -oE '[0-9]+\.[0-9]+' | tail -1)
+                  TOKENS_PER_REQ=$((${ISL} + ${OSL}))
+                fi
+                if [ -n "$THROUGHPUT" ]; then
+                  NP=$(python3 -c "import math; r=float('$THROUGHPUT')/$TOKENS_PER_REQ; print(max(${MIN_PROMPTS}, math.ceil(r * ${TARGET_DURATION})))")
+                else
+                  NP=${MIN_PROMPTS}
+                fi
+                echo "COMPUTED_NUM_PROMPTS: $NP (throughput=$THROUGHPUT tok/s)"
 
                 echo "BENCH_RUN: concurrency=$MC tp=${TP} workload=${WORKLOAD_TYPE} num_prompts=$NP"
                 vllm bench serve \

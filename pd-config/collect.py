@@ -316,10 +316,64 @@ def build_pareto_data(results: list[BenchResult]) -> list[list]:
     return rows
 
 
+def extract_config(all_logs: dict[str, str]) -> dict[str, str]:
+    """Extract experiment configuration from log contents."""
+    config: dict[str, str] = {}
+    for contents in all_logs.values():
+        for line in contents.split("\n"):
+            m = re.match(r"CONFIG:\s*(.+)", line)
+            if m and "config_line" not in config:
+                config["config_line"] = m.group(1)
+                # Parse individual fields
+                for field in re.findall(r"(\w+)=(\S+)", m.group(1)):
+                    config[field[0]] = field[1]
+            m = re.match(r"TARGET_DURATION:\s*(\S+)", line)
+            if m and "target_duration" not in config:
+                config["target_duration"] = m.group(1)
+            m = re.match(r".*MIN_PROMPTS:\s*(\S+)", line)
+            if m and "min_prompts" not in config:
+                config["min_prompts"] = m.group(1)
+            m = re.match(r"CONCURRENCY_LEVELS:\s*(.+)", line)
+            if m:
+                wt = config.get("workload", "")
+                key = f"{wt}_concurrencies"
+                if key not in config:
+                    config[key] = m.group(1).strip()
+    return config
+
+
+def _fmt_bold(sheet_id: int, r0: int, r1: int,
+              c0: int = 0, c1: int = 20) -> dict:
+    """Helper: batchUpdate request to bold a cell range."""
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": r0, "endRowIndex": r1,
+                "startColumnIndex": c0, "endColumnIndex": c1,
+            },
+            "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+            "fields": "userEnteredFormat.textFormat.bold",
+        }
+    }
+
+
+def _fmt_center(sheet_id: int) -> dict:
+    """Helper: batchUpdate request to center all cells in a sheet."""
+    return {
+        "repeatCell": {
+            "range": {"sheetId": sheet_id},
+            "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
+            "fields": "userEnteredFormat.horizontalAlignment",
+        }
+    }
+
+
 def upload_to_sheets(
     all_results: list[BenchResult],
     isl_osl: dict[str, tuple[int, int]],
     spreadsheet_title: str,
+    config: dict[str, str],
 ) -> str:
     """Upload results to Google Sheets with Pareto charts. Returns spreadsheet URL."""
     try:
@@ -331,17 +385,15 @@ def upload_to_sheets(
         )
         sys.exit(1)
 
+    from pathlib import Path
+    from datetime import datetime, timezone
+
     gc = gspread.oauth()
 
-    # Create or open spreadsheet
-    try:
-        sh = gc.open(spreadsheet_title)
-        # Clear existing sheets for a fresh upload
-        print(f"Opened existing spreadsheet: {spreadsheet_title}")
-    except gspread.exceptions.SpreadsheetNotFound:
-        sh = gc.create(spreadsheet_title)
-        print(f"Created new spreadsheet: {spreadsheet_title}")
+    sh = gc.create(spreadsheet_title)
+    print(f"Created spreadsheet: {spreadsheet_title}")
 
+    # --- Workload sheets (Prefill, Decode) ---
     for wt in ["prefill", "decode"]:
         wt_results = [r for r in all_results if r.workload_type == wt]
         if not wt_results:
@@ -351,7 +403,6 @@ def upload_to_sheets(
             wt, (4096 if wt == "prefill" else 2, 1 if wt == "prefill" else 256)
         )
 
-        # Get or create worksheet
         ws_title = wt.title()
         try:
             ws = sh.worksheet(ws_title)
@@ -359,23 +410,38 @@ def upload_to_sheets(
         except gspread.exceptions.WorksheetNotFound:
             ws = sh.add_worksheet(title=ws_title, rows=100, cols=20)
 
-        # 1. Write scaling table
+        # Write scaling table
         table_rows = build_scaling_table(wt_results, wt, isl, osl)
         ws.update(range_name="A1", values=table_rows)
 
-        # 2. Write Pareto data + chart (decode only)
+        # Formatting requests for this sheet
+        num_tp = len(set(r.tp for r in wt_results))
+        fmt_requests = [_fmt_center(ws.id), _fmt_bold(ws.id, 0, 1)]
+        for tp_idx in range(num_tp):
+            block_start = 2 + tp_idx * 5
+            # Bold the label columns (B-C) for each TP block
+            fmt_requests.append(_fmt_bold(ws.id, block_start, block_start + 4, 1, 3))
+
+        pareto_start_idx = None
+
+        # Pareto data + chart (decode only)
         if wt == "decode":
-            pareto_start_row = len(table_rows) + 2  # 1-indexed, with gap
+            pareto_start_row = len(table_rows) + 2
             pareto_rows = build_pareto_data(wt_results)
             ws.update(range_name=f"A{pareto_start_row}", values=pareto_rows)
 
             tp_values = sorted(set(r.tp for r in wt_results))
-            num_data_rows = len(pareto_rows) - 1  # exclude header
-            pareto_start_idx = pareto_start_row - 1  # 0-indexed
+            num_data_rows = len(pareto_rows) - 1
+            pareto_start_idx = pareto_start_row - 1
             pareto_end_idx = pareto_start_idx + len(pareto_rows)
 
+            # Bold Pareto header
+            fmt_requests.append(
+                _fmt_bold(ws.id, pareto_start_idx, pareto_start_idx + 1)
+            )
+
             series = []
-            for i, tp in enumerate(tp_values):
+            for i in range(len(tp_values)):
                 series.append({
                     "series": {
                         "sourceRange": {
@@ -391,62 +457,111 @@ def upload_to_sheets(
                     "targetAxis": "LEFT_AXIS",
                 })
 
-            chart_request = {
-                "requests": [{
-                    "addChart": {
-                        "chart": {
-                            "spec": {
-                                "title": "Decode: GPU Efficiency vs User Throughput",
-                                "basicChart": {
-                                    "chartType": "SCATTER",
-                                    "legendPosition": "BOTTOM_LEGEND",
-                                    "domains": [{
-                                        "domain": {
-                                            "sourceRange": {
-                                                "sources": [{
-                                                    "sheetId": ws.id,
-                                                    "startRowIndex": pareto_start_idx,
-                                                    "endRowIndex": pareto_end_idx,
-                                                    "startColumnIndex": 0,
-                                                    "endColumnIndex": 1,
-                                                }]
-                                            }
+            fmt_requests.append({
+                "addChart": {
+                    "chart": {
+                        "spec": {
+                            "title": "Decode: GPU Efficiency vs User Throughput",
+                            "basicChart": {
+                                "chartType": "SCATTER",
+                                "legendPosition": "BOTTOM_LEGEND",
+                                "domains": [{
+                                    "domain": {
+                                        "sourceRange": {
+                                            "sources": [{
+                                                "sheetId": ws.id,
+                                                "startRowIndex": pareto_start_idx,
+                                                "endRowIndex": pareto_end_idx,
+                                                "startColumnIndex": 0,
+                                                "endColumnIndex": 1,
+                                            }]
                                         }
-                                    }],
-                                    "series": series,
-                                    "axis": [
-                                        {
-                                            "position": "BOTTOM_AXIS",
-                                            "title": "Throughput per User (tok/s)",
-                                        },
-                                        {
-                                            "position": "LEFT_AXIS",
-                                            "title": "Throughput per GPU (tok/s)",
-                                        },
-                                    ],
-                                    "headerCount": 1,
-                                },
-                            },
-                            "position": {
-                                "overlayPosition": {
-                                    "anchorCell": {
-                                        "sheetId": ws.id,
-                                        "rowIndex": pareto_end_idx + 1,
-                                        "columnIndex": 0,
+                                    }
+                                }],
+                                "series": series,
+                                "axis": [
+                                    {
+                                        "position": "BOTTOM_AXIS",
+                                        "title": "Throughput per User (tok/s)",
                                     },
-                                    "widthPixels": 800,
-                                    "heightPixels": 500,
-                                }
+                                    {
+                                        "position": "LEFT_AXIS",
+                                        "title": "Throughput per GPU (tok/s)",
+                                    },
+                                ],
+                                "headerCount": 1,
                             },
-                        }
+                        },
+                        "position": {
+                            "overlayPosition": {
+                                "anchorCell": {
+                                    "sheetId": ws.id,
+                                    "rowIndex": pareto_end_idx + 1,
+                                    "columnIndex": 0,
+                                },
+                                "widthPixels": 800,
+                                "heightPixels": 500,
+                            }
+                        },
                     }
-                }]
-            }
-            sh.batch_update(chart_request)
+                }
+            })
             print(f"  {ws_title}: table ({len(table_rows)} rows) + "
                   f"Pareto chart ({num_data_rows} points, {len(tp_values)} series)")
         else:
             print(f"  {ws_title}: table ({len(table_rows)} rows)")
+
+        sh.batch_update({"requests": fmt_requests})
+
+    # --- Config sheet ---
+    try:
+        cfg_ws = sh.worksheet("Config")
+        cfg_ws.clear()
+    except gspread.exceptions.WorksheetNotFound:
+        cfg_ws = sh.add_worksheet(title="Config", rows=200, cols=5)
+
+    tp_levels = sorted(set(r.tp for r in all_results))
+    cfg_rows = [
+        ["Experiment Configuration"],
+        [],
+        ["Model", config.get("model", "")],
+        ["TP Levels", ", ".join(str(t) for t in tp_levels)],
+        ["Target Duration", config.get("target_duration", "")],
+        ["Min Prompts", config.get("min_prompts", "")],
+        [],
+    ]
+
+    for wt in ["prefill", "decode"]:
+        isl, osl = isl_osl.get(wt, ("", ""))
+        concurrencies = config.get(f"{wt}_concurrencies", "")
+        cfg_rows.append([f"{wt.title()} ISL / OSL", f"{isl} / {osl}"])
+        cfg_rows.append([f"{wt.title()} Concurrencies", concurrencies])
+
+    cfg_rows.append([])
+    cfg_rows.append(["Timestamp", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")])
+    cfg_rows.append([])
+
+    # Embed job.yaml
+    yaml_path = Path(__file__).parent / "job.yaml"
+    if yaml_path.exists():
+        cfg_rows.append(["Job Template (job.yaml)"])
+        yaml_header_row = len(cfg_rows) - 1
+        for yaml_line in yaml_path.read_text().splitlines():
+            cfg_rows.append([yaml_line])
+    else:
+        yaml_header_row = None
+
+    cfg_ws.update(range_name="A1", values=cfg_rows)
+
+    # Format config sheet
+    cfg_fmt = [
+        _fmt_bold(cfg_ws.id, 0, 1),  # title
+        _fmt_bold(cfg_ws.id, 2, len(cfg_rows), 0, 1),  # bold column A (labels)
+    ]
+    if yaml_header_row is not None:
+        cfg_fmt.append(_fmt_bold(cfg_ws.id, yaml_header_row, yaml_header_row + 1))
+    sh.batch_update({"requests": cfg_fmt})
+    print(f"  Config: {len(cfg_rows)} rows (includes job.yaml)")
 
     # Remove the default "Sheet1" if we created new sheets
     try:
@@ -552,7 +667,8 @@ def main():
 
     # Upload to Google Sheets if requested
     if args.sheets:
-        upload_to_sheets(all_results, isl_osl, args.sheets)
+        config = extract_config(all_logs)
+        upload_to_sheets(all_results, isl_osl, args.sheets, config)
 
 
 if __name__ == "__main__":

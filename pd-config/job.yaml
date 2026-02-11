@@ -8,7 +8,7 @@ metadata:
     pd-config/tp: "${TP}"
 spec:
   backoffLimit: 0
-  ttlSecondsAfterFinished: 14400
+  ttlSecondsAfterFinished: 86400
   template:
     metadata:
       labels:
@@ -17,18 +17,8 @@ spec:
         pd-config/tp: "${TP}"
     spec:
       restartPolicy: Never
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                labelSelector:
-                  matchExpressions:
-                    - key: app
-                      operator: In
-                      values:
-                        - pd-config-bench
-                topologyKey: kubernetes.io/hostname
+      nodeSelector:
+        pd-config-bench: "true"
       containers:
         - name: bench
           image: ${VLLM_IMAGE}
@@ -89,18 +79,23 @@ spec:
               done
               echo "vLLM server is ready after ${ELAPSED}s"
 
-              # Scale decode concurrency by TP (more GPUs can serve more concurrent users)
-              if [ "${WORKLOAD_TYPE}" = "decode" ]; then
-                SCALED=""
-                for C in ${CONCURRENCY_LEVELS}; do
-                  SCALED="$SCALED $((C * ${TP}))"
+              # Extend decode concurrency range for higher TP (more GPUs handle more users)
+              # Keeps base range for comparison, adds higher levels up to max_base * TP.
+              # Note: use BENCH_CONCURRENCIES (not ${CONCURRENCY_LEVELS}) for the loop
+              # because envsubst replaces all ${CONCURRENCY_LEVELS} at template time.
+              BENCH_CONCURRENCIES="${CONCURRENCY_LEVELS}"
+              if [ "${WORKLOAD_TYPE}" = "decode" ] && [ ${TP} -gt 1 ]; then
+                MAX_C=$(echo ${CONCURRENCY_LEVELS} | tr ' ' '\n' | sort -n | tail -1)
+                EXTRA=$((MAX_C * 2))
+                while [ $EXTRA -le $((MAX_C * ${TP})) ]; do
+                  BENCH_CONCURRENCIES="$BENCH_CONCURRENCIES $EXTRA"
+                  EXTRA=$((EXTRA * 2))
                 done
-                CONCURRENCY_LEVELS=$SCALED
-                echo "SCALED_CONCURRENCIES: ${CONCURRENCY_LEVELS} (base * TP=${TP})"
+                echo "EXTENDED_CONCURRENCIES: $BENCH_CONCURRENCIES (base + extended for TP=${TP})"
               fi
 
               # Run benchmarks at each concurrency level
-              for MC in ${CONCURRENCY_LEVELS}; do
+              for MC in $BENCH_CONCURRENCIES; do
                 echo ""
 
                 # Calibration run to estimate throughput and compute num_prompts
@@ -115,7 +110,7 @@ spec:
                   --max-concurrency $MC \
                   --num-prompts $CALIB_N \
                   --ignore-eos \
-                  --seed 42 2>&1)
+                  --seed $(date +%M%H%M%S) 2>&1) \
                 echo "$CALIB_OUTPUT"
 
                 # Parse vllm-reported throughput (accurate, excludes client overhead)
@@ -143,7 +138,7 @@ spec:
                   --max-concurrency $MC \
                   --num-prompts $NP \
                   --ignore-eos \
-                  --seed 42
+                  --seed $(date +%M%H%M%S) \
                 echo "BENCH_RUN_END: concurrency=$MC"
               done
 

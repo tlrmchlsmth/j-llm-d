@@ -13,6 +13,7 @@ Usage:
 import argparse
 import csv
 import json
+import math
 import re
 import subprocess
 import sys
@@ -26,7 +27,7 @@ READER_IMAGE = "busybox:1.36"
 
 @dataclass
 class BenchResult:
-    workload_type: str  # "prefill" or "decode"
+    workload_type: str  # "prefill", "decode", or "aggregated"
     tp: int
     concurrency: int
     output_throughput: float  # Output token throughput (tok/s)
@@ -34,8 +35,8 @@ class BenchResult:
 
     @property
     def raw_throughput(self) -> float:
-        """Primary metric: output tok/s for decode, total tok/s for prefill."""
-        if self.workload_type == "decode":
+        """Primary metric: output tok/s for decode/aggregated, total tok/s for prefill."""
+        if self.workload_type in ("decode", "aggregated"):
             return self.output_throughput
         return self.total_throughput
 
@@ -251,9 +252,12 @@ def read_results_from_node(namespace: str, node: str) -> dict[str, str]:
 
 def parse_job_name(filename: str) -> tuple[str, int] | None:
     """Extract workload_type and tp from a job name like pd-config-prefill-tp4.log."""
-    m = re.match(r"pd-config-(prefill|decode)-tp(\d+)\.log", filename)
+    m = re.match(r"pd-config-(prefill|decode|agg)-tp(\d+)\.log", filename)
     if m:
-        return m.group(1), int(m.group(2))
+        wt = m.group(1)
+        if wt == "agg":
+            wt = "aggregated"
+        return wt, int(m.group(2))
     return None
 
 
@@ -273,7 +277,9 @@ def build_scaling_table(
 
     max_cols = max(len(runs) for runs in by_tp.values())
 
-    label = "Prefill" if workload_type == "prefill" else "Decode"
+    label = {"prefill": "Prefill", "decode": "Decode", "aggregated": "Aggregated"}.get(
+        workload_type, workload_type.title()
+    )
     rows = []
     rows.append(["", label, f"ISL: {isl}", f"OSL: {osl}"] + [""] * max_cols)
     rows.append([""] * (max_cols + 4))
@@ -313,6 +319,222 @@ def build_pareto_data(results: list[BenchResult]) -> list[list]:
             row = [int(round(r.tpsu))] + [""] * len(tp_values)
             row[col_idx + 1] = int(round(r.tpsg))
             rows.append(row)
+    return rows
+
+
+@dataclass
+class DisaggPoint:
+    """A disaggregated deployment point: decode + prefill GPU allocation."""
+    tpsu: float        # T_d / C_d (user-facing throughput)
+    tpsg: float        # T_d / (d_tp + p_gpus) (system GPU efficiency)
+    d_tp: int           # decode tensor parallelism
+    d_concurrency: int  # decode concurrency
+    p_tp: int           # best prefill TP
+    p_gpus: int         # prefill GPUs per decode replica
+    total_gpus: int     # d_tp + p_gpus
+
+
+def compute_disagg_points(
+    prefill_results: list[BenchResult],
+    decode_results: list[BenchResult],
+    isl: int,
+    osl: int,
+) -> list[DisaggPoint]:
+    """Compute disaggregated system metrics from isolated P/D sweep data.
+
+    For each decode operating point, find the minimum prefill GPU cost
+    to sustain the decode request rate. System TPSG accounts for both
+    decode and prefill GPU allocation.
+    """
+    # Best prefill throughput for each P_tp (max across concurrencies)
+    best_prefill: dict[int, float] = {}
+    for r in prefill_results:
+        if r.tp not in best_prefill or r.raw_throughput > best_prefill[r.tp]:
+            best_prefill[r.tp] = r.raw_throughput
+
+    if not best_prefill:
+        return []
+
+    points = []
+    for r in decode_results:
+        T_d = r.raw_throughput  # output tok/s
+        request_rate = T_d / osl
+        prefill_demand = request_rate * isl  # prefill tok/s needed
+
+        # Find minimum prefill GPU cost across all P_tp options
+        min_p_gpus = float("inf")
+        best_p_tp = 0
+        for p_tp, p_throughput in best_prefill.items():
+            p_replicas = math.ceil(prefill_demand / p_throughput)
+            p_gpus = p_replicas * p_tp
+            if p_gpus < min_p_gpus:
+                min_p_gpus = p_gpus
+                best_p_tp = p_tp
+
+        total_gpus = r.tp + int(min_p_gpus)
+        system_tpsg = T_d / total_gpus
+        system_tpsu = T_d / r.concurrency
+
+        points.append(DisaggPoint(
+            tpsu=system_tpsu,
+            tpsg=system_tpsg,
+            d_tp=r.tp,
+            d_concurrency=r.concurrency,
+            p_tp=best_p_tp,
+            p_gpus=int(min_p_gpus),
+            total_gpus=total_gpus,
+        ))
+
+    return points
+
+
+def build_comparison_data(
+    agg_results: list[BenchResult],
+    disagg_points: list[DisaggPoint],
+) -> list[list]:
+    """Build comparison chart data in sparse layout for Google Sheets.
+
+    Aggregated series by TP level + disaggregated series by decode TP level.
+    """
+    agg_tp_values = sorted(set(r.tp for r in agg_results))
+    disagg_tp_values = sorted(set(p.d_tp for p in disagg_points))
+
+    header = (
+        ["TPSU (tok/s/user)"]
+        + [f"Agg TP={tp}" for tp in agg_tp_values]
+        + [f"Disagg D={tp}" for tp in disagg_tp_values]
+    )
+    num_agg = len(agg_tp_values)
+    num_disagg = len(disagg_tp_values)
+    total_cols = num_agg + num_disagg
+    rows = [header]
+
+    # Aggregated data
+    for tp in agg_tp_values:
+        tp_results = sorted(
+            [r for r in agg_results if r.tp == tp], key=lambda r: r.concurrency
+        )
+        col_idx = agg_tp_values.index(tp)
+        for r in tp_results:
+            row = [int(round(r.tpsu))] + [""] * total_cols
+            row[col_idx + 1] = int(round(r.tpsg))
+            rows.append(row)
+
+    # Disaggregated data
+    for tp in disagg_tp_values:
+        tp_points = sorted(
+            [p for p in disagg_points if p.d_tp == tp], key=lambda p: p.d_concurrency
+        )
+        col_idx = num_agg + disagg_tp_values.index(tp)
+        for p in tp_points:
+            row = [int(round(p.tpsu))] + [""] * total_cols
+            row[col_idx + 1] = int(round(p.tpsg))
+            rows.append(row)
+
+    return rows
+
+
+def build_disagg_details(
+    disagg_points: list[DisaggPoint],
+    prefill_results: list[BenchResult],
+    decode_results: list[BenchResult],
+    isl: int,
+    osl: int,
+    sheet_start_row: int,
+) -> list[list]:
+    """Build details table with spreadsheet formulas showing GPU split derivation.
+
+    All derived columns use formulas referencing constant cells so the math is
+    visible and auditable in the spreadsheet.
+
+    Args:
+        sheet_start_row: 1-indexed row number where this block starts in the sheet.
+    """
+    # Best prefill throughput per TP
+    best_prefill: dict[int, float] = {}
+    for r in prefill_results:
+        if r.tp not in best_prefill or r.raw_throughput > best_prefill[r.tp]:
+            best_prefill[r.tp] = r.raw_throughput
+    p_tp_values = sorted(best_prefill.keys())
+
+    def col_letter(idx: int) -> str:
+        return chr(ord("A") + idx)
+
+    # Column layout:
+    # A=D_TP  B=D_Concurrency  C=Decode_Output  D=Prefill_Demand
+    # E..E+N-1=P_GPUs @TP=x   E+N=Best_P_GPUs  E+N+1=Total_GPUs
+    # E+N+2=TPSU  E+N+3=TPSG
+    pgpu_start = 4  # column E
+    n_tp = len(p_tp_values)
+    best_col = pgpu_start + n_tp
+    total_col = best_col + 1
+    tpsu_col = total_col + 1
+    tpsg_col = tpsu_col + 1
+
+    # Absolute sheet rows (1-indexed) for cell references
+    const_row = sheet_start_row + 1
+    cap_row = sheet_start_row + 2
+    data_start_rel = 4  # relative row index within block
+
+    # Row 0: Title
+    title = ["Disaggregated GPU Split Derivation"]
+
+    # Row 1: ISL / OSL constants (referenced by formulas)
+    consts = ["ISL", isl, "OSL", osl]
+
+    # Row 2: Prefill capacity values aligned under P_GPUs columns
+    cap = ["", "", "", "Prefill Capacity (tok/s):"]
+    for tp in p_tp_values:
+        cap.append(int(round(best_prefill[tp])))
+
+    # Row 3: Header
+    header = (
+        ["D_TP", "D_Concurrency", "Decode Output (tok/s)", "Prefill Demand (tok/s)"]
+        + [f"P_GPUs @TP={tp}" for tp in p_tp_values]
+        + ["Best P_GPUs", "Total GPUs", "TPSU (tok/s/user)", "TPSG (tok/s/GPU)"]
+    )
+
+    rows: list[list] = [title, consts, cap, header]
+
+    # Data rows with formulas
+    sorted_points = sorted(disagg_points, key=lambda p: (p.d_tp, p.d_concurrency))
+    for i, p in enumerate(sorted_points):
+        d_result = next(
+            r for r in decode_results
+            if r.tp == p.d_tp and r.concurrency == p.d_concurrency
+        )
+        R = sheet_start_row + data_start_rel + i  # absolute 1-indexed row
+
+        row: list = [
+            p.d_tp,                          # A: D_TP (value)
+            p.d_concurrency,                 # B: D_Concurrency (value)
+            round(d_result.raw_throughput, 1),  # C: Decode Output (value)
+        ]
+
+        # D: Prefill Demand = Decode_Output * ISL / OSL
+        row.append(f"=C{R}*$B${const_row}/$D${const_row}")
+
+        # P_GPUs @TP=N = CEILING(Prefill_Demand / Capacity_at_TP) * TP
+        for j, tp in enumerate(p_tp_values):
+            cap_cell = f"${col_letter(pgpu_start + j)}${cap_row}"
+            row.append(f"=CEILING(D{R}/{cap_cell},1)*{tp}")
+
+        # Best P_GPUs = MIN(all P_GPU columns)
+        first = col_letter(pgpu_start)
+        last = col_letter(pgpu_start + n_tp - 1)
+        row.append(f"=MIN({first}{R}:{last}{R})")
+
+        # Total GPUs = D_TP + Best P_GPUs
+        row.append(f"=A{R}+{col_letter(best_col)}{R}")
+
+        # TPSU = Decode Output / Concurrency
+        row.append(f"=C{R}/B{R}")
+
+        # TPSG = Decode Output / Total GPUs
+        row.append(f"=C{R}/{col_letter(total_col)}{R}")
+
+        rows.append(row)
+
     return rows
 
 
@@ -369,11 +591,88 @@ def _fmt_center(sheet_id: int) -> dict:
     }
 
 
+def _create_scatter_chart(
+    sheet_id: int,
+    title: str,
+    start_row_idx: int,
+    end_row_idx: int,
+    num_series: int,
+    anchor_row: int,
+) -> dict:
+    """Build an addChart batchUpdate request for a scatter chart."""
+    series = []
+    for i in range(num_series):
+        series.append({
+            "series": {
+                "sourceRange": {
+                    "sources": [{
+                        "sheetId": sheet_id,
+                        "startRowIndex": start_row_idx,
+                        "endRowIndex": end_row_idx,
+                        "startColumnIndex": i + 1,
+                        "endColumnIndex": i + 2,
+                    }]
+                }
+            },
+            "targetAxis": "LEFT_AXIS",
+        })
+    return {
+        "addChart": {
+            "chart": {
+                "spec": {
+                    "title": title,
+                    "basicChart": {
+                        "chartType": "SCATTER",
+                        "legendPosition": "BOTTOM_LEGEND",
+                        "domains": [{
+                            "domain": {
+                                "sourceRange": {
+                                    "sources": [{
+                                        "sheetId": sheet_id,
+                                        "startRowIndex": start_row_idx,
+                                        "endRowIndex": end_row_idx,
+                                        "startColumnIndex": 0,
+                                        "endColumnIndex": 1,
+                                    }]
+                                }
+                            }
+                        }],
+                        "series": series,
+                        "axis": [
+                            {
+                                "position": "BOTTOM_AXIS",
+                                "title": "Throughput per User (tok/s)",
+                            },
+                            {
+                                "position": "LEFT_AXIS",
+                                "title": "Throughput per GPU (tok/s)",
+                            },
+                        ],
+                        "headerCount": 1,
+                    },
+                },
+                "position": {
+                    "overlayPosition": {
+                        "anchorCell": {
+                            "sheetId": sheet_id,
+                            "rowIndex": anchor_row,
+                            "columnIndex": 0,
+                        },
+                        "widthPixels": 800,
+                        "heightPixels": 500,
+                    }
+                },
+            }
+        }
+    }
+
+
 def upload_to_sheets(
     all_results: list[BenchResult],
     isl_osl: dict[str, tuple[int, int]],
     spreadsheet_title: str,
     config: dict[str, str],
+    disagg_points: list[DisaggPoint] | None = None,
 ) -> str:
     """Upload results to Google Sheets with Pareto charts. Returns spreadsheet URL."""
     try:
@@ -393,14 +692,14 @@ def upload_to_sheets(
     sh = gc.create(spreadsheet_title)
     print(f"Created spreadsheet: {spreadsheet_title}")
 
-    # --- Workload sheets (Prefill, Decode) ---
-    for wt in ["prefill", "decode"]:
+    # --- Workload sheets (Prefill, Decode, Aggregated) ---
+    for wt in ["prefill", "decode", "aggregated"]:
         wt_results = [r for r in all_results if r.workload_type == wt]
         if not wt_results:
             continue
 
         isl, osl = isl_osl.get(
-            wt, (4096 if wt == "prefill" else 2, 1 if wt == "prefill" else 256)
+            wt, (4096 if wt == "prefill" else 4096, 1 if wt == "prefill" else 256)
         )
 
         ws_title = wt.title()
@@ -422,8 +721,6 @@ def upload_to_sheets(
             # Bold the label columns (B-C) for each TP block
             fmt_requests.append(_fmt_bold(ws.id, block_start, block_start + 4, 1, 3))
 
-        pareto_start_idx = None
-
         # Pareto data + chart (decode only)
         if wt == "decode":
             pareto_start_row = len(table_rows) + 2
@@ -435,83 +732,72 @@ def upload_to_sheets(
             pareto_start_idx = pareto_start_row - 1
             pareto_end_idx = pareto_start_idx + len(pareto_rows)
 
-            # Bold Pareto header
             fmt_requests.append(
                 _fmt_bold(ws.id, pareto_start_idx, pareto_start_idx + 1)
             )
-
-            series = []
-            for i in range(len(tp_values)):
-                series.append({
-                    "series": {
-                        "sourceRange": {
-                            "sources": [{
-                                "sheetId": ws.id,
-                                "startRowIndex": pareto_start_idx,
-                                "endRowIndex": pareto_end_idx,
-                                "startColumnIndex": i + 1,
-                                "endColumnIndex": i + 2,
-                            }]
-                        }
-                    },
-                    "targetAxis": "LEFT_AXIS",
-                })
-
-            fmt_requests.append({
-                "addChart": {
-                    "chart": {
-                        "spec": {
-                            "title": "Decode: GPU Efficiency vs User Throughput",
-                            "basicChart": {
-                                "chartType": "SCATTER",
-                                "legendPosition": "BOTTOM_LEGEND",
-                                "domains": [{
-                                    "domain": {
-                                        "sourceRange": {
-                                            "sources": [{
-                                                "sheetId": ws.id,
-                                                "startRowIndex": pareto_start_idx,
-                                                "endRowIndex": pareto_end_idx,
-                                                "startColumnIndex": 0,
-                                                "endColumnIndex": 1,
-                                            }]
-                                        }
-                                    }
-                                }],
-                                "series": series,
-                                "axis": [
-                                    {
-                                        "position": "BOTTOM_AXIS",
-                                        "title": "Throughput per User (tok/s)",
-                                    },
-                                    {
-                                        "position": "LEFT_AXIS",
-                                        "title": "Throughput per GPU (tok/s)",
-                                    },
-                                ],
-                                "headerCount": 1,
-                            },
-                        },
-                        "position": {
-                            "overlayPosition": {
-                                "anchorCell": {
-                                    "sheetId": ws.id,
-                                    "rowIndex": pareto_end_idx + 1,
-                                    "columnIndex": 0,
-                                },
-                                "widthPixels": 800,
-                                "heightPixels": 500,
-                            }
-                        },
-                    }
-                }
-            })
+            fmt_requests.append(_create_scatter_chart(
+                ws.id,
+                "Decode: GPU Efficiency vs User Throughput",
+                pareto_start_idx, pareto_end_idx,
+                len(tp_values),
+                pareto_end_idx + 1,
+            ))
             print(f"  {ws_title}: table ({len(table_rows)} rows) + "
                   f"Pareto chart ({num_data_rows} points, {len(tp_values)} series)")
         else:
             print(f"  {ws_title}: table ({len(table_rows)} rows)")
 
         sh.batch_update({"requests": fmt_requests})
+
+    # --- Comparison sheet (aggregated vs disaggregated) ---
+    agg_results = [r for r in all_results if r.workload_type == "aggregated"]
+    if agg_results and disagg_points:
+        comp_rows = build_comparison_data(agg_results, disagg_points)
+
+        try:
+            comp_ws = sh.worksheet("Comparison")
+            comp_ws.clear()
+        except gspread.exceptions.WorksheetNotFound:
+            comp_ws = sh.add_worksheet(title="Comparison", rows=200, cols=20)
+
+        # Disagg details table below chart data — shows GPU cost math
+        prefill_results = [r for r in all_results if r.workload_type == "prefill"]
+        decode_results = [r for r in all_results if r.workload_type == "decode"]
+        d_isl = isl_osl.get("decode", (4096, 256))[0]
+        d_osl = isl_osl.get("decode", (4096, 256))[1]
+        detail_start_row = len(comp_rows) + 2  # 1-indexed
+        detail_rows = build_disagg_details(
+            disagg_points, prefill_results, decode_results, d_isl, d_osl,
+            sheet_start_row=detail_start_row,
+        )
+        all_comp_rows = comp_rows + [[]] + detail_rows
+        comp_ws.update(
+            range_name="A1", values=all_comp_rows,
+            value_input_option="USER_ENTERED",
+        )
+
+        comp_start_idx = 0
+        comp_end_idx = len(comp_rows)
+        num_series = len(comp_rows[0]) - 1  # all columns except TPSU
+        detail_start_idx = detail_start_row - 1
+        chart_anchor = detail_start_idx + len(detail_rows) + 1
+
+        comp_fmt = [
+            _fmt_center(comp_ws.id),
+            _fmt_bold(comp_ws.id, 0, 1),  # chart data header
+            _fmt_bold(comp_ws.id, detail_start_idx, detail_start_idx + 1),  # details title
+            _fmt_bold(comp_ws.id, detail_start_idx + 3, detail_start_idx + 4),  # details header
+            _create_scatter_chart(
+                comp_ws.id,
+                "Aggregated vs Disaggregated: GPU Efficiency",
+                comp_start_idx, comp_end_idx,
+                num_series,
+                chart_anchor,
+            ),
+        ]
+        sh.batch_update({"requests": comp_fmt})
+        print(f"  Comparison: chart ({len(comp_rows)} rows, {num_series} series) + "
+              f"details ({len(detail_rows)} rows)")
 
     # --- Config sheet ---
     try:
@@ -531,8 +817,10 @@ def upload_to_sheets(
         [],
     ]
 
-    for wt in ["prefill", "decode"]:
+    for wt in ["prefill", "decode", "aggregated"]:
         isl, osl = isl_osl.get(wt, ("", ""))
+        if isl == "":
+            continue
         concurrencies = config.get(f"{wt}_concurrencies", "")
         cfg_rows.append([f"{wt.title()} ISL / OSL", f"{isl} / {osl}"])
         cfg_rows.append([f"{wt.title()} Concurrencies", concurrencies])
@@ -653,22 +941,56 @@ def main():
         print("\nNo benchmark results parsed from logs", file=sys.stderr)
         sys.exit(1)
 
-    for wt in ["prefill", "decode"]:
+    for wt in ["prefill", "decode", "aggregated"]:
         wt_results = [r for r in all_results if r.workload_type == wt]
         if not wt_results:
             continue
         isl, osl = isl_osl.get(
-            wt, (4096 if wt == "prefill" else 2, 1 if wt == "prefill" else 256)
+            wt, (4096 if wt == "prefill" else 4096, 1 if wt == "prefill" else 256)
         )
         output_path = f"{args.output_dir}/{wt}_scaling.csv"
         write_csv(wt_results, wt, isl, osl, output_path)
+
+    # Compute disaggregated analytical model and comparison
+    prefill_results = [r for r in all_results if r.workload_type == "prefill"]
+    decode_results = [r for r in all_results if r.workload_type == "decode"]
+    agg_results = [r for r in all_results if r.workload_type == "aggregated"]
+
+    disagg_points = []
+    if prefill_results and decode_results:
+        isl = isl_osl.get("decode", (4096, 256))[0]
+        osl = isl_osl.get("decode", (4096, 256))[1]
+        disagg_points = compute_disagg_points(prefill_results, decode_results, isl, osl)
+        if disagg_points:
+            # Write comparison CSV
+            comp_path = f"{args.output_dir}/comparison.csv"
+            with open(comp_path, "w", newline="") as f:
+                w = csv.writer(f)
+                w.writerow([
+                    "d_tp", "d_concurrency", "decode_throughput",
+                    "p_tp", "p_gpus", "total_gpus", "tpsu", "tpsg",
+                ])
+                for p in sorted(disagg_points, key=lambda p: (p.d_tp, p.d_concurrency)):
+                    d_result = next(
+                        r for r in decode_results
+                        if r.tp == p.d_tp and r.concurrency == p.d_concurrency
+                    )
+                    w.writerow([
+                        p.d_tp, p.d_concurrency, int(round(d_result.raw_throughput)),
+                        p.p_tp, p.p_gpus, p.total_gpus,
+                        int(round(p.tpsu)), int(round(p.tpsg)),
+                    ])
+            print(f"Written: {comp_path}")
 
     print(f"\nTotal: {len(all_results)} benchmark results collected")
 
     # Upload to Google Sheets if requested
     if args.sheets:
         config = extract_config(all_logs)
-        upload_to_sheets(all_results, isl_osl, args.sheets, config)
+        upload_to_sheets(
+            all_results, isl_osl, args.sheets, config,
+            disagg_points=disagg_points,
+        )
 
 
 if __name__ == "__main__":

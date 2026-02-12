@@ -17,8 +17,6 @@ spec:
         pd-config/tp: "${TP}"
     spec:
       restartPolicy: Never
-      nodeSelector:
-        pd-config-bench: "true"
       containers:
         - name: bench
           image: ${VLLM_IMAGE}
@@ -35,7 +33,7 @@ spec:
               exec > >(tee -a "$RESULTS_FILE") 2>&1
 
               echo "PD_CONFIG_START"
-              echo "CONFIG: model=${MODEL} tp=${TP} workload=${WORKLOAD_TYPE} isl=${ISL} osl=${OSL}"
+              echo "CONFIG: model=${MODEL} tp=${TP} dp=${DP} gpu_count=${GPU_COUNT} ep=${ENABLE_EP} workload=${WORKLOAD_TYPE} isl=${ISL} osl=${OSL}"
               echo "TARGET_DURATION: ${TARGET_DURATION}s  MIN_PROMPTS: ${MIN_PROMPTS}"
               echo "CONCURRENCY_LEVELS: ${CONCURRENCY_LEVELS}"
 
@@ -47,13 +45,20 @@ spec:
                 KV_ARGS='--kv-transfer-config {"kv_connector":"DecodeBenchConnector","kv_role":"kv_both"}'
               fi
 
+              # Expert parallelism flag
+              EP_ARGS=""
+              if [ "${ENABLE_EP}" = "true" ]; then
+                EP_ARGS="--enable-expert-parallel"
+              fi
+
               # Start vLLM server in the background
               vllm serve ${MODEL} \
                 --port 8000 \
                 --tensor-parallel-size ${TP} \
+                --data-parallel-size ${DP} \
                 --gpu-memory-utilization ${GPU_MEM_UTIL} \
                 --disable-uvicorn-access-log \
-                $KV_ARGS \
+                $KV_ARGS $EP_ARGS \
                 2>&1 &
               VLLM_PID=$!
 
@@ -77,28 +82,28 @@ spec:
                   echo "  waiting... ${ELAPSED}s"
                 fi
               done
-              echo "vLLM server is ready after ${ELAPSED}s"
+              echo "vLLM server ready after ${ELAPSED}s"
 
-              # Extend decode concurrency range for higher TP (more GPUs handle more users)
-              # Keeps base range for comparison, adds higher levels up to max_base * TP.
+              # Extend decode concurrency range for higher GPU counts (more GPUs handle more users)
+              # Keeps base range for comparison, adds higher levels up to max_base * GPU_COUNT.
               # Note: use BENCH_CONCURRENCIES (not ${CONCURRENCY_LEVELS}) for the loop
               # because envsubst replaces all ${CONCURRENCY_LEVELS} at template time.
               BENCH_CONCURRENCIES="${CONCURRENCY_LEVELS}"
-              if [ "${WORKLOAD_TYPE}" = "decode" ] && [ ${TP} -gt 1 ]; then
+              SCALE_FACTOR=${GPU_COUNT}
+              if [ "${WORKLOAD_TYPE}" = "decode" ] && [ $SCALE_FACTOR -gt 1 ]; then
                 MAX_C=$(echo ${CONCURRENCY_LEVELS} | tr ' ' '\n' | sort -n | tail -1)
                 EXTRA=$((MAX_C * 2))
-                while [ $EXTRA -le $((MAX_C * ${TP})) ]; do
+                while [ $EXTRA -le $((MAX_C * SCALE_FACTOR)) ]; do
                   BENCH_CONCURRENCIES="$BENCH_CONCURRENCIES $EXTRA"
                   EXTRA=$((EXTRA * 2))
                 done
-                echo "EXTENDED_CONCURRENCIES: $BENCH_CONCURRENCIES (base + extended for TP=${TP})"
+                echo "EXTENDED_CONCURRENCIES: $BENCH_CONCURRENCIES (base + extended for ${GPU_COUNT} GPUs)"
               fi
 
               # Run benchmarks at each concurrency level
               for MC in $BENCH_CONCURRENCIES; do
                 echo ""
 
-                # Calibration run to estimate throughput and compute num_prompts
                 CALIB_N=$((MC > 20 ? MC : 20))
                 echo "CALIBRATION: concurrency=$MC num_prompts=$CALIB_N"
                 CALIB_OUTPUT=$(vllm bench serve \
@@ -110,10 +115,9 @@ spec:
                   --max-concurrency $MC \
                   --num-prompts $CALIB_N \
                   --ignore-eos \
-                  --seed $(date +%M%H%M%S) 2>&1) \
+                  --seed $(date +%M%H%M%S) 2>&1)
                 echo "$CALIB_OUTPUT"
 
-                # Parse vllm-reported throughput (accurate, excludes client overhead)
                 if [ "${WORKLOAD_TYPE}" = "decode" ]; then
                   THROUGHPUT=$(echo "$CALIB_OUTPUT" | grep -i "Output token throughput" | grep -oE '[0-9]+\.[0-9]+' | tail -1)
                   TOKENS_PER_REQ=${OSL}
@@ -121,14 +125,14 @@ spec:
                   THROUGHPUT=$(echo "$CALIB_OUTPUT" | grep -i "Total Token throughput" | grep -oE '[0-9]+\.[0-9]+' | tail -1)
                   TOKENS_PER_REQ=$((${ISL} + ${OSL}))
                 fi
-                if [ -n "$THROUGHPUT" ]; then
+                if [ -n "${THROUGHPUT:-}" ]; then
                   NP=$(python3 -c "import math; r=float('$THROUGHPUT')/$TOKENS_PER_REQ; print(max(${MIN_PROMPTS}, math.ceil(r * ${TARGET_DURATION})))")
                 else
                   NP=${MIN_PROMPTS}
                 fi
-                echo "COMPUTED_NUM_PROMPTS: $NP (throughput=$THROUGHPUT tok/s)"
+                echo "COMPUTED_NUM_PROMPTS: $NP (throughput=${THROUGHPUT:-n/a} tok/s)"
 
-                echo "BENCH_RUN: concurrency=$MC tp=${TP} workload=${WORKLOAD_TYPE} num_prompts=$NP"
+                echo "BENCH_RUN: concurrency=$MC tp=${TP} dp=${DP} workload=${WORKLOAD_TYPE} num_prompts=$NP"
                 vllm bench serve \
                   --base-url http://localhost:8000 \
                   --model ${MODEL} \
@@ -138,14 +142,14 @@ spec:
                   --max-concurrency $MC \
                   --num-prompts $NP \
                   --ignore-eos \
-                  --seed $(date +%M%H%M%S) \
+                  --seed $(date +%M%H%M%S)
                 echo "BENCH_RUN_END: concurrency=$MC"
               done
 
               echo ""
               echo "PD_CONFIG_END"
 
-              # Cleanup
+              # Cleanup vLLM server
               kill $VLLM_PID 2>/dev/null || true
               wait $VLLM_PID 2>/dev/null || true
 
@@ -166,7 +170,9 @@ spec:
                   key: HF_TOKEN
                   optional: true
             - name: VLLM_LOGGING_LEVEL
-              value: WARNING
+              value: INFO
+#            - name: VLLM_ROCM_USE_AITER
+#              value: "1"
           volumeMounts:
             - name: shm
               mountPath: /dev/shm

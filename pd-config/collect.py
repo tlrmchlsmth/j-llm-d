@@ -32,6 +32,12 @@ class BenchResult:
     concurrency: int
     output_throughput: float  # Output token throughput (tok/s)
     total_throughput: float  # Total token throughput (tok/s)
+    dp: int = 1              # Data parallelism (number of vLLM instances)
+    gpu_count: int = 0       # Total GPUs (tp * dp, or explicit from CONFIG)
+
+    def __post_init__(self):
+        if self.gpu_count == 0:
+            self.gpu_count = self.tp * self.dp
 
     @property
     def raw_throughput(self) -> float:
@@ -43,17 +49,37 @@ class BenchResult:
     @property
     def tpsg(self) -> float:
         """Throughput per GPU."""
-        return self.raw_throughput / self.tp
+        return self.raw_throughput / self.gpu_count
 
     @property
     def tpsu(self) -> float:
         """Throughput per user (throughput / concurrency)."""
         return self.raw_throughput / self.concurrency
 
+    @property
+    def config_label(self) -> str:
+        """Human-readable label for this config (e.g., TP=2, TP=2+EP, TP=1xDP=4)."""
+        if self.dp > 1:
+            return f"TP={self.tp}xDP={self.dp}"
+        if self.gpu_count > self.tp:
+            return f"TP={self.tp}+EP"
+        return f"TP={self.tp}"
 
-def parse_logs(log_text: str, workload_type: str, tp: int) -> list[BenchResult]:
+
+def parse_logs(
+    log_text: str, workload_type: str, tp: int,
+    dp: int = 1, gpu_count: int = 0,
+) -> list[BenchResult]:
     """Parse structured benchmark output."""
     results = []
+
+    # Try to extract gpu_count from CONFIG line if not provided
+    if gpu_count == 0:
+        m = re.search(r"CONFIG:.*gpu_count=(\d+)", log_text)
+        if m:
+            gpu_count = int(m.group(1))
+        else:
+            gpu_count = tp * dp
 
     output_tp_re = re.compile(
         r"Output token throughput \(tok/s\):\s+([\d.]+)", re.IGNORECASE
@@ -99,6 +125,8 @@ def parse_logs(log_text: str, workload_type: str, tp: int) -> list[BenchResult]:
                         concurrency=current_concurrency,
                         output_throughput=current_output_tp,
                         total_throughput=current_total_tp,
+                        dp=dp,
+                        gpu_count=gpu_count,
                     )
                 )
             else:
@@ -250,14 +278,36 @@ def read_results_from_node(namespace: str, node: str) -> dict[str, str]:
     return files
 
 
-def parse_job_name(filename: str) -> tuple[str, int] | None:
-    """Extract workload_type and tp from a job name like pd-config-prefill-tp4.log."""
-    m = re.match(r"pd-config-(prefill|decode|agg)-tp(\d+)\.log", filename)
+def parse_job_name(filename: str) -> tuple[str, int, int, int] | None:
+    """Extract workload_type, tp, dp, gpu_count from job name.
+
+    Patterns:
+        pd-config-{workload}-tp{N}.log         -> TP sweep (dp=1, gpu_count=tp)
+        pd-config-{workload}-tp{N}ep.log        -> EP sweep (dp=1, gpu_count from CONFIG)
+        pd-config-{workload}-tp{N}dp{M}.log     -> DP sweep (dp=M, gpu_count=tp*dp)
+
+    Returns (workload_type, tp, dp, gpu_count) or None.
+    gpu_count=0 means "parse from CONFIG line".
+    """
+    m = re.match(
+        r"pd-config-(prefill|decode|agg)-tp(\d+)(ep)?(dp(\d+))?\.log", filename
+    )
     if m:
         wt = m.group(1)
         if wt == "agg":
             wt = "aggregated"
-        return wt, int(m.group(2))
+        tp = int(m.group(2))
+        ep_flag = m.group(3) is not None
+        dp = int(m.group(5)) if m.group(5) else 1
+
+        if dp > 1:
+            gpu_count = tp * dp
+        elif ep_flag:
+            gpu_count = 0  # Will be parsed from CONFIG line
+        else:
+            gpu_count = tp
+
+        return wt, tp, dp, gpu_count
     return None
 
 
@@ -268,14 +318,15 @@ def build_scaling_table(
     osl: int,
 ) -> list[list]:
     """Build the scaling table as a list of rows (for both CSV and Sheets)."""
-    by_tp: dict[int, list[BenchResult]] = defaultdict(list)
+    # Group by (gpu_count, config_label) to handle TP, EP, and DP sweeps
+    by_config: dict[str, list[BenchResult]] = defaultdict(list)
     for r in results:
-        by_tp[r.tp].append(r)
+        by_config[r.config_label].append(r)
 
-    for tp in by_tp:
-        by_tp[tp].sort(key=lambda r: r.concurrency)
+    for key in by_config:
+        by_config[key].sort(key=lambda r: r.concurrency)
 
-    max_cols = max(len(runs) for runs in by_tp.values())
+    max_cols = max(len(runs) for runs in by_config.values())
 
     label = {"prefill": "Prefill", "decode": "Decode", "aggregated": "Aggregated"}.get(
         workload_type, workload_type.title()
@@ -284,16 +335,23 @@ def build_scaling_table(
     rows.append(["", label, f"ISL: {isl}", f"OSL: {osl}"] + [""] * max_cols)
     rows.append([""] * (max_cols + 4))
 
-    for tp in sorted(by_tp.keys()):
-        runs = by_tp[tp]
+    # Sort configs by gpu_count then by config label
+    sorted_configs = sorted(
+        by_config.keys(),
+        key=lambda k: (by_config[k][0].gpu_count, by_config[k][0].tp, by_config[k][0].dp),
+    )
+
+    for config_label in sorted_configs:
+        runs = by_config[config_label]
+        gpu_count = runs[0].gpu_count
         concurrencies = [r.concurrency for r in runs]
         throughputs = [int(round(r.raw_throughput)) for r in runs]
         tpsgs = [int(round(r.tpsg)) for r in runs]
         tpsus = [int(round(r.tpsu)) for r in runs]
 
         rows.append(["", "GPUs", "Concurrency"] + concurrencies)
-        rows.append(["", "", f"TP={tp}"] + throughputs)
-        rows.append(["", tp, "TPSG"] + tpsgs)
+        rows.append(["", "", config_label] + throughputs)
+        rows.append(["", gpu_count, "TPSG"] + tpsgs)
         rows.append(["", "", "TPSU"] + tpsus)
         rows.append([""] * (max_cols + 4))
 
@@ -303,20 +361,23 @@ def build_scaling_table(
 def build_pareto_data(results: list[BenchResult]) -> list[list]:
     """Build Pareto chart data in sparse layout for Google Sheets scatter chart.
 
-    Each TP level gets its own block of rows. Column A = TPSU, and exactly one
-    of the TP columns has the TPSG value (others blank). This lets the chart
+    Each config gets its own block of rows. Column A = TPSU, and exactly one
+    of the config columns has the TPSG value (others blank). This lets the chart
     use column A as the shared X-axis while each series has independent points.
     """
-    tp_values = sorted(set(r.tp for r in results))
-    header = ["TPSU (tok/s/user)"] + [f"TP={tp} TPSG" for tp in tp_values]
+    config_labels = sorted(
+        set(r.config_label for r in results),
+        key=lambda k: next(r for r in results if r.config_label == k).gpu_count,
+    )
+    header = ["TPSU (tok/s/user)"] + [f"{cl} TPSG" for cl in config_labels]
     rows = [header]
-    for tp in tp_values:
-        tp_results = sorted(
-            [r for r in results if r.tp == tp], key=lambda r: r.concurrency
+    for cl in config_labels:
+        cl_results = sorted(
+            [r for r in results if r.config_label == cl], key=lambda r: r.concurrency
         )
-        col_idx = tp_values.index(tp)
-        for r in tp_results:
-            row = [int(round(r.tpsu))] + [""] * len(tp_values)
+        col_idx = config_labels.index(cl)
+        for r in cl_results:
+            row = [int(round(r.tpsu))] + [""] * len(config_labels)
             row[col_idx + 1] = int(round(r.tpsg))
             rows.append(row)
     return rows
@@ -326,12 +387,15 @@ def build_pareto_data(results: list[BenchResult]) -> list[list]:
 class DisaggPoint:
     """A disaggregated deployment point: decode + prefill GPU allocation."""
     tpsu: float        # T_d / C_d (user-facing throughput)
-    tpsg: float        # T_d / (d_tp + p_gpus) (system GPU efficiency)
+    tpsg: float        # T_d / (d_gpus + p_gpus) (system GPU efficiency)
     d_tp: int           # decode tensor parallelism
+    d_dp: int           # decode data parallelism
+    d_gpu_count: int    # decode GPUs (tp * dp)
     d_concurrency: int  # decode concurrency
+    d_config_label: str # decode config label
     p_tp: int           # best prefill TP
     p_gpus: int         # prefill GPUs per decode replica
-    total_gpus: int     # d_tp + p_gpus
+    total_gpus: int     # d_gpu_count + p_gpus
 
 
 def compute_disagg_points(
@@ -346,11 +410,13 @@ def compute_disagg_points(
     to sustain the decode request rate. System TPSG accounts for both
     decode and prefill GPU allocation.
     """
-    # Best prefill throughput for each P_tp (max across concurrencies)
-    best_prefill: dict[int, float] = {}
+    # Best prefill throughput for each config (max across concurrencies)
+    # Key by gpu_count for cost calculation
+    best_prefill: dict[int, tuple[float, int]] = {}  # gpu_count -> (throughput, tp)
     for r in prefill_results:
-        if r.tp not in best_prefill or r.raw_throughput > best_prefill[r.tp]:
-            best_prefill[r.tp] = r.raw_throughput
+        key = r.gpu_count
+        if key not in best_prefill or r.raw_throughput > best_prefill[key][0]:
+            best_prefill[key] = (r.raw_throughput, r.tp)
 
     if not best_prefill:
         return []
@@ -361,17 +427,17 @@ def compute_disagg_points(
         request_rate = T_d / osl
         prefill_demand = request_rate * isl  # prefill tok/s needed
 
-        # Find minimum prefill GPU cost across all P_tp options
+        # Find minimum prefill GPU cost across all prefill config options
         min_p_gpus = float("inf")
         best_p_tp = 0
-        for p_tp, p_throughput in best_prefill.items():
+        for p_gpu_count, (p_throughput, p_tp) in best_prefill.items():
             p_replicas = math.ceil(prefill_demand / p_throughput)
-            p_gpus = p_replicas * p_tp
+            p_gpus = p_replicas * p_gpu_count
             if p_gpus < min_p_gpus:
                 min_p_gpus = p_gpus
                 best_p_tp = p_tp
 
-        total_gpus = r.tp + int(min_p_gpus)
+        total_gpus = r.gpu_count + int(min_p_gpus)
         system_tpsg = T_d / total_gpus
         system_tpsu = T_d / r.concurrency
 
@@ -379,7 +445,10 @@ def compute_disagg_points(
             tpsu=system_tpsu,
             tpsg=system_tpsg,
             d_tp=r.tp,
+            d_dp=r.dp,
+            d_gpu_count=r.gpu_count,
             d_concurrency=r.concurrency,
+            d_config_label=r.config_label,
             p_tp=best_p_tp,
             p_gpus=int(min_p_gpus),
             total_gpus=total_gpus,
@@ -394,39 +463,45 @@ def build_comparison_data(
 ) -> list[list]:
     """Build comparison chart data in sparse layout for Google Sheets.
 
-    Aggregated series by TP level + disaggregated series by decode TP level.
+    Aggregated series by config + disaggregated series by decode config.
     """
-    agg_tp_values = sorted(set(r.tp for r in agg_results))
-    disagg_tp_values = sorted(set(p.d_tp for p in disagg_points))
+    agg_labels = sorted(
+        set(r.config_label for r in agg_results),
+        key=lambda k: next(r for r in agg_results if r.config_label == k).gpu_count,
+    )
+    disagg_labels = sorted(
+        set(p.d_config_label for p in disagg_points),
+        key=lambda k: next(p for p in disagg_points if p.d_config_label == k).d_gpu_count,
+    )
 
     header = (
         ["TPSU (tok/s/user)"]
-        + [f"Agg TP={tp}" for tp in agg_tp_values]
-        + [f"Disagg D={tp}" for tp in disagg_tp_values]
+        + [f"Agg {cl}" for cl in agg_labels]
+        + [f"Disagg D={cl}" for cl in disagg_labels]
     )
-    num_agg = len(agg_tp_values)
-    num_disagg = len(disagg_tp_values)
+    num_agg = len(agg_labels)
+    num_disagg = len(disagg_labels)
     total_cols = num_agg + num_disagg
     rows = [header]
 
     # Aggregated data
-    for tp in agg_tp_values:
-        tp_results = sorted(
-            [r for r in agg_results if r.tp == tp], key=lambda r: r.concurrency
+    for cl in agg_labels:
+        cl_results = sorted(
+            [r for r in agg_results if r.config_label == cl], key=lambda r: r.concurrency
         )
-        col_idx = agg_tp_values.index(tp)
-        for r in tp_results:
+        col_idx = agg_labels.index(cl)
+        for r in cl_results:
             row = [int(round(r.tpsu))] + [""] * total_cols
             row[col_idx + 1] = int(round(r.tpsg))
             rows.append(row)
 
     # Disaggregated data
-    for tp in disagg_tp_values:
-        tp_points = sorted(
-            [p for p in disagg_points if p.d_tp == tp], key=lambda p: p.d_concurrency
+    for cl in disagg_labels:
+        cl_points = sorted(
+            [p for p in disagg_points if p.d_config_label == cl], key=lambda p: p.d_concurrency
         )
-        col_idx = num_agg + disagg_tp_values.index(tp)
-        for p in tp_points:
+        col_idx = num_agg + disagg_labels.index(cl)
+        for p in cl_points:
             row = [int(round(p.tpsu))] + [""] * total_cols
             row[col_idx + 1] = int(round(p.tpsg))
             rows.append(row)
@@ -450,21 +525,24 @@ def build_disagg_details(
     Args:
         sheet_start_row: 1-indexed row number where this block starts in the sheet.
     """
-    # Best prefill throughput per TP
+    # Best prefill throughput per gpu_count
     best_prefill: dict[int, float] = {}
+    best_prefill_label: dict[int, str] = {}
     for r in prefill_results:
-        if r.tp not in best_prefill or r.raw_throughput > best_prefill[r.tp]:
-            best_prefill[r.tp] = r.raw_throughput
+        key = r.gpu_count
+        if key not in best_prefill or r.raw_throughput > best_prefill[key]:
+            best_prefill[key] = r.raw_throughput
+            best_prefill_label[key] = r.config_label
     p_tp_values = sorted(best_prefill.keys())
 
     def col_letter(idx: int) -> str:
         return chr(ord("A") + idx)
 
     # Column layout:
-    # A=D_TP  B=D_Concurrency  C=Decode_Output  D=Prefill_Demand
-    # E..E+N-1=P_GPUs @TP=x   E+N=Best_P_GPUs  E+N+1=Total_GPUs
-    # E+N+2=TPSU  E+N+3=TPSG
-    pgpu_start = 4  # column E
+    # A=D_Config  B=D_GPUs  C=D_Concurrency  D=Decode_Output  E=Prefill_Demand
+    # F..F+N-1=P_GPUs @GPUs=x   F+N=Best_P_GPUs  F+N+1=Total_GPUs
+    # F+N+2=TPSU  F+N+3=TPSG
+    pgpu_start = 5  # column F
     n_tp = len(p_tp_values)
     best_col = pgpu_start + n_tp
     total_col = best_col + 1
@@ -483,55 +561,56 @@ def build_disagg_details(
     consts = ["ISL", isl, "OSL", osl]
 
     # Row 2: Prefill capacity values aligned under P_GPUs columns
-    cap = ["", "", "", "Prefill Capacity (tok/s):"]
-    for tp in p_tp_values:
-        cap.append(int(round(best_prefill[tp])))
+    cap = ["", "", "", "", "Prefill Capacity (tok/s):"]
+    for gpu_c in p_tp_values:
+        cap.append(int(round(best_prefill[gpu_c])))
 
     # Row 3: Header
     header = (
-        ["D_TP", "D_Concurrency", "Decode Output (tok/s)", "Prefill Demand (tok/s)"]
-        + [f"P_GPUs @TP={tp}" for tp in p_tp_values]
+        ["D_Config", "D_GPUs", "D_Concurrency", "Decode Output (tok/s)", "Prefill Demand (tok/s)"]
+        + [f"P_GPUs @{best_prefill_label.get(gc, f'G={gc}')}" for gc in p_tp_values]
         + ["Best P_GPUs", "Total GPUs", "TPSU (tok/s/user)", "TPSG (tok/s/GPU)"]
     )
 
     rows: list[list] = [title, consts, cap, header]
 
     # Data rows with formulas
-    sorted_points = sorted(disagg_points, key=lambda p: (p.d_tp, p.d_concurrency))
+    sorted_points = sorted(disagg_points, key=lambda p: (p.d_gpu_count, p.d_tp, p.d_concurrency))
     for i, p in enumerate(sorted_points):
         d_result = next(
             r for r in decode_results
-            if r.tp == p.d_tp and r.concurrency == p.d_concurrency
+            if r.tp == p.d_tp and r.dp == p.d_dp and r.concurrency == p.d_concurrency
         )
         R = sheet_start_row + data_start_rel + i  # absolute 1-indexed row
 
         row: list = [
-            p.d_tp,                          # A: D_TP (value)
-            p.d_concurrency,                 # B: D_Concurrency (value)
-            round(d_result.raw_throughput, 1),  # C: Decode Output (value)
+            p.d_config_label,                   # A: D_Config (label)
+            p.d_gpu_count,                       # B: D_GPUs (value)
+            p.d_concurrency,                     # C: D_Concurrency (value)
+            round(d_result.raw_throughput, 1),   # D: Decode Output (value)
         ]
 
-        # D: Prefill Demand = Decode_Output * ISL / OSL
-        row.append(f"=C{R}*$B${const_row}/$D${const_row}")
+        # E: Prefill Demand = Decode_Output * ISL / OSL
+        row.append(f"=D{R}*$B${const_row}/$D${const_row}")
 
-        # P_GPUs @TP=N = CEILING(Prefill_Demand / Capacity_at_TP) * TP
-        for j, tp in enumerate(p_tp_values):
+        # P_GPUs @config = CEILING(Prefill_Demand / Capacity) * gpu_count
+        for j, gpu_c in enumerate(p_tp_values):
             cap_cell = f"${col_letter(pgpu_start + j)}${cap_row}"
-            row.append(f"=CEILING(D{R}/{cap_cell},1)*{tp}")
+            row.append(f"=CEILING({col_letter(4)}{R}/{cap_cell},1)*{gpu_c}")
 
         # Best P_GPUs = MIN(all P_GPU columns)
         first = col_letter(pgpu_start)
         last = col_letter(pgpu_start + n_tp - 1)
         row.append(f"=MIN({first}{R}:{last}{R})")
 
-        # Total GPUs = D_TP + Best P_GPUs
-        row.append(f"=A{R}+{col_letter(best_col)}{R}")
+        # Total GPUs = D_GPUs + Best P_GPUs
+        row.append(f"=B{R}+{col_letter(best_col)}{R}")
 
         # TPSU = Decode Output / Concurrency
-        row.append(f"=C{R}/B{R}")
+        row.append(f"=D{R}/C{R}")
 
         # TPSG = Decode Output / Total GPUs
-        row.append(f"=C{R}/{col_letter(total_col)}{R}")
+        row.append(f"=D{R}/{col_letter(total_col)}{R}")
 
         rows.append(row)
 
@@ -714,11 +793,11 @@ def upload_to_sheets(
         ws.update(range_name="A1", values=table_rows)
 
         # Formatting requests for this sheet
-        num_tp = len(set(r.tp for r in wt_results))
+        num_configs = len(set(r.config_label for r in wt_results))
         fmt_requests = [_fmt_center(ws.id), _fmt_bold(ws.id, 0, 1)]
-        for tp_idx in range(num_tp):
-            block_start = 2 + tp_idx * 5
-            # Bold the label columns (B-C) for each TP block
+        for cfg_idx in range(num_configs):
+            block_start = 2 + cfg_idx * 5
+            # Bold the label columns (B-C) for each config block
             fmt_requests.append(_fmt_bold(ws.id, block_start, block_start + 4, 1, 3))
 
         # Pareto data + chart (decode only)
@@ -727,7 +806,7 @@ def upload_to_sheets(
             pareto_rows = build_pareto_data(wt_results)
             ws.update(range_name=f"A{pareto_start_row}", values=pareto_rows)
 
-            tp_values = sorted(set(r.tp for r in wt_results))
+            num_series = len(set(r.config_label for r in wt_results))
             num_data_rows = len(pareto_rows) - 1
             pareto_start_idx = pareto_start_row - 1
             pareto_end_idx = pareto_start_idx + len(pareto_rows)
@@ -739,11 +818,11 @@ def upload_to_sheets(
                 ws.id,
                 "Decode: GPU Efficiency vs User Throughput",
                 pareto_start_idx, pareto_end_idx,
-                len(tp_values),
+                num_series,
                 pareto_end_idx + 1,
             ))
             print(f"  {ws_title}: table ({len(table_rows)} rows) + "
-                  f"Pareto chart ({num_data_rows} points, {len(tp_values)} series)")
+                  f"Pareto chart ({num_data_rows} points, {num_series} series)")
         else:
             print(f"  {ws_title}: table ({len(table_rows)} rows)")
 
@@ -806,12 +885,12 @@ def upload_to_sheets(
     except gspread.exceptions.WorksheetNotFound:
         cfg_ws = sh.add_worksheet(title="Config", rows=200, cols=5)
 
-    tp_levels = sorted(set(r.tp for r in all_results))
+    config_labels = sorted(set(r.config_label for r in all_results))
     cfg_rows = [
         ["Experiment Configuration"],
         [],
         ["Model", config.get("model", "")],
-        ["TP Levels", ", ".join(str(t) for t in tp_levels)],
+        ["Configurations", ", ".join(config_labels)],
         ["Target Duration", config.get("target_duration", "")],
         ["Min Prompts", config.get("min_prompts", "")],
         [],
@@ -926,8 +1005,8 @@ def main():
         if not parsed:
             print(f"  Skipping {filename} (unrecognized name)")
             continue
-        workload_type, tp = parsed
-        results = parse_logs(contents, workload_type, tp)
+        workload_type, tp, dp, gpu_count = parsed
+        results = parse_logs(contents, workload_type, tp, dp=dp, gpu_count=gpu_count)
         print(f"  {filename}: {len(results)} benchmark result(s)")
         all_results.extend(results)
 
@@ -967,16 +1046,17 @@ def main():
             with open(comp_path, "w", newline="") as f:
                 w = csv.writer(f)
                 w.writerow([
-                    "d_tp", "d_concurrency", "decode_throughput",
-                    "p_tp", "p_gpus", "total_gpus", "tpsu", "tpsg",
+                    "d_config", "d_tp", "d_dp", "d_gpu_count", "d_concurrency",
+                    "decode_throughput", "p_tp", "p_gpus", "total_gpus", "tpsu", "tpsg",
                 ])
-                for p in sorted(disagg_points, key=lambda p: (p.d_tp, p.d_concurrency)):
+                for p in sorted(disagg_points, key=lambda p: (p.d_gpu_count, p.d_tp, p.d_concurrency)):
                     d_result = next(
                         r for r in decode_results
-                        if r.tp == p.d_tp and r.concurrency == p.d_concurrency
+                        if r.tp == p.d_tp and r.dp == p.d_dp and r.concurrency == p.d_concurrency
                     )
                     w.writerow([
-                        p.d_tp, p.d_concurrency, int(round(d_result.raw_throughput)),
+                        p.d_config_label, p.d_tp, p.d_dp, p.d_gpu_count,
+                        p.d_concurrency, int(round(d_result.raw_throughput)),
                         p.p_tp, p.p_gpus, p.total_gpus,
                         int(round(p.tpsu)), int(round(p.tpsg)),
                     ])

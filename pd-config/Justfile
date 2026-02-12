@@ -6,12 +6,16 @@ KN := "kubectl -n " + NAMESPACE
 
 # Benchmark configuration
 MODEL := "openai/gpt-oss-120b"
-IMAGE := "ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.6-debug"
+#IMAGE := "ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.6-debug"
+IMAGE := "quay.io/tms/llm-d-dev-rocm:0.4.0-5e95fbe"
 GPU_MEM_UTIL := "0.95"
 TARGET_DURATION := "60"
 MIN_PROMPTS := "200"
 HF_CACHE := "/mnt/local/hf-cache"
-MAX_NODES := ""
+
+# EP/DP sweep configuration
+ENABLE_EP := "false"   # Enable --enable-expert-parallel (used by bench, always on for bench-ep/bench-dp)
+MAX_GPU := "8"         # Max GPUs per job (limited by GPUs per node)
 
 # Prefill workload
 PREFILL_ISL := "4096"
@@ -31,37 +35,14 @@ AGG_CONCURRENCIES := "1 4 8 16 32 64"
 default:
   just --list
 
-# Label GPU nodes for benchmark scheduling (honors MAX_NODES)
-_setup-nodes:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  # Clear previous labels
-  kubectl label nodes -l pd-config-bench=true pd-config-bench- 2>/dev/null || true
-  # Find nodes with AMD GPUs
-  NODES=$(kubectl get nodes -o json | python3 -c "
-  import json, sys
-  data = json.load(sys.stdin)
-  for n in data['items']:
-      cap = n.get('status', {}).get('capacity', {})
-      if cap.get('amd.com/gpu') or cap.get('nvidia.com/gpu'):
-          print(n['metadata']['name'])
-  ")
-  if [ -n "{{MAX_NODES}}" ]; then
-    NODES=$(echo "$NODES" | head -n {{MAX_NODES}})
-  fi
-  COUNT=0
-  for node in $NODES; do
-    kubectl label node "$node" pd-config-bench=true --overwrite
-    COUNT=$((COUNT + 1))
-  done
-  echo "Labeled $COUNT GPU node(s) for benchmarking"
-
 # Launch a single benchmark Job
-_job JOB_NAME TP WORKLOAD_TYPE ISL OSL CONCURRENCY_LEVELS:
+_job JOB_NAME GPU_COUNT TP DP ENABLE_EP WORKLOAD_TYPE ISL OSL CONCURRENCY_LEVELS:
   env \
     JOB_NAME={{JOB_NAME}} \
+    GPU_COUNT={{GPU_COUNT}} \
     TP={{TP}} \
-    GPU_COUNT={{TP}} \
+    DP={{DP}} \
+    ENABLE_EP={{ENABLE_EP}} \
     MODEL="{{MODEL}}" \
     VLLM_IMAGE="{{IMAGE}}" \
     WORKLOAD_TYPE={{WORKLOAD_TYPE}} \
@@ -72,29 +53,61 @@ _job JOB_NAME TP WORKLOAD_TYPE ISL OSL CONCURRENCY_LEVELS:
     MIN_PROMPTS={{MIN_PROMPTS}} \
     GPU_MEM_UTIL={{GPU_MEM_UTIL}} \
     HF_CACHE_HOST_PATH="{{HF_CACHE}}" \
-    envsubst '${JOB_NAME} ${TP} ${GPU_COUNT} ${MODEL} ${VLLM_IMAGE} ${WORKLOAD_TYPE} ${ISL} ${OSL} ${CONCURRENCY_LEVELS} ${TARGET_DURATION} ${MIN_PROMPTS} ${GPU_MEM_UTIL} ${HF_CACHE_HOST_PATH}' \
+    envsubst '${JOB_NAME} ${GPU_COUNT} ${TP} ${DP} ${ENABLE_EP} ${MODEL} ${VLLM_IMAGE} ${WORKLOAD_TYPE} ${ISL} ${OSL} ${CONCURRENCY_LEVELS} ${TARGET_DURATION} ${MIN_PROMPTS} ${GPU_MEM_UTIL} ${HF_CACHE_HOST_PATH}' \
       < job.yaml | {{KN}} apply -f -
 
-# Launch P/D sweep Jobs (prefill + decode at TP=1,2,4,8)
-bench: _setup-nodes
-  {{KN}} delete jobs -l app=pd-config-bench,pd-config/workload=prefill --ignore-not-found=true
-  {{KN}} delete jobs -l app=pd-config-bench,pd-config/workload=decode --ignore-not-found=true
-  just _job pd-config-prefill-tp1 1 prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
-  just _job pd-config-prefill-tp2 2 prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
-  just _job pd-config-prefill-tp4 4 prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
-  just _job pd-config-prefill-tp8 8 prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
-  just _job pd-config-decode-tp1 1 decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
-  just _job pd-config-decode-tp2 2 decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
-  just _job pd-config-decode-tp4 4 decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
-  just _job pd-config-decode-tp8 8 decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
+# Launch TP sweep Jobs (prefill + decode at TP=1,2,4,8, DP=1, EP configurable)
+bench:
+  {{KN}} delete jobs -l app=pd-config-bench,pd-config/workload=prefill --ignore-not-found=true 2>/dev/null
+  {{KN}} delete jobs -l app=pd-config-bench,pd-config/workload=decode --ignore-not-found=true 2>/dev/null
+  just _job pd-config-prefill-tp1 1 1 1 {{ENABLE_EP}} prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
+  just _job pd-config-prefill-tp2 2 2 1 {{ENABLE_EP}} prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
+  just _job pd-config-prefill-tp4 4 4 1 {{ENABLE_EP}} prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
+  just _job pd-config-prefill-tp8 8 8 1 {{ENABLE_EP}} prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
+  just _job pd-config-decode-tp1 1 1 1 {{ENABLE_EP}} decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
+  just _job pd-config-decode-tp2 2 2 1 {{ENABLE_EP}} decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
+  just _job pd-config-decode-tp4 4 4 1 {{ENABLE_EP}} decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
+  just _job pd-config-decode-tp8 8 8 1 {{ENABLE_EP}} decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
+
+# Launch DP sweep Jobs (multiple vLLM instances, EP on, fixed TP)
+bench-dp:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{KN}} delete jobs -l app=pd-config-bench,pd-config/workload=prefill --ignore-not-found=true 2>/dev/null
+  {{KN}} delete jobs -l app=pd-config-bench,pd-config/workload=decode --ignore-not-found=true 2>/dev/null
+  for DP in 1 2 4 8; do
+    just _job "pd-config-prefill-dp${DP}" $DP 1 $DP true prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
+    just _job "pd-config-decode-dp${DP}" $DP 1 $DP true decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
+  done
 
 # Launch aggregated benchmark Jobs (actual workload, no P/D specialization)
-bench-agg: _setup-nodes
-  {{KN}} delete jobs -l app=pd-config-bench,pd-config/workload=aggregated --ignore-not-found=true
-  just _job pd-config-agg-tp1 1 aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
-  just _job pd-config-agg-tp2 2 aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
-  just _job pd-config-agg-tp4 4 aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
-  just _job pd-config-agg-tp8 8 aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
+bench-agg:
+  {{KN}} delete jobs -l app=pd-config-bench,pd-config/workload=aggregated --ignore-not-found=true 2>/dev/null
+  just _job pd-config-agg-tp1 1 1 1 {{ENABLE_EP}} aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
+  just _job pd-config-agg-tp2 2 2 1 {{ENABLE_EP}} aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
+  just _job pd-config-agg-tp4 4 4 1 {{ENABLE_EP}} aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
+  just _job pd-config-agg-tp8 8 8 1 {{ENABLE_EP}} aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
+
+# Launch all TP×DP combos (EP on, all workloads, constrained by MAX_GPU per node)
+bench-full:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{KN}} delete jobs -l app=pd-config-bench --ignore-not-found=true 2>/dev/null
+  COUNT=0
+  for TP in 1 2 4 8; do
+    for DP in 1 2 4 8; do
+      GPU_COUNT=$((TP * DP))
+      # Enable EP if using DP
+      if [ $DP -neq 1 ]; then EP=true; else EP=false; fi
+      if [ $GPU_COUNT -le {{MAX_GPU}} ]; then
+        just _job "pd-config-prefill-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
+        just _job "pd-config-decode-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
+        just _job "pd-config-agg-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
+        COUNT=$((COUNT + 3))
+      fi
+    done
+  done
+  echo "Launched $COUNT jobs ($(( COUNT / 3 )) TP×DP configs × 3 workloads)"
 
 # Launch all benchmarks (P/D sweep + aggregated)
 bench-all:
@@ -121,22 +134,10 @@ collect:
 collect-sheets TITLE="PD Config Benchmark Results":
   python3 collect.py -n {{NAMESPACE}} --sheets "{{TITLE}}"
 
-# Full workflow: launch P/D sweep, wait, collect results
-run:
-  just bench
-  just wait
-  just collect
-
-# Full workflow: all benchmarks (P/D + aggregated), wait, collect
-run-all:
-  just bench-all
-  just wait
-  just collect
-
 # Show status of benchmark Jobs and Pods
 status:
   {{KN}} get jobs -l app=pd-config-bench
 
 # Clean up all benchmark Jobs
 clean:
-  {{KN}} delete jobs -l app=pd-config-bench --ignore-not-found=true
+  {{KN}} delete jobs -l app=pd-config-bench --ignore-not-found=true 2>/dev/null

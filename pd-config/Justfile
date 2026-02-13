@@ -11,7 +11,7 @@ IMAGE := "ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.6-debug"
 GPU_MEM_UTIL := "0.95"
 TARGET_DURATION := "60"
 MIN_PROMPTS := "200"
-HF_CACHE := "/mnt/local/hf-cache"
+HF_CACHE := "/mnt/nvme/models"
 PRIORITY_CLASS := "low-priority"
 
 # EP/DP sweep configuration
@@ -158,33 +158,3 @@ status:
 # Clean up all benchmark Jobs
 clean:
   {{KN}} delete jobs -l app=pd-config-bench --ignore-not-found=true 2>/dev/null
-
-# Remove old models from HF cache on all GPU nodes (keeps current MODEL)
-clean-cache:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  KEEP="models--$(echo '{{MODEL}}' | sed 's|/|--|g')"
-  echo "Current model: {{MODEL}}"
-  echo "Keeping: $KEEP"
-  echo "HF cache host path: {{HF_CACHE}}"
-  echo ""
-  NODES=$(kubectl get nodes -o json | python3 -c "
-  import json, sys
-  for n in json.load(sys.stdin)['items']:
-    if int(n.get('status',{}).get('allocatable',{}).get('amd.com/gpu','0')) > 0:
-      print(n['metadata']['name'])
-  ")
-  if [ -z "$NODES" ]; then echo "No GPU nodes found."; exit 0; fi
-  for NODE in $NODES; do
-    POD="hf-clean-$(echo $NODE | tr '.' '-')"
-    echo "=== $NODE ==="
-    env POD_NAME="$POD" NODE_NAME="$NODE" KEEP_MODEL="$KEEP" HF_CACHE_PATH="{{HF_CACHE}}" VLLM_IMAGE="{{IMAGE}}" \
-      envsubst '${POD_NAME} ${NODE_NAME} ${KEEP_MODEL} ${HF_CACHE_PATH} ${VLLM_IMAGE}' \
-        < clean-pod.yaml | {{KN}} apply -f -
-    {{KN}} wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$POD" --timeout=300s 2>/dev/null || \
-      echo "WARNING: pod $POD did not complete successfully"
-    {{KN}} logs "$POD" 2>/dev/null
-    {{KN}} delete pod "$POD" --ignore-not-found=true 2>/dev/null
-    echo ""
-  done
-  echo "Cache cleanup complete."

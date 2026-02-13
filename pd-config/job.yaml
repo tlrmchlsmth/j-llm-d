@@ -7,7 +7,17 @@ metadata:
     pd-config/workload: ${WORKLOAD_TYPE}
     pd-config/tp: "${TP}"
 spec:
-  backoffLimit: 0
+  backoffLimit: 100
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+      - action: FailJob
+        onExitCodes:
+          containerName: bench
+          operator: NotIn
+          values: [0]
   ttlSecondsAfterFinished: 86400
   template:
     metadata:
@@ -16,6 +26,7 @@ spec:
         pd-config/workload: ${WORKLOAD_TYPE}
         pd-config/tp: "${TP}"
     spec:
+      priorityClassName: ${PRIORITY_CLASS}
       restartPolicy: Never
       containers:
         - name: bench
@@ -25,12 +36,6 @@ spec:
           args:
             - |
               set -euo pipefail
-
-              RESULTS_FILE="/results/${JOB_NAME}.log"
-              mkdir -p /results
-
-              # Tee all structured output to both stdout and results file
-              exec > >(tee -a "$RESULTS_FILE") 2>&1
 
               echo "PD_CONFIG_START"
               echo "CONFIG: model=${MODEL} tp=${TP} dp=${DP} gpu_count=${GPU_COUNT} ep=${ENABLE_EP} workload=${WORKLOAD_TYPE} isl=${ISL} osl=${OSL}"
@@ -54,6 +59,7 @@ spec:
               # Start vLLM server in the background
               vllm serve ${MODEL} \
                 --port 8000 \
+                --load-format=dummy \
                 --tensor-parallel-size ${TP} \
                 --data-parallel-size ${DP} \
                 --gpu-memory-utilization ${GPU_MEM_UTIL} \
@@ -163,6 +169,8 @@ spec:
               cpu: "32"
               memory: 100Gi
           env:
+            - name: VLLM_MOE_ROUTING_SIMULATION_STRATEGY
+              value: "uniform_random"
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -180,8 +188,6 @@ spec:
               mountPath: /.cache
             - name: hf-cache
               mountPath: /root/.cache/huggingface
-            - name: results
-              mountPath: /results
       volumes:
         - name: shm
           emptyDir:
@@ -192,8 +198,4 @@ spec:
         - name: hf-cache
           hostPath:
             path: ${HF_CACHE_HOST_PATH}
-            type: DirectoryOrCreate
-        - name: results
-          hostPath:
-            path: /mnt/local/pd-config-results
             type: DirectoryOrCreate

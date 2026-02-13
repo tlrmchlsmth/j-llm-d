@@ -814,13 +814,17 @@ def upload_to_sheets(
             fmt_requests.append(
                 _fmt_bold(ws.id, pareto_start_idx, pareto_start_idx + 1)
             )
+            chart_anchor = pareto_end_idx + 1
             fmt_requests.append(_create_scatter_chart(
                 ws.id,
                 "Decode: GPU Efficiency vs User Throughput",
                 pareto_start_idx, pareto_end_idx,
                 num_series,
-                pareto_end_idx + 1,
+                chart_anchor,
             ))
+            # Ensure the grid has enough rows for the chart anchor
+            if ws.row_count < chart_anchor + 1:
+                ws.resize(rows=chart_anchor + 1)
             print(f"  {ws_title}: table ({len(table_rows)} rows) + "
                   f"Pareto chart ({num_data_rows} points, {num_series} series)")
         else:
@@ -860,6 +864,10 @@ def upload_to_sheets(
         num_series = len(comp_rows[0]) - 1  # all columns except TPSU
         detail_start_idx = detail_start_row - 1
         chart_anchor = detail_start_idx + len(detail_rows) + 1
+
+        # Ensure the grid has enough rows for the chart anchor
+        if comp_ws.row_count < chart_anchor + 1:
+            comp_ws.resize(rows=chart_anchor + 1)
 
         comp_fmt = [
             _fmt_center(comp_ws.id),

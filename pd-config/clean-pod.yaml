@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${POD_NAME}
+spec:
+  nodeName: "${NODE_NAME}"
+  restartPolicy: Never
+  containers:
+  - name: clean
+    image: ${VLLM_IMAGE}
+    imagePullPolicy: IfNotPresent
+    command: ["sh", "-c"]
+    args:
+    - |
+      echo "Before:"
+      du -sh /hf-cache/hub/models--*/ 2>/dev/null || echo "  (empty)"
+      df -h /hf-cache
+      for dir in /hf-cache/hub/models--*/; do
+        [ -d "$dir" ] || continue
+        name=$(basename "$dir")
+        if [ "$name" != "${KEEP_MODEL}" ]; then
+          size=$(du -sh "$dir" | cut -f1)
+          echo "Removing: $name ($size)"
+          rm -rf "$dir"
+        fi
+      done
+      echo ""
+      echo "After:"
+      df -h /hf-cache
+    volumeMounts:
+    - name: hf-cache
+      mountPath: /hf-cache
+  volumes:
+  - name: hf-cache
+    hostPath:
+      path: "${HF_CACHE_PATH}"
+      type: DirectoryOrCreate

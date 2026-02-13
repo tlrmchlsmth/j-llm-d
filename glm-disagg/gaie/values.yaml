@@ -1,0 +1,60 @@
+inferenceExtension:
+  replicas: 1
+  flags:
+    kv-cache-usage-percentage-metric: "vllm:kv_cache_usage_perc"
+  image:
+    name: llm-d-inference-scheduler
+    hub: ghcr.io/llm-d
+    tag: v0.5.0
+    pullPolicy: Always
+  extProcPort: 9002
+  pluginsConfigFile: "pd-config.yaml"
+  pluginsCustomConfig:
+    pd-config.yaml: |
+      apiVersion: inference.networking.x-k8s.io/v1alpha1
+      kind: EndpointPickerConfig
+      plugins:
+      - type: prefill-header-handler
+      - type: prefill-filter
+      - type: decode-filter
+      - type: max-score-picker
+      - type: queue-scorer
+        parameters:
+          hashBlockSize: 5
+          maxPrefixBlocksToMatch: 256
+          lruCapacityPerServer: 31250
+      - type: pd-profile-handler
+        parameters:
+          threshold: 0
+          hashBlockSize: 5
+      schedulingProfiles:
+      - name: prefill
+        plugins:
+        - pluginRef: prefill-filter
+        - pluginRef: queue-scorer
+          weight: 1.0
+        - pluginRef: max-score-picker
+      - name: decode
+        plugins:
+        - pluginRef: decode-filter
+        - pluginRef: queue-scorer
+          weight: 1.0
+        - pluginRef: max-score-picker
+
+  monitoring:
+    interval: "10s"
+    secret:
+      name: glm-disagg-gateway-sa-metrics-reader-secret
+    prometheus:
+      enabled: true
+      auth:
+        enabled: true
+
+inferencePool:
+  targetPorts:
+    - number: 8000
+  modelServerType: vllm
+  modelServers:
+    matchLabels:
+      llm-d.ai/inference-serving: "true"
+      llm-d.ai/guide: "glm-disagg"

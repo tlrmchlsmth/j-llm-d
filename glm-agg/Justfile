@@ -1,0 +1,66 @@
+set dotenv-load
+set dotenv-path := "../.env"
+
+NAMESPACE := "tms"
+KN := "kubectl -n " + NAMESPACE
+MODEL := "zai-org/GLM-4.7-FP8"
+
+default:
+  just --list
+
+# Deploy the aggregated stack (1x TP=8, no P/D)
+deploy:
+  MODEL="{{MODEL}}" helmfile apply -n {{NAMESPACE}}
+  {{KN}} apply -f httproute.yaml
+
+# Deploy with specific gateway provider
+deploy-gw ENV:
+  MODEL="{{MODEL}}" helmfile apply -e {{ENV}} -n {{NAMESPACE}}
+
+# Show pod status
+status:
+  {{KN}} get pods -l llm-d.ai/guide=glm-agg
+
+# Show all resources
+status-all:
+  {{KN}} get all -l llm-d.ai/guide=glm-agg
+
+# Show helm releases
+releases:
+  helm list -n {{NAMESPACE}} | grep glm-agg
+
+# Tear down the deployment
+destroy:
+  helmfile destroy -n {{NAMESPACE}}
+  {{KN}} delete -f httproute.yaml --ignore-not-found=true
+
+# Get gateway IP
+gateway-ip:
+  {{KN}} get gateway/infra-glm-agg-inference-gateway -o jsonpath='{.status.addresses[0].value}'
+
+# Deploy the poker pod for interactive benchmarking
+start-poker:
+  {{KN}} apply -f ../poker/poker.yaml
+
+# Open a shell in the poker pod with Justfile.remote for both gateways
+poke:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  mkdir -p ../.tmp
+  export NAMESPACE="{{NAMESPACE}}"
+  envsubst '${NAMESPACE}' < ../Justfile.glm-remote > ../.tmp/Justfile.glm-remote.tmp
+  kubectl cp ../.tmp/Justfile.glm-remote.tmp {{NAMESPACE}}/poker:/app/Justfile
+  {{KN}} exec -it poker -- /bin/zsh
+
+# Copy sweep results from poker pod to local ../results/
+copy-results:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  mkdir -p ../results
+  kubectl cp {{NAMESPACE}}/poker:/app/results/ ../results/
+  echo "Results copied to ../results/"
+  ls -la ../results/
+
+# Generate a Google Sheet from collected results
+collect-sheets TITLE:
+  python3 ../glm-collect.py -d ../results --sheets "{{TITLE}}"

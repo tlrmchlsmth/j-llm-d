@@ -1,7 +1,7 @@
 set dotenv-load
 set dotenv-required
 
-NAMESPACE := "vllm"
+NAMESPACE := "tms"
 HF_TOKEN := "$HF_TOKEN"
 GH_TOKEN := "$GH_TOKEN"
 

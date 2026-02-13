@@ -1,0 +1,220 @@
+multinode: false
+
+modelArtifacts:
+  # uri and name are set via MODEL env var in Justfile -> helmfile
+  size: 150Gi
+  authSecretName: "hf-secret"
+  labels:
+    llm-d.ai/inference-serving: "true"
+    llm-d.ai/guide: "glm-disagg"
+    llm-d.ai/accelerator-variant: "gpu"
+    llm-d.ai/accelerator-vendor: "amd"
+
+routing:
+  servicePort: 8000
+  proxy:
+    image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.5.0
+    connector: nixlv2
+    secure: false
+
+accelerator:
+  type: amd
+
+decode:
+  parallelism:
+    data: 8
+  create: true
+  replicas: 1
+  monitoring:
+    podmonitor:
+      enabled: true
+      portName: "vllm"
+      path: "/metrics"
+      interval: "30s"
+  containers:
+    - name: "vllm"
+      image: ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.6-debug
+      securityContext:
+        privileged: true
+      modelCommand: vllmServe
+      args:
+        - "--enable-expert-parallel"
+        - "--kv-transfer-config"
+        - '{"kv_connector":"NixlConnector",
+            "kv_role":"kv_both",
+            "kv_load_failure_policy":"fail"}'
+        - "--disable-uvicorn-access-log"
+        - "--gpu-memory-utilization"
+        - "0.95"
+      env:
+        - name: VLLM_ROCM_USE_AITER
+          value: "1"
+        - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-secret
+              key: HF_TOKEN
+              optional: true
+      ports:
+        - containerPort: 8200
+          name: vllm
+          protocol: TCP
+        - containerPort: 5600
+          name: nixl
+          protocol: TCP
+      resources:
+        limits:
+          # amd.com/gpu: 8  # added automatically from parallelism + accelerator
+          memory: 200Gi
+          cpu: "32"
+        requests:
+          # amd.com/gpu: 8  # added automatically from parallelism + accelerator
+          memory: 200Gi
+          cpu: "32"
+      mountModelVolume: false
+      volumeMounts:
+        - name: metrics-volume
+          mountPath: /.config
+        - name: shm
+          mountPath: /dev/shm
+        - name: torch-compile-cache
+          mountPath: /.cache
+        - name: hf-cache
+          mountPath: /model-cache
+      startupProbe:
+        httpGet:
+          path: /v1/models
+          port: vllm
+        initialDelaySeconds: 15
+        periodSeconds: 30
+        timeoutSeconds: 5
+        failureThreshold: 60
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: vllm
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 30
+      readinessProbe:
+        httpGet:
+          path: /v1/models
+          port: vllm
+        periodSeconds: 5
+        timeoutSeconds: 2
+        failureThreshold: 3
+  volumes:
+    - name: metrics-volume
+      emptyDir: {}
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: "20Gi"
+    - name: torch-compile-cache
+      emptyDir: {}
+    - name: hf-cache
+      hostPath:
+        path: /mnt/nvme/models
+        type: DirectoryOrCreate
+
+prefill:
+  parallelism:
+    tensor: 4
+  create: true
+  replicas: 2
+  monitoring:
+    podmonitor:
+      enabled: true
+      portName: "vllm"
+      path: "/metrics"
+      interval: "30s"
+  containers:
+    - name: "vllm"
+      image: ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.6-debug
+      securityContext:
+        privileged: true
+      modelCommand: vllmServe
+      args:
+        - "--kv-transfer-config"
+        - '{"kv_connector":"NixlConnector",
+            "kv_role":"kv_both",
+            "kv_load_failure_policy":"fail"}'
+        - "--disable-uvicorn-access-log"
+        - "--gpu-memory-utilization"
+        - "0.95"
+      env:
+        - name: VLLM_ROCM_USE_AITER
+          value: "1"
+        - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-secret
+              key: HF_TOKEN
+              optional: true
+      ports:
+        - containerPort: 8000
+          name: vllm
+          protocol: TCP
+        - containerPort: 5600
+          name: nixl
+          protocol: TCP
+      resources:
+        limits:
+          memory: 200Gi
+          cpu: "32"
+        requests:
+          memory: 200Gi
+          cpu: "32"
+      mountModelVolume: false
+      volumeMounts:
+        - name: metrics-volume
+          mountPath: /.config
+        - name: shm
+          mountPath: /dev/shm
+        - name: torch-compile-cache
+          mountPath: /.cache
+        - name: hf-cache
+          mountPath: /model-cache
+      startupProbe:
+        httpGet:
+          path: /v1/models
+          port: vllm
+        initialDelaySeconds: 15
+        periodSeconds: 30
+        timeoutSeconds: 5
+        failureThreshold: 60
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: vllm
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 30
+      readinessProbe:
+        httpGet:
+          path: /v1/models
+          port: vllm
+        periodSeconds: 5
+        timeoutSeconds: 2
+        failureThreshold: 3
+  volumes:
+    - name: metrics-volume
+      emptyDir: {}
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: "20Gi"
+    - name: torch-compile-cache
+      emptyDir: {}
+    - name: hf-cache
+      hostPath:
+        path: /mnt/nvme/models
+        type: DirectoryOrCreate

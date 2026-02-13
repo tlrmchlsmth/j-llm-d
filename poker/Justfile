@@ -23,6 +23,7 @@ push-images VERSION:
 
 # Create and push multi-arch manifest
 push-manifest VERSION:
+  -podman rmi {{IMAGE}}:{{VERSION}} 2>/dev/null
   podman manifest create {{IMAGE}}:{{VERSION}}
   podman manifest add {{IMAGE}}:{{VERSION}} {{IMAGE}}:{{VERSION}}-arm64
   podman manifest add {{IMAGE}}:{{VERSION}} {{IMAGE}}:{{VERSION}}-amd64

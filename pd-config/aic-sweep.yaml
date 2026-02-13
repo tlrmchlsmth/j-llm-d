@@ -1,0 +1,62 @@
+exps:
+  - gpt120b_8gpu_agg
+  - gpt120b_8gpu_disagg
+# All agg lines look the same
+#  - gpt120b_16gpu_agg
+  - gpt120b_16gpu_disagg
+#  - gpt120b_32gpu_agg
+  - gpt120b_32gpu_disagg
+
+_agg: &agg
+  mode: "patch"
+  model_name: "GPT_OSS_120B"
+  system_name: "h200_sxm"
+  backend_name: "vllm"
+  database_mode: "HYBRID"
+  isl: 4096
+  osl: 256
+  ttft: 500.0
+  tpot: 15.0
+  serving_mode: "agg"
+  use_specific_quant_mode: "fp8"
+  config:
+    worker_config:
+      moe_tp_list: [1]
+
+_disagg: &disagg
+  mode: "patch"
+  model_name: "GPT_OSS_120B"
+  system_name: "h200_sxm"
+  backend_name: "vllm"
+  database_mode: "HYBRID"
+  isl: 4096
+  osl: 256
+  ttft: 500.0
+  tpot: 15.0
+  serving_mode: "disagg"
+  use_specific_quant_mode: "fp8"
+  config:
+    prefill_worker_config:
+      moe_tp_list: [1]
+    decode_worker_config:
+      moe_tp_list: [1]
+
+gpt120b_8gpu_disagg:
+  <<: *disagg
+  total_gpus: 4
+
+gpt120b_8gpu_agg:
+  <<: *agg
+  total_gpus: 8
+
+gpt120b_8gpu_disagg:
+  <<: *disagg
+  total_gpus: 8
+
+gpt120b_16gpu_disagg:
+  <<: *disagg
+  total_gpus: 16
+
+gpt120b_32gpu_disagg:
+  <<: *disagg
+  total_gpus: 32

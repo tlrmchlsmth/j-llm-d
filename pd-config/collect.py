@@ -26,6 +26,13 @@ READER_IMAGE = "busybox:1.36"
 
 
 @dataclass
+class LatencyStats:
+    mean: float = 0.0
+    median: float = 0.0
+    p99: float = 0.0
+
+
+@dataclass
 class BenchResult:
     workload_type: str  # "prefill", "decode", or "aggregated"
     tp: int
@@ -34,10 +41,19 @@ class BenchResult:
     total_throughput: float  # Total token throughput (tok/s)
     dp: int = 1              # Data parallelism (number of vLLM instances)
     gpu_count: int = 0       # Total GPUs (tp * dp, or explicit from CONFIG)
+    ttft: LatencyStats = None
+    tpot: LatencyStats = None
+    itl: LatencyStats = None
 
     def __post_init__(self):
         if self.gpu_count == 0:
             self.gpu_count = self.tp * self.dp
+        if self.ttft is None:
+            self.ttft = LatencyStats()
+        if self.tpot is None:
+            self.tpot = LatencyStats()
+        if self.itl is None:
+            self.itl = LatencyStats()
 
     @property
     def raw_throughput(self) -> float:
@@ -82,7 +98,7 @@ def parse_logs(
             gpu_count = tp * dp
 
     output_tp_re = re.compile(
-        r"Output token throughput \(tok/s\):\s+([\d.]+)", re.IGNORECASE
+        r"^Output token throughput \(tok/s\):\s+([\d.]+)", re.IGNORECASE
     )
     total_tp_re = re.compile(
         r"Total Token throughput \(tok/s\):\s+([\d.]+)", re.IGNORECASE
@@ -90,9 +106,23 @@ def parse_logs(
     bench_start_re = re.compile(r"BENCH_RUN: concurrency=(\d+)")
     bench_end_re = re.compile(r"BENCH_RUN_END: concurrency=(\d+)")
 
+    # Latency metric patterns
+    latency_patterns = {
+        "ttft_mean": re.compile(r"Mean TTFT \(ms\):\s+([\d.]+)"),
+        "ttft_median": re.compile(r"Median TTFT \(ms\):\s+([\d.]+)"),
+        "ttft_p99": re.compile(r"P99 TTFT \(ms\):\s+([\d.]+)"),
+        "tpot_mean": re.compile(r"Mean TPOT \(ms\):\s+([\d.]+)"),
+        "tpot_median": re.compile(r"Median TPOT \(ms\):\s+([\d.]+)"),
+        "tpot_p99": re.compile(r"P99 TPOT \(ms\):\s+([\d.]+)"),
+        "itl_mean": re.compile(r"Mean ITL \(ms\):\s+([\d.]+)"),
+        "itl_median": re.compile(r"Median ITL \(ms\):\s+([\d.]+)"),
+        "itl_p99": re.compile(r"P99 ITL \(ms\):\s+([\d.]+)"),
+    }
+
     current_concurrency = None
     current_output_tp = None
     current_total_tp = None
+    current_latencies: dict[str, float] = {}
 
     for line in log_text.split("\n"):
         m = bench_start_re.search(line)
@@ -100,6 +130,7 @@ def parse_logs(
             current_concurrency = int(m.group(1))
             current_output_tp = None
             current_total_tp = None
+            current_latencies = {}
             continue
 
         if current_concurrency is None:
@@ -115,6 +146,12 @@ def parse_logs(
             current_total_tp = float(m.group(1))
             continue
 
+        for key, pat in latency_patterns.items():
+            m = pat.search(line)
+            if m:
+                current_latencies[key] = float(m.group(1))
+                break
+
         m = bench_end_re.search(line)
         if m:
             if current_output_tp is not None and current_total_tp is not None:
@@ -127,6 +164,21 @@ def parse_logs(
                         total_throughput=current_total_tp,
                         dp=dp,
                         gpu_count=gpu_count,
+                        ttft=LatencyStats(
+                            mean=current_latencies.get("ttft_mean", 0),
+                            median=current_latencies.get("ttft_median", 0),
+                            p99=current_latencies.get("ttft_p99", 0),
+                        ),
+                        tpot=LatencyStats(
+                            mean=current_latencies.get("tpot_mean", 0),
+                            median=current_latencies.get("tpot_median", 0),
+                            p99=current_latencies.get("tpot_p99", 0),
+                        ),
+                        itl=LatencyStats(
+                            mean=current_latencies.get("itl_mean", 0),
+                            median=current_latencies.get("itl_median", 0),
+                            p99=current_latencies.get("itl_p99", 0),
+                        ),
                     )
                 )
             else:
@@ -311,6 +363,11 @@ def parse_job_name(filename: str) -> tuple[str, int, int, int] | None:
     return None
 
 
+def _fmt_ms(v: float):
+    """Format a millisecond value for display (round to 1 decimal)."""
+    return round(v, 1) if v else ""
+
+
 def build_scaling_table(
     results: list[BenchResult],
     workload_type: str,
@@ -353,6 +410,18 @@ def build_scaling_table(
         rows.append(["", "", config_label] + throughputs)
         rows.append(["", gpu_count, "TPSG"] + tpsgs)
         rows.append(["", "", "TPSU"] + tpsus)
+        rows.append([])
+        rows.append(["", "", "TTFT mean (ms)"] + [_fmt_ms(r.ttft.mean) for r in runs])
+        rows.append(["", "", "TTFT median (ms)"] + [_fmt_ms(r.ttft.median) for r in runs])
+        rows.append(["", "", "TTFT p99 (ms)"] + [_fmt_ms(r.ttft.p99) for r in runs])
+        rows.append([])
+        rows.append(["", "", "TPOT mean (ms)"] + [_fmt_ms(r.tpot.mean) for r in runs])
+        rows.append(["", "", "TPOT median (ms)"] + [_fmt_ms(r.tpot.median) for r in runs])
+        rows.append(["", "", "TPOT p99 (ms)"] + [_fmt_ms(r.tpot.p99) for r in runs])
+        rows.append([])
+        rows.append(["", "", "ITL mean (ms)"] + [_fmt_ms(r.itl.mean) for r in runs])
+        rows.append(["", "", "ITL median (ms)"] + [_fmt_ms(r.itl.median) for r in runs])
+        rows.append(["", "", "ITL p99 (ms)"] + [_fmt_ms(r.itl.p99) for r in runs])
         rows.append([""] * (max_cols + 4))
 
     return rows

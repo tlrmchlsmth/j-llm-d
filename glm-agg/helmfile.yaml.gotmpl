@@ -13,6 +13,7 @@ environments:
 {{- $ns := .Namespace | default "tms" -}}
 {{- $rn := (env "RELEASE_NAME_POSTFIX") | default "glm-agg" -}}
 {{- $model := env "MODEL" | default "zai-org/GLM-4.7-FP8" -}}
+{{- $msValues := env "MS_VALUES" -}}
 
 repositories:
   - name: llm-d-modelservice
@@ -68,6 +69,9 @@ releases:
       - {{ printf "gaie-%s" $rn | quote }}
     values:
       - ms/values.yaml
+    {{- if $msValues }}
+      - {{ $msValues }}
+    {{- end }}
     set:
       - name: modelArtifacts.uri
         value: {{ printf "hf://%s" $model | quote }}

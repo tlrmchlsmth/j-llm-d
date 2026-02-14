@@ -1,7 +1,7 @@
 NAMESPACE := "${NAMESPACE}"
 
 # Sweep configuration
-TARGET_DURATION := "60"
+TARGET_DURATION := "300"
 MIN_PROMPTS := "200"
 
 # Gateway URL convention: infra-{TARGET}-inference-gateway-istio.{NAMESPACE}.svc.cluster.local
@@ -94,7 +94,7 @@ _gpu_count TARGET:
   set -euo pipefail
   COUNT=$(kubectl get pods -n {{NAMESPACE}} \
     -l "llm-d.ai/guide={{TARGET}},llm-d.ai/inference-serving=true" \
-    -o json | jq '[.items[].spec.containers[].resources.limits["nvidia.com/gpu"] // empty | tonumber] | add')
+    -o json | jq '[.items[].spec.containers[].resources.limits | (.["nvidia.com/gpu"] // .["amd.com/gpu"] // empty) | tonumber] | add')
   if [[ -z "$COUNT" || "$COUNT" == "null" ]]; then
     echo "ERROR: Could not detect GPU count for {{TARGET}}" >&2
     exit 1

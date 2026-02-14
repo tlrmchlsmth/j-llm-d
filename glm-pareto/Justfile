@@ -1,0 +1,314 @@
+set dotenv-load
+set dotenv-path := "../.env"
+
+# Configs to sweep (space-separated). Each name maps to configs/<name>.yaml.
+# Prefix determines base template: agg-* → glm-agg, disagg-* → glm-disagg.
+export CONFIGS := env("CONFIGS", "disagg-3p5d-32 agg-tp4 agg-tp8 disagg-2p2d-24 disagg-1p1d-8 disagg-2p1d-16 ")
+
+# Max GPUs to use concurrently (configs are scheduled to fit within this budget)
+export MAX_GPUS := env("MAX_GPUS", "48")
+
+# Model to deploy
+export MODEL := env("MODEL", "RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic")
+
+# Sweep configuration
+export ISL := env("ISL", "4096")
+export OSL := env("OSL", "256")
+export CONCURRENCIES := env("CONCURRENCIES", "4 8 12 16 20 24 28 32 40 48 56 64")
+export TARGET_DURATION := env("TARGET_DURATION", "60")
+export MIN_PROMPTS := env("MIN_PROMPTS", "100")
+export IMAGE := env("IMAGE", "quay.io/tms/poker:0.0.13")
+
+default:
+  just --list
+
+# --- Full lifecycle ---
+
+# Run a single config end-to-end: deploy → wait → sweep → wait → teardown
+run CONFIG:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "=== Running config: {{CONFIG}} ==="
+  just setup-ns "{{CONFIG}}"
+  just deploy "{{CONFIG}}"
+  just wait-ready "{{CONFIG}}"
+  just sweep "{{CONFIG}}"
+  just wait-sweep "{{CONFIG}}"
+  just teardown "{{CONFIG}}"
+  echo "=== Config {{CONFIG}} complete ==="
+
+# Compute GPU count for a config from its YAML file
+gpu-count CONFIG:
+  #!/usr/bin/env bash
+  python3 -c "
+  import yaml, sys
+  with open('configs/{{CONFIG}}.yaml') as f:
+      d = yaml.safe_load(f)
+  gpus = 0
+  for role in ('decode', 'prefill'):
+      if role in d:
+          tp = d[role].get('parallelism', {}).get('tensor', 1)
+          replicas = d[role].get('replicas', 1)
+          gpus += tp * replicas
+  print(gpus)
+  "
+
+# Run all configs, scheduling by GPU budget
+run-all:
+  #!/usr/bin/env zsh
+  set -euo pipefail
+  MAX={{MAX_GPUS}}
+  CONFIGS=({{CONFIGS}})
+  TOTAL=${#CONFIGS[@]}
+
+  # Compute GPU counts upfront
+  typeset -A GPU_COST
+  for CFG in "${CONFIGS[@]}"; do
+    GPU_COST[$CFG]=$(just gpu-count "$CFG")
+  done
+
+  echo "Running $TOTAL configs (max $MAX GPUs concurrently)"
+  for CFG in "${CONFIGS[@]}"; do
+    echo "  $CFG: ${GPU_COST[$CFG]} GPUs"
+  done
+  echo ""
+
+  # GPU-budget scheduler
+  typeset -A PID_CFG   # pid -> config name
+  USED=0
+  QUEUE=("${CONFIGS[@]}")
+  FAILED=0
+
+  while (( ${#QUEUE[@]} > 0 )) || (( ${#PID_CFG[@]} > 0 )); do
+    # Launch configs that fit within budget
+    LAUNCHED=true
+    while $LAUNCHED && (( ${#QUEUE[@]} > 0 )); do
+      LAUNCHED=false
+      NEXT="${QUEUE[1]}"
+      NEED=${GPU_COST[$NEXT]}
+      if (( USED + NEED <= MAX )); then
+        echo ">>> Launching $NEXT (${NEED} GPUs, $((USED+NEED))/${MAX} used)"
+        (just run "$NEXT" 2>&1 | awk -v c="$NEXT" '{print "["c"] "$0; fflush()}') &
+        PID_CFG[$!]=$NEXT
+        USED=$((USED + NEED))
+        shift QUEUE
+        LAUNCHED=true
+      fi
+    done
+
+    # Wait for any running config to finish
+    if (( ${#PID_CFG[@]} > 0 )); then
+      while true; do
+        for PID in "${(@k)PID_CFG}"; do
+          if ! kill -0 "$PID" 2>/dev/null; then
+            wait "$PID" || FAILED=$((FAILED + 1))
+            CFG="${PID_CFG[$PID]}"
+            COST=${GPU_COST[$CFG]}
+            USED=$((USED - COST))
+            unset "PID_CFG[$PID]"
+            echo "<<< $CFG finished (freed ${COST} GPUs, ${USED}/${MAX} used)"
+            break 2
+          fi
+        done
+        sleep 5
+      done
+    fi
+  done
+
+  if (( FAILED > 0 )); then
+    echo "WARNING: $FAILED config(s) failed"
+  fi
+  echo ""
+  echo "=== All configs complete ==="
+  just collect
+
+# --- Namespace setup ---
+
+# Create namespace with secrets and poker RBAC for a config
+setup-ns CONFIG:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NS="{{CONFIG}}"
+  echo "Setting up namespace: $NS"
+  kubectl create ns "$NS" --dry-run=client -o yaml | kubectl apply -f -
+  # HF secret
+  kubectl -n "$NS" create secret generic hf-secret \
+    --from-literal=HF_TOKEN="$HF_TOKEN" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  # Poker RBAC (SA + Role + RoleBinding, skip the Pod)
+  kubectl -n "$NS" apply -f - <<'EOF'
+  apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    name: poker
+  ---
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    name: poker
+  rules:
+    - apiGroups: [""]
+      resources: ["pods"]
+      verbs: ["get", "list"]
+    - apiGroups: ["gateway.networking.k8s.io"]
+      resources: ["gateways"]
+      verbs: ["get", "list"]
+  ---
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    name: poker
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: poker
+  subjects:
+    - kind: ServiceAccount
+      name: poker
+  EOF
+
+# --- Deploy / Teardown ---
+
+# Deploy a config's model servers
+deploy CONFIG:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NS="{{CONFIG}}"
+  if [[ "{{CONFIG}}" == disagg-* ]]; then
+    BASE=glm-disagg
+  else
+    BASE=glm-agg
+  fi
+  MS_VALUES="$(cd .. && pwd)/glm-pareto/configs/{{CONFIG}}.yaml"
+  echo "Deploying $NS (base=$BASE)"
+  cd "../$BASE"
+  MODEL="{{MODEL}}" MS_VALUES="$MS_VALUES" helmfile apply -n "$NS"
+  kubectl -n "$NS" apply -f httproute.yaml
+
+# Wait for model server pods to be ready
+wait-ready CONFIG:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NS="{{CONFIG}}"
+  if [[ "{{CONFIG}}" == disagg-* ]]; then
+    GUIDE=glm-disagg
+  else
+    GUIDE=glm-agg
+  fi
+  echo "Waiting for model servers in $NS..."
+  # Wait for at least one pod to exist
+  while [ "$(kubectl -n "$NS" get pods -l "llm-d.ai/guide=$GUIDE,llm-d.ai/inference-serving=true" -o name 2>/dev/null | wc -l)" -eq 0 ]; do
+    sleep 10
+  done
+  kubectl -n "$NS" wait --for=condition=ready pods \
+    -l "llm-d.ai/guide=$GUIDE,llm-d.ai/inference-serving=true" \
+    --timeout=30m
+  echo "Model servers ready in $NS"
+
+# Tear down model servers (keeps namespace + sweep job pods for log collection)
+teardown CONFIG:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NS="{{CONFIG}}"
+  if [[ "{{CONFIG}}" == disagg-* ]]; then
+    BASE=glm-disagg
+  else
+    BASE=glm-agg
+  fi
+  echo "Tearing down model servers in $NS"
+  cd "../$BASE"
+  helmfile destroy -n "$NS" || true
+  kubectl -n "$NS" delete -f httproute.yaml --ignore-not-found=true 2>/dev/null || true
+
+# --- Sweep ---
+
+# Launch sweep job for a config (model servers must already be running)
+sweep CONFIG:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NS="{{CONFIG}}"
+  if [[ "{{CONFIG}}" == disagg-* ]]; then
+    TARGET=glm-disagg
+  else
+    TARGET=glm-agg
+  fi
+  echo "Launching sweep job for {{CONFIG}} in namespace $NS"
+  env \
+    JOB_NAME="glm-pareto-{{CONFIG}}" \
+    CONFIG_NAME="{{CONFIG}}" \
+    TARGET="$TARGET" \
+    NAMESPACE="$NS" \
+    ISL={{ISL}} \
+    OSL={{OSL}} \
+    CONCURRENCY_LEVELS="{{CONCURRENCIES}}" \
+    TARGET_DURATION={{TARGET_DURATION}} \
+    MIN_PROMPTS={{MIN_PROMPTS}} \
+    IMAGE="{{IMAGE}}" \
+    envsubst '${JOB_NAME} ${CONFIG_NAME} ${TARGET} ${NAMESPACE} ${ISL} ${OSL} ${CONCURRENCY_LEVELS} ${TARGET_DURATION} ${MIN_PROMPTS} ${IMAGE}' \
+      < job.yaml | kubectl -n "$NS" replace --force -f -
+
+# Wait for a config's sweep job to complete
+wait-sweep CONFIG:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NS="{{CONFIG}}"
+  echo "Waiting for sweep job in $NS..."
+  kubectl -n "$NS" wait --for=condition=complete --timeout=3h \
+    "job/glm-pareto-{{CONFIG}}" || \
+    echo "WARNING: sweep job for {{CONFIG}} did not complete successfully"
+
+# --- Results ---
+
+# Collect results from all config namespaces
+collect:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NAMESPACES=""
+  for CFG in {{CONFIGS}}; do
+    NAMESPACES="$NAMESPACES -n $CFG"
+  done
+  python3 collect.py $NAMESPACES
+
+# Collect results and upload to Google Sheets
+collect-sheets TITLE="GLM Pareto Sweep":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NAMESPACES=""
+  for CFG in {{CONFIGS}}; do
+    NAMESPACES="$NAMESPACES -n $CFG"
+  done
+  python3 collect.py $NAMESPACES --sheets "{{TITLE}}"
+
+# --- Status & Cleanup ---
+
+# Show status across all config namespaces
+status:
+  #!/usr/bin/env bash
+  for CFG in {{CONFIGS}}; do
+    echo "=== $CFG ==="
+    kubectl -n "$CFG" get jobs -l app=glm-pareto 2>/dev/null || echo "  (namespace not found)"
+    kubectl -n "$CFG" get pods -l llm-d.ai/inference-serving=true --no-headers 2>/dev/null || true
+    echo ""
+  done
+
+# Delete sweep jobs across all namespaces (keeps model servers)
+clean:
+  #!/usr/bin/env bash
+  for CFG in {{CONFIGS}}; do
+    kubectl -n "$CFG" delete jobs -l app=glm-pareto --ignore-not-found=true 2>/dev/null || true
+  done
+
+# Tear down model servers in all namespaces
+teardown-all:
+  #!/usr/bin/env bash
+  for CFG in {{CONFIGS}}; do
+    just teardown "$CFG" || true
+  done
+
+# Delete all config namespaces entirely
+destroy-all:
+  #!/usr/bin/env bash
+  for CFG in {{CONFIGS}}; do
+    echo "Deleting namespace $CFG"
+    kubectl delete ns "$CFG" --ignore-not-found=true 2>/dev/null || true
+  done

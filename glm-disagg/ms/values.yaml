@@ -25,6 +25,9 @@ decode:
     tensor: 8
   create: true
   replicas: 1
+  extraConfig:
+    hostNetwork: true
+    dnsPolicy: ClusterFirstWithHostNet
   monitoring:
     podmonitor:
       enabled: true
@@ -81,12 +84,10 @@ decode:
           protocol: TCP
       resources:
         limits:
-          # amd.com/gpu: 8  # added automatically from parallelism + accelerator
-          memory: 200Gi
+          memory: 400Gi
           cpu: "32"
         requests:
-          # amd.com/gpu: 8  # added automatically from parallelism + accelerator
-          memory: 200Gi
+          memory: 400Gi
           cpu: "32"
       mountModelVolume: false
       volumeMounts:
@@ -139,6 +140,9 @@ prefill:
     tensor: 4
   create: true
   replicas: 2
+  extraConfig:
+    hostNetwork: true
+    dnsPolicy: ClusterFirstWithHostNet
   monitoring:
     podmonitor:
       enabled: true
@@ -195,10 +199,10 @@ prefill:
           protocol: TCP
       resources:
         limits:
-          memory: 200Gi
+          memory: 400Gi
           cpu: "32"
         requests:
-          memory: 200Gi
+          memory: 400Gi
           cpu: "32"
       mountModelVolume: false
       volumeMounts:

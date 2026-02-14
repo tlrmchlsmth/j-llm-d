@@ -77,5 +77,7 @@ releases:
         value: {{ printf "hf://%s" $model | quote }}
       - name: modelArtifacts.name
         value: {{ $model | quote }}
+      - name: decode.containers[0].env[0].value
+        value: {{ $model | quote }}
     labels:
       kind: inference-stack

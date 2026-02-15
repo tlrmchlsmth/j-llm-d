@@ -3,10 +3,10 @@ set dotenv-path := "../.env"
 
 # Configs to sweep (space-separated). Each name maps to configs/<name>.yaml.
 # Prefix determines base template: agg-* → glm-agg, disagg-* → glm-disagg.
-export CONFIGS := env("CONFIGS", "disagg-3p5d-32 agg-tp4 agg-tp8 disagg-2p2d-24 disagg-1p1d-8 disagg-2p1d-16 ")
+export CONFIGS := env("CONFIGS", "disagg-3p5d-32 disagg-2p2d-24 disagg-2p1d-16 disagg-1p1d-8 agg-tp8 agg-tp4")
 
 # Max GPUs to use concurrently (configs are scheduled to fit within this budget)
-export MAX_GPUS := env("MAX_GPUS", "48")
+export MAX_GPUS := env("MAX_GPUS", "32")
 
 # Model to deploy
 export MODEL := env("MODEL", "RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic")
@@ -79,21 +79,34 @@ run-all:
   QUEUE=("${CONFIGS[@]}")
   FAILED=0
 
+  # Kill all background processes on Ctrl-C / exit
+  cleanup() {
+    echo ""
+    echo "Caught signal, killing running configs..."
+    trap - INT TERM          # reset to default so kill 0 doesn't re-enter
+    echo "Running deployments may still be up — use 'just teardown-all' to clean up."
+    kill 0                   # kill entire process group (script + all children)
+  }
+  trap cleanup INT TERM
+
   while (( ${#QUEUE[@]} > 0 )) || (( ${#PID_CFG[@]} > 0 )); do
-    # Launch configs that fit within budget
+    # Launch configs that fit within budget (scan entire queue, not just head)
     LAUNCHED=true
     while $LAUNCHED && (( ${#QUEUE[@]} > 0 )); do
       LAUNCHED=false
-      NEXT="${QUEUE[1]}"
-      NEED=${GPU_COST[$NEXT]}
-      if (( USED + NEED <= MAX )); then
-        echo ">>> Launching $NEXT (${NEED} GPUs, $((USED+NEED))/${MAX} used)"
-        (just run "$NEXT" 2>&1 | awk -v c="$NEXT" '{print "["c"] "$0; fflush()}') &
-        PID_CFG[$!]=$NEXT
-        USED=$((USED + NEED))
-        shift QUEUE
-        LAUNCHED=true
-      fi
+      for (( I=1; I<=${#QUEUE[@]}; I++ )); do
+        NEXT="${QUEUE[$I]}"
+        NEED=${GPU_COST[$NEXT]}
+        if (( USED + NEED <= MAX )); then
+          echo ">>> Launching $NEXT (${NEED} GPUs, $((USED+NEED))/${MAX} used)"
+          (just run "$NEXT" 2>&1 | awk -v c="$NEXT" '{print "["c"] "$0; fflush()}') &
+          PID_CFG[$!]=$NEXT
+          USED=$((USED + NEED))
+          QUEUE[$I]=()
+          LAUNCHED=true
+          break
+        fi
+      done
     done
 
     # Wait for any running config to finish

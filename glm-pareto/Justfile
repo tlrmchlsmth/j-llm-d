@@ -1,6 +1,9 @@
 set dotenv-load
 set dotenv-path := "../.env"
 
+# Avoid users overlapping
+export NSP := env("NSP", env("USER", "anon"))
+
 # Configs to sweep (space-separated). Each name maps to configs/<name>.yaml.
 # Prefix determines base template: agg-* → glm-agg, disagg-* → glm-disagg.
 export CONFIGS := env("CONFIGS", "disagg-3p5d-32 disagg-2p2d-24 disagg-2p1d-16 disagg-1p1d-8 agg-tp8 agg-tp4")
@@ -19,8 +22,30 @@ export TARGET_DURATION := env("TARGET_DURATION", "60")
 export MIN_PROMPTS := env("MIN_PROMPTS", "100")
 export IMAGE := env("IMAGE", "quay.io/tms/poker:0.0.13")
 
+# Extra vLLM args to inject into all model server containers (space-separated)
+export EXTRA_ARGS := env("EXTRA_ARGS", "")
+
+
 default:
   just --list
+
+# --- Utils ---
+
+# Prepends NSP to a config; no-op if already prefixed.
+_build_ns CONFIG:
+  @case "{{CONFIG}}" in \
+      {{NSP}}-*) echo "{{CONFIG}}" ;; \
+      *) echo "{{NSP}}-{{CONFIG}}" ;; \
+  esac
+
+_is_ep_cfg CONFIG:
+  #!/usr/bin/env bash
+  python3 -c "
+  import yaml
+  with open('configs/{{CONFIG}}.yaml') as f:
+      d = yaml.safe_load(f)
+  print('yes' if d.get('expert_parallel', False) else 'no')
+  "
 
 # --- Full lifecycle ---
 
@@ -48,8 +73,9 @@ gpu-count CONFIG:
   for role in ('decode', 'prefill'):
       if role in d:
           tp = d[role].get('parallelism', {}).get('tensor', 1)
+          dp = d[role].get('parallelism', {}).get('data', 1)
           replicas = d[role].get('replicas', 1)
-          gpus += tp * replicas
+          gpus += tp * dp * replicas
   print(gpus)
   "
 
@@ -141,7 +167,7 @@ run-all:
 setup-ns CONFIG:
   #!/usr/bin/env bash
   set -euo pipefail
-  NS="{{CONFIG}}"
+  NS=$(just _build_ns {{CONFIG}})
   echo "Setting up namespace: $NS"
   kubectl create ns "$NS" --dry-run=client -o yaml | kubectl apply -f -
   # HF secret
@@ -186,15 +212,41 @@ setup-ns CONFIG:
 deploy CONFIG:
   #!/usr/bin/env bash
   set -euo pipefail
-  NS="{{CONFIG}}"
+  NS=$(just _build_ns {{CONFIG}})
   if [[ "{{CONFIG}}" == disagg-* ]]; then
     BASE=glm-disagg
   else
     BASE=glm-agg
   fi
-  MS_VALUES="$(cd .. && pwd)/glm-pareto/configs/{{CONFIG}}.yaml"
-  echo "Deploying $NS (base=$BASE)"
+  IS_EP=$(just _is_ep_cfg {{CONFIG}})
+  # Build overlay: strip expert_parallel, inject EP flag + EXTRA_ARGS into containers
+  MS_VALUES=$(mktemp)
+  trap "rm -f $MS_VALUES" EXIT
+  echo "Deploying $NS (base=$BASE, ep=${IS_EP})"
   cd "../$BASE"
+  python3 -c "
+  import yaml, shlex, copy
+  with open('../glm-pareto/configs/{{CONFIG}}.yaml') as f:
+      overlay = yaml.safe_load(f)
+  overlay.pop('expert_parallel', None)
+  extra_args = shlex.split('{{EXTRA_ARGS}}')
+  ep = '$IS_EP' == 'yes'
+  if ep or extra_args:
+      with open('ms/values.yaml') as f:
+          base = yaml.safe_load(f)
+      for role in ('decode', 'prefill'):
+          base_role = base.get(role, {})
+          if base_role.get('containers') or base_role.get('create', False):
+              containers = copy.deepcopy(base_role.get('containers', [{}]))
+              args = list(containers[0].get('args', []))
+              if ep:
+                  args.append('--enable-expert-parallel')
+              args.extend(extra_args)
+              containers[0]['args'] = args
+              overlay.setdefault(role, {})['containers'] = containers
+  with open('$MS_VALUES', 'w') as f:
+      yaml.dump(overlay, f, default_flow_style=False)
+  "
   MODEL="{{MODEL}}" MS_VALUES="$MS_VALUES" helmfile apply -n "$NS"
   kubectl -n "$NS" apply -f httproute.yaml
 
@@ -202,7 +254,7 @@ deploy CONFIG:
 wait-ready CONFIG:
   #!/usr/bin/env bash
   set -euo pipefail
-  NS="{{CONFIG}}"
+  NS=$(just _build_ns {{CONFIG}})
   if [[ "{{CONFIG}}" == disagg-* ]]; then
     GUIDE=glm-disagg
   else
@@ -222,13 +274,13 @@ wait-ready CONFIG:
 teardown CONFIG:
   #!/usr/bin/env bash
   set -euo pipefail
-  NS="{{CONFIG}}"
+  NS=$(just _build_ns {{CONFIG}})
   if [[ "{{CONFIG}}" == disagg-* ]]; then
     BASE=glm-disagg
   else
     BASE=glm-agg
   fi
-  echo "Tearing down model servers in $NS"
+  echo "Tearing down model servers in $NS {{CONFIG}}"
   cd "../$BASE"
   helmfile destroy -n "$NS" || true
   kubectl -n "$NS" delete -f httproute.yaml --ignore-not-found=true 2>/dev/null || true
@@ -239,7 +291,7 @@ teardown CONFIG:
 sweep CONFIG:
   #!/usr/bin/env bash
   set -euo pipefail
-  NS="{{CONFIG}}"
+  NS=$(just _build_ns {{CONFIG}})
   if [[ "{{CONFIG}}" == disagg-* ]]; then
     TARGET=glm-disagg
   else
@@ -264,7 +316,7 @@ sweep CONFIG:
 wait-sweep CONFIG:
   #!/usr/bin/env bash
   set -euo pipefail
-  NS="{{CONFIG}}"
+  NS=$(just _build_ns {{CONFIG}})
   echo "Waiting for sweep job in $NS..."
   kubectl -n "$NS" wait --for=condition=complete --timeout=3h \
     "job/glm-pareto-{{CONFIG}}" || \
@@ -278,19 +330,25 @@ collect:
   set -euo pipefail
   NAMESPACES=""
   for CFG in {{CONFIGS}}; do
-    NAMESPACES="$NAMESPACES -n $CFG"
+    NS=$(just _build_ns ${CFG})
+    NAMESPACES="$NAMESPACES -n $NS"
   done
   python3 collect.py $NAMESPACES
 
 # Collect results and upload to Google Sheets
-collect-sheets TITLE="GLM Pareto Sweep":
+collect-sheets TITLE="":
   #!/usr/bin/env bash
   set -euo pipefail
+  TITLE="{{TITLE}}"
+  if [[ -z "$TITLE" ]]; then
+    TITLE="$(basename '{{MODEL}}') Pareto Sweep"
+  fi
   NAMESPACES=""
   for CFG in {{CONFIGS}}; do
-    NAMESPACES="$NAMESPACES -n $CFG"
+    NS=$(just _build_ns ${CFG})
+    NAMESPACES="$NAMESPACES -n $NS"
   done
-  python3 collect.py $NAMESPACES --sheets "{{TITLE}}"
+  python3 collect.py $NAMESPACES --sheets "$TITLE"
 
 # --- Status & Cleanup ---
 
@@ -298,9 +356,10 @@ collect-sheets TITLE="GLM Pareto Sweep":
 status:
   #!/usr/bin/env bash
   for CFG in {{CONFIGS}}; do
-    echo "=== $CFG ==="
-    kubectl -n "$CFG" get jobs -l app=glm-pareto 2>/dev/null || echo "  (namespace not found)"
-    kubectl -n "$CFG" get pods -l llm-d.ai/inference-serving=true --no-headers 2>/dev/null || true
+    NS=$(just _build_ns ${CFG})
+    echo "=== $NS ==="
+    kubectl -n "$NS" get jobs -l app=glm-pareto 2>/dev/null || echo "  (namespace not found)"
+    kubectl -n "$NS" get pods -l llm-d.ai/inference-serving=true --no-headers 2>/dev/null || true
     echo ""
   done
 
@@ -308,7 +367,8 @@ status:
 clean:
   #!/usr/bin/env bash
   for CFG in {{CONFIGS}}; do
-    kubectl -n "$CFG" delete jobs -l app=glm-pareto --ignore-not-found=true 2>/dev/null || true
+    NS=$(just _build_ns ${CFG})
+    kubectl -n "$NS" delete jobs -l app=glm-pareto --ignore-not-found=true 2>/dev/null || true
   done
 
 # Tear down model servers in all namespaces
@@ -322,6 +382,7 @@ teardown-all:
 destroy-all:
   #!/usr/bin/env bash
   for CFG in {{CONFIGS}}; do
-    echo "Deleting namespace $CFG"
-    kubectl delete ns "$CFG" --ignore-not-found=true 2>/dev/null || true
+    NS=$(just _build_ns ${CFG})
+    echo "Deleting namespace $NS"
+    kubectl delete ns "$NS" --ignore-not-found=true 2>/dev/null || true
   done

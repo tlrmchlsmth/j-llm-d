@@ -137,7 +137,13 @@ spec:
 
               echo ""
               echo "SWEEP_END"
-
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-secret
+                  key: HF_TOKEN
+                  optional: true
           resources:
             requests:
               cpu: "2"

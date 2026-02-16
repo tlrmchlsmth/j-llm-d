@@ -1,5 +1,6 @@
-# 1 GPU aggregated: TP=4, 1 replica
+# 4 GPU aggregated: TP=4, 1 replica
 # Base: glm-agg
+expert_parallel: false
 decode:
   parallelism:
     tensor: 4

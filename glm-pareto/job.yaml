@@ -96,17 +96,6 @@ spec:
                 # Calibration: small run to estimate throughput
                 CALIB_N=$((MC > 20 ? MC : 20))
                 echo "CALIBRATION: concurrency=$MC num_prompts=$CALIB_N"
-                vllm bench serve \
-                  --base-url "$URL" \
-                  --model "$MODEL" \
-                  --dataset-name random \
-                  --random-input-len $ISL \
-                  --random-output-len $OSL \
-                  --max-concurrency $MC \
-                  --num-prompts $CALIB_N \
-                  --ignore-eos \
-                  --request-rate 4096 \
-                  --seed $(date +%M%H%M%S)
                 CALIB_OUTPUT=$(vllm bench serve \
                   --base-url "$URL" \
                   --model "$MODEL" \

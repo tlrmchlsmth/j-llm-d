@@ -1,5 +1,6 @@
 # 8 GPU disaggregated: 1 prefill (TP=4) + 1 decode (TP=4)
 # Base: glm-disagg
+expert_parallel: false
 decode:
   parallelism:
     tensor: 4

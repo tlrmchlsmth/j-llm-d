@@ -22,8 +22,6 @@ export TARGET_DURATION := env("TARGET_DURATION", "60")
 export MIN_PROMPTS := env("MIN_PROMPTS", "100")
 export IMAGE := env("IMAGE", "quay.io/tms/poker:0.0.13")
 
-export MS_BASE_VALUES_NON_EP := env("MS_BASE_VALUES_NON_EP", "ms/values.yaml")
-export MS_BASE_VALUES_EP := env("MS_BASE_VALUES_EP", "ms/values_ep.yaml")
 
 default:
   just --list
@@ -39,8 +37,12 @@ _build_ns CONFIG:
 
 _is_ep_cfg CONFIG:
   #!/usr/bin/env bash
-  [[ "{{CONFIG}}" =~ ^(disagg|agg)-ep ]] && echo "yes" || echo "no"
-
+  python3 -c "
+  import yaml
+  with open('configs/{{CONFIG}}.yaml') as f:
+      d = yaml.safe_load(f)
+  print('yes' if d.get('expert_parallel', False) else 'no')
+  "
 
 # --- Full lifecycle ---
 
@@ -214,15 +216,26 @@ deploy CONFIG:
     BASE=glm-agg
   fi
   IS_EP=$(just _is_ep_cfg {{CONFIG}})
-  if [[ "$IS_EP" == "yes" ]]; then
-    MS_BASE_VALUES="{{MS_BASE_VALUES_EP}}"
-  else
-    MS_BASE_VALUES="{{MS_BASE_VALUES_NON_EP}}"
-  fi
   MS_VALUES="$(cd .. && pwd)/glm-pareto/configs/{{CONFIG}}.yaml"
   echo "Deploying $NS (base=$BASE, ep=${IS_EP})"
   cd "../$BASE"
-  MODEL="{{MODEL}}" MS_BASE_VALUES="$MS_BASE_VALUES" MS_VALUES="$MS_VALUES" helmfile apply -n "$NS"
+  # If expert_parallel, compute arg indices from base values and inject --enable-expert-parallel
+  EP_SETS=""
+  if [[ "$IS_EP" == "yes" ]]; then
+    EP_SETS=$(python3 -c "
+import yaml
+with open('ms/values.yaml') as f:
+    d = yaml.safe_load(f)
+sets = []
+for role in ('decode', 'prefill'):
+    c = d.get(role, {}).get('containers', [{}])[0]
+    if 'args' in c or d.get(role, {}).get('create', False):
+        idx = len(c.get('args', []))
+        sets.append(f'{role}.containers[0].args[{idx}]=--enable-expert-parallel')
+print(' '.join(f'--set {s}' for s in sets))
+")
+  fi
+  MODEL="{{MODEL}}" MS_VALUES="$MS_VALUES" helmfile apply -n "$NS" $EP_SETS
   kubectl -n "$NS" apply -f httproute.yaml
 
 # Wait for model server pods to be ready
@@ -346,8 +359,7 @@ clean:
 teardown-all:
   #!/usr/bin/env bash
   for CFG in {{CONFIGS}}; do
-    NS=$(just _build_ns ${CFG})
-    just teardown "$NS" || true
+    just teardown "$CFG" || true
   done
 
 # Delete all config namespaces entirely

@@ -14,6 +14,7 @@ environments:
 {{- $rn := (env "RELEASE_NAME_POSTFIX") | default "glm-agg" -}}
 {{- $model := env "MODEL" | default "zai-org/GLM-4.7-FP8" -}}
 {{- $msValues := env "MS_VALUES" -}}
+{{- $msBaseValues := env "MS_BASE_VALUES" | default "ms/values.yaml"}}
 
 repositories:
   - name: llm-d-modelservice
@@ -68,7 +69,7 @@ releases:
       - {{ printf "infra-%s" $rn | quote }}
       - {{ printf "gaie-%s" $rn | quote }}
     values:
-      - ms/values.yaml
+      - {{ $msBaseValues }}
     {{- if $msValues }}
       - {{ $msValues }}
     {{- end }}

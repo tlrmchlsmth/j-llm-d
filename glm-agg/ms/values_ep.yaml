@@ -48,6 +48,7 @@ decode:
       modelCommand: vllmServe
       args:
         - "--disable-uvicorn-access-log"
+        - "--enable-expert-parallel"
         - "--gpu-memory-utilization"
         - "0.95"
       env:
@@ -68,11 +69,13 @@ decode:
       resources:
         limits:
           # amd.com/gpu: 8  # added automatically from parallelism + accelerator
-          memory: 200Gi
+          # maverick EP,TP=8; OOM <512Gi
+          # maverick EP,TP=8; OOM <512Gi
+          memory: 1024Gi
           cpu: "32"
         requests:
           # amd.com/gpu: 8  # added automatically from parallelism + accelerator
-          memory: 200Gi
+          memory: 1024Gi
           cpu: "32"
       mountModelVolume: false
       volumeMounts:

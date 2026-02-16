@@ -1,0 +1,7 @@
+# 8 GPU aggregated: TP=1, DP=8, 1 replica
+# Base: glm-agg (no overrides needed — matches base defaults)
+decode:
+  parallelism:
+    tensor: 1
+    data: 8
+  replicas: 1

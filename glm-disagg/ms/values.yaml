@@ -45,7 +45,7 @@ decode:
       interval: "30s"
   containers:
     - name: "vllm"
-      image: ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.6-debug
+      image: ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.7-debug
       securityContext:
         privileged: true
       modelCommand: vllmServe
@@ -169,7 +169,7 @@ prefill:
       interval: "30s"
   containers:
     - name: "vllm"
-      image: ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.6-debug
+      image: ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.7-debug
       securityContext:
         privileged: true
       modelCommand: vllmServe

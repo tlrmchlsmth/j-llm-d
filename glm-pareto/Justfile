@@ -22,6 +22,9 @@ export TARGET_DURATION := env("TARGET_DURATION", "60")
 export MIN_PROMPTS := env("MIN_PROMPTS", "100")
 export IMAGE := env("IMAGE", "quay.io/tms/poker:0.0.13")
 
+# Extra vLLM args to inject into all model server containers (space-separated)
+export EXTRA_ARGS := env("EXTRA_ARGS", "")
+
 
 default:
   just --list
@@ -216,26 +219,35 @@ deploy CONFIG:
     BASE=glm-agg
   fi
   IS_EP=$(just _is_ep_cfg {{CONFIG}})
-  MS_VALUES="$(cd .. && pwd)/glm-pareto/configs/{{CONFIG}}.yaml"
+  # Build overlay: strip expert_parallel, inject EP flag + EXTRA_ARGS into containers
+  MS_VALUES=$(mktemp)
+  trap "rm -f $MS_VALUES" EXIT
   echo "Deploying $NS (base=$BASE, ep=${IS_EP})"
   cd "../$BASE"
-  # If expert_parallel, compute arg indices from base values and inject --enable-expert-parallel
-  EP_SETS=""
-  if [[ "$IS_EP" == "yes" ]]; then
-    EP_SETS=$(python3 -c "
-import yaml
-with open('ms/values.yaml') as f:
-    d = yaml.safe_load(f)
-sets = []
-for role in ('decode', 'prefill'):
-    c = d.get(role, {}).get('containers', [{}])[0]
-    if 'args' in c or d.get(role, {}).get('create', False):
-        idx = len(c.get('args', []))
-        sets.append(f'{role}.containers[0].args[{idx}]=--enable-expert-parallel')
-print(' '.join(f'--set {s}' for s in sets))
-")
-  fi
-  MODEL="{{MODEL}}" MS_VALUES="$MS_VALUES" helmfile apply -n "$NS" $EP_SETS
+  python3 -c "
+  import yaml, shlex, copy
+  with open('../glm-pareto/configs/{{CONFIG}}.yaml') as f:
+      overlay = yaml.safe_load(f)
+  overlay.pop('expert_parallel', None)
+  extra_args = shlex.split('{{EXTRA_ARGS}}')
+  ep = '$IS_EP' == 'yes'
+  if ep or extra_args:
+      with open('ms/values.yaml') as f:
+          base = yaml.safe_load(f)
+      for role in ('decode', 'prefill'):
+          base_role = base.get(role, {})
+          if base_role.get('containers') or base_role.get('create', False):
+              containers = copy.deepcopy(base_role.get('containers', [{}]))
+              args = list(containers[0].get('args', []))
+              if ep:
+                  args.append('--enable-expert-parallel')
+              args.extend(extra_args)
+              containers[0]['args'] = args
+              overlay.setdefault(role, {})['containers'] = containers
+  with open('$MS_VALUES', 'w') as f:
+      yaml.dump(overlay, f, default_flow_style=False)
+  "
+  MODEL="{{MODEL}}" MS_VALUES="$MS_VALUES" helmfile apply -n "$NS"
   kubectl -n "$NS" apply -f httproute.yaml
 
 # Wait for model server pods to be ready
@@ -324,15 +336,19 @@ collect:
   python3 collect.py $NAMESPACES
 
 # Collect results and upload to Google Sheets
-collect-sheets TITLE="GLM Pareto Sweep":
+collect-sheets TITLE="":
   #!/usr/bin/env bash
   set -euo pipefail
+  TITLE="{{TITLE}}"
+  if [[ -z "$TITLE" ]]; then
+    TITLE="$(basename '{{MODEL}}') Pareto Sweep"
+  fi
   NAMESPACES=""
   for CFG in {{CONFIGS}}; do
     NS=$(just _build_ns ${CFG})
     NAMESPACES="$NAMESPACES -n $NS"
   done
-  python3 collect.py $NAMESPACES --sheets "{{TITLE}}"
+  python3 collect.py $NAMESPACES --sheets "$TITLE"
 
 # --- Status & Cleanup ---
 

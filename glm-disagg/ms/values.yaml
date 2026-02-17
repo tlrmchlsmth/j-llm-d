@@ -58,8 +58,6 @@ decode:
         - "--disable-uvicorn-access-log"
         - "--gpu-memory-utilization"
         - "0.95"
-        - "--block-size"
-        - "128"
       env:
         - name: UCX_TLS
           value: "self,sm,rocm,rc"
@@ -183,8 +181,6 @@ prefill:
         - "--disable-uvicorn-access-log"
         - "--gpu-memory-utilization"
         - "0.95"
-        - "--block-size"
-        - "128"
       env:
         - name: UCX_TLS
           value: "self,sm,rocm,rc"

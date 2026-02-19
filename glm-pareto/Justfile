@@ -6,18 +6,19 @@ export NSP := env("NSP", env("USER", "anon"))
 
 # Configs to sweep (space-separated). Each name maps to configs/<name>.yaml.
 # Prefix determines base template: agg-* → glm-agg, disagg-* → glm-disagg.
-export CONFIGS := env("CONFIGS", "disagg-3p5d-32 disagg-2p2d-24 disagg-2p1d-16 disagg-1p1d-8 agg-tp8 agg-tp4")
+#export CONFIGS := env("CONFIGS", "disagg-3p5d-32 disagg-2p2d-24 disagg-2p1d-16 disagg-1p1d-8 agg-tp8 agg-tp4")
+export CONFIGS := env("CONFIGS", "agg-tp1 agg-tp2 disagg-1p1d disagg-2p1d disagg-3p1d")
 
 # Max GPUs to use concurrently (configs are scheduled to fit within this budget)
 export MAX_GPUS := env("MAX_GPUS", "32")
 
 # Model to deploy
-export MODEL := env("MODEL", "RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic")
+export MODEL := env("MODEL", "openai/gpt-oss-120b")
 
 # Sweep configuration
 export ISL := env("ISL", "4096")
 export OSL := env("OSL", "256")
-export CONCURRENCIES := env("CONCURRENCIES", "4 8 12 16 20 24 28 32 40 48 56 64")
+export CONCURRENCIES := env("CONCURRENCIES", "4 8 12 16 20 24 28 32 40 48 56 64 80 96 112 128")
 export TARGET_DURATION := env("TARGET_DURATION", "60")
 export MIN_PROMPTS := env("MIN_PROMPTS", "100")
 export IMAGE := env("IMAGE", "quay.io/tms/poker:0.0.13")

@@ -1,0 +1,5 @@
+expert_parallel: false
+decode:
+  parallelism:
+    tensor: 1
+  replicas: 1

@@ -1,7 +1,0 @@
-# 8 GPU aggregated: TP=8, 1 replica
-# Base: glm-agg
-expert_parallel: false
-decode:
-  parallelism:
-    tensor: 8
-  replicas: 1

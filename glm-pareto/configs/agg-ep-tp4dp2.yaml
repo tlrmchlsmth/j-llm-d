@@ -1,9 +1,0 @@
-# 8 GPU aggregated: TP=4, DP=2, EP, 1 replica
-# Attention: TP=4, MoE: EP=8
-# Base: glm-agg
-expert_parallel: true
-decode:
-  parallelism:
-    tensor: 4
-    data: 2
-  replicas: 1

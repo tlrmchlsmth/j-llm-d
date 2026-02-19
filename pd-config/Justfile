@@ -5,8 +5,8 @@ NAMESPACE := "tms"
 KN := "kubectl -n " + NAMESPACE
 
 # Benchmark configuration
-#MODEL := "openai/gpt-oss-120b"
-MODEL := "zai-org/GLM-4.7-FP8"
+MODEL := "openai/gpt-oss-120b"
+#MODEL := "zai-org/GLM-4.7-FP8"
 IMAGE := "ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.7-debug"
 GPU_MEM_UTIL := "0.95"
 TARGET_DURATION := "60"
@@ -26,13 +26,13 @@ PREFILL_CONCURRENCIES := "1 4 8 16"
 
 # Decode workload
 DECODE_ISL := "4096"
-DECODE_OSL := "512"
-DECODE_CONCURRENCIES := "4 16 32 64 128 256 512"
+DECODE_OSL := "256"
+DECODE_CONCURRENCIES := "4 8 12 16 20 24 28 32 40 48 56 64"
 
 # Aggregated workload (actual ISL/OSL, no P/D specialization)
 AGG_ISL := "4096"
 AGG_OSL := "512"
-AGG_CONCURRENCIES := "1 4 8 16 32 64"
+AGG_CONCURRENCIES := "4 8 12 16 20 24 28 32 40 48 56 64"
 
 default:
   just --list

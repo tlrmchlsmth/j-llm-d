@@ -7,13 +7,14 @@ export NSP := env("NSP", env("USER", "anon"))
 # Configs to sweep (space-separated). Each name maps to configs/<name>.yaml.
 # Prefix determines base template: agg-* → glm-agg, disagg-* → glm-disagg.
 #export CONFIGS := env("CONFIGS", "disagg-3p5d-32 disagg-2p2d-24 disagg-2p1d-16 disagg-1p1d-8 agg-tp8 agg-tp4")
-export CONFIGS := env("CONFIGS", "agg-tp1 agg-tp2 disagg-1p1d disagg-2p1d disagg-3p1d")
+export CONFIGS := env("CONFIGS", "agg-tp4 disagg-1p1d-8")
 
 # Max GPUs to use concurrently (configs are scheduled to fit within this budget)
 export MAX_GPUS := env("MAX_GPUS", "32")
 
 # Model to deploy
-export MODEL := env("MODEL", "openai/gpt-oss-120b")
+#export MODEL := env("MODEL", "openai/gpt-oss-120b")
+export MODEL := env("MODEL", "RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic")
 
 # Sweep configuration
 export ISL := env("ISL", "4096")
@@ -49,6 +50,28 @@ _is_ep_cfg CONFIG:
   "
 
 # --- Full lifecycle ---
+
+# Deploy a config (nonblocking — use `just wait-ready` to block until pods are up)
+up CONFIG:
+  just setup-ns "{{CONFIG}}"
+  just deploy "{{CONFIG}}"
+
+# Start a poker pod in a config's namespace
+start-poker CONFIG:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NS=$(just _build_ns {{CONFIG}})
+  kubectl -n "$NS" apply -f ../poker/poker.yaml
+  echo "Waiting for poker pod in $NS..."
+  kubectl -n "$NS" wait --for=condition=ready pod/poker --timeout=5m
+  echo "Poker pod ready. Run: just poke {{CONFIG}}"
+
+# Get an interactive shell in a config's poker pod
+poke CONFIG:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NS=$(just _build_ns {{CONFIG}})
+  kubectl -n "$NS" exec -it poker -- bash
 
 # Run a single config end-to-end: deploy → wait → sweep → wait → teardown
 run CONFIG:

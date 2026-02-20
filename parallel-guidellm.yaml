@@ -15,9 +15,16 @@ spec:
         app: poker
     spec:
       restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.present
+                operator: DoesNotExist
       containers:
         - name: poker
-          image: quay.io/tms/poker:0.0.10
+          image: quay.io/tms/poker:0.0.12
           imagePullPolicy: Always
           resources:
             limits:
@@ -37,7 +44,7 @@ spec:
               echo "GUIDELLM__MAX_CONCURRENCY=${GUIDELLM__MAX_CONCURRENCY}" > /guide-llm/${OUTPUT_PATH}/cmd
               echo "GUIDELLM__REQUEST_TIMEOUT=${GUIDELLM__REQUEST_TIMEOUT}" >> /guide-llm/${OUTPUT_PATH}/cmd
               echo "exec guidellm benchmark \
-                --target "http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local" \
+                --target "http://wide-ep-gb200-inference-gateway-istio.vllm.svc.cluster.local" \
                 --rate-type constant \
                 --max-requests "${NUM_REQUESTS}" \
                 --rate "1024" \
@@ -51,7 +58,7 @@ spec:
 
               
               exec guidellm benchmark \
-                --target "http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local" \
+                --target "http://wide-ep-gb200-inference-gateway-istio.vllm.svc.cluster.local" \
                 --rate-type constant \
                 --max-requests "${NUM_REQUESTS}" \
                 --rate "1024" \
@@ -73,11 +80,6 @@ spec:
                   name: hf-secret
                   key: HF_TOKEN
                   optional: true
-          volumeMounts:
-            - name: guide-llm
-              mountPath: /guide-llm
 
       volumes:
         - name: guide-llm
-          persistentVolumeClaim:
-            claimName: guide-llm

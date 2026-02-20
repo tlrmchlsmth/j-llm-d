@@ -7,7 +7,7 @@ GH_TOKEN := "$GH_TOKEN"
 
 KN := "kubectl -n " + NAMESPACE
 
-GB200_DIR := "llm-d/guides/wide-ep-lws/manifests/modelserver/gb200"
+GB200_DIR := "gb200-pure-decode"
 MONITORING_DIR := "monitoring"
 
 default:
@@ -98,8 +98,17 @@ deploy_inferencepool:
 start:
   {{KN}} apply -k {{GB200_DIR}} \
   && {{KN}} apply -f {{GB200_DIR}}/gateway.yaml \
+  && just patch_gateway \
   && just deploy_inferencepool \
   && {{KN}} apply -f {{GB200_DIR}}/httproute.yaml
+
+# Patch Istio-generated gateway deployment: bump resources and avoid GPU nodes
+patch_gateway:
+  {{KN}} patch deployment wide-ep-gb200-inference-gateway-istio --type=strategic -p '{ \
+    "spec": {"template": {"spec": { \
+      "affinity": {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [{"matchExpressions": [{"key": "nvidia.com/gpu.present", "operator": "DoesNotExist"}]}]}}}, \
+      "containers": [{"name": "istio-proxy", "resources": {"requests": {"cpu": "8", "memory": "16Gi"}, "limits": {"cpu": "8", "memory": "16Gi"}}}] \
+    }}}}'
 
 stop:
   helm uninstall wide-ep-gb200-infpool -n {{NAMESPACE}} 2>/dev/null || true \

@@ -1,0 +1,24 @@
+# HTTPRoute for GB200 decode-bench InferencePool
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wide-ep-gb200-route
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: wide-ep-gb200-inference-gateway
+  rules:
+  - backendRefs:
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: wide-ep-gb200-infpool
+      port: 8000
+      weight: 1
+    matches:
+    - path:
+        type: PathPrefix
+        value: /v1/
+    timeouts:
+      backendRequest: "0s"
+      request: "0s"

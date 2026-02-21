@@ -13,15 +13,19 @@ extraScrapeConfigs: |
       - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
         regex: decode
         action: keep
-      - source_labels: [__meta_kubernetes_pod_ip]
-        target_label: __address__
-        replacement: '${1}:8000'
+      - source_labels: [__meta_kubernetes_pod_container_name]
+        regex: vllm
+        action: keep
       - source_labels: [__meta_kubernetes_pod_name]
         target_label: pod
       - source_labels: [__meta_kubernetes_pod_node_name]
         target_label: node
       - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_model]
         target_label: model
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: '820(.)'
+        target_label: rank
+        replacement: '${1}'
     scrape_interval: 15s
     metrics_path: /metrics
 

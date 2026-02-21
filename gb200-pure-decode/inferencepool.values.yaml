@@ -39,12 +39,24 @@ inferenceExtension:
       apiVersion: inference.networking.x-k8s.io/v1alpha1
       kind: EndpointPickerConfig
       plugins:
+      - type: data-parallel-profile-handler
+        parameters:
+          primaryPort: 8000
       - type: random-picker
         parameters:
           maxNumOfEndpoints: 1
+      schedulingProfiles:
+      - name: default
+        plugins:
+        - pluginRef: random-picker
 
 inferencePool:
   name: wide-ep-gb200-infpool
+  targetPorts:
+    - number: 8000
+    - number: 8001
+    - number: 8002
+    - number: 8003
   modelServers:
     matchLabels:
       llm-d.ai/inferenceServing: "true"

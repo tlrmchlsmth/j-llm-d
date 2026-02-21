@@ -31,6 +31,38 @@ spec:
         resourceClaims:
           - name: compute-domain-channel
             resourceClaimTemplateName: llm-d-dev-claim
+        initContainers:
+          - name: routing-proxy
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.4.0-rc.1
+            imagePullPolicy: Always
+            args:
+              - --port=8000
+              - --vllm-port=8200
+              - --data-parallel-size=4
+              - --secure-proxy=false
+              - --connector=nixlv2
+            ports:
+              - containerPort: 8000
+                name: sidecar
+                protocol: TCP
+              - containerPort: 8001
+                name: sidecar-rank1
+                protocol: TCP
+              - containerPort: 8002
+                name: sidecar-rank2
+                protocol: TCP
+              - containerPort: 8003
+                name: sidecar-rank3
+                protocol: TCP
+            env:
+              - name: POD_IP
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+            restartPolicy: Always
+            resources: {}
+            securityContext:
+              allowPrivilegeEscalation: false
         containers:
           - name: vllm
             image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
@@ -48,47 +80,57 @@ spec:
             args:
               - |-
                 #################
-                # RUN vLLM decode-bench worker with DecodeBenchConnector
+                # RUN vLLM decode-bench with external DP load balancing
+                # Launches 4 independent vLLM processes (one per GPU)
+                # Routing sidecar maps port 800X → localhost:820X
                 #################
                 uv pip uninstall pplx-kernels
+                source /opt/vllm/bin/activate
 
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
-                source /opt/vllm/bin/activate
-                exec vllm serve \
-                  nvidia/DeepSeek-R1-NVFP4 \
-                  --port 8000 \
-                  --disable-uvicorn-access-log \
-                  --enable-expert-parallel \
-                  --data-parallel-hybrid-lb \
-                  --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
-                  --data-parallel-size-local $DP_SIZE_LOCAL \
-                  --data-parallel-address ${LWS_LEADER_ADDRESS} \
-                  --data-parallel-rpc-port 5555 \
-                  --data-parallel-start-rank $START_RANK \
-                  --trust-remote-code \
-                  --kv_transfer_config '{"kv_connector":"DecodeBenchConnector",
-                                         "kv_role":"kv_both",
-                                         "kv_connector_extra_config": {
-                                           "fill_mean": 0.015,
-                                           "fill_std": 0.0
-                                         }}' \
-                  --async-scheduling \
-                  --all2all-backend "deepep_low_latency" \
-                  --gpu-memory-utilization 0.85 \
-                  --max-num-batched-tokens $VLLM_MOE_DP_CHUNK_SIZE \
-                  --profiler-config '{"profiler": "torch",
-                                      "torch_profiler_dir": "/traces",
-                                      "ignore_frontend": "true",
-                                      "delay_iterations": 5,
-                                      "max_iterations": 3}' \
-                  --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
-                  --enable-eplb \
-                  --eplb-config '{"window_size":"100",
-                                  "step_interval":"1000",
-                                  "num_redundant_experts":"32",
-                                  "log_balancedness":"True",
-                                  "log_balancedness_interval":"100"}' \
-                  --api-server-count 4
+
+                for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
+                  VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
+                  FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
+                  CUDA_VISIBLE_DEVICES=$R vllm serve \
+                    nvidia/DeepSeek-R1-NVFP4 \
+                    --port $((8200 + R)) \
+                    --disable-uvicorn-access-log \
+                    --enable-expert-parallel \
+                    --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
+                    --data-parallel-rank $((START_RANK + R)) \
+                    --data-parallel-size-local 1 \
+                    --data-parallel-address ${LWS_LEADER_ADDRESS} \
+                    --data-parallel-rpc-port 5555 \
+                    --trust-remote-code \
+                    --kv_transfer_config '{"kv_connector":"DecodeBenchConnector",
+                                           "kv_role":"kv_both",
+                                           "kv_connector_extra_config": {
+                                             "fill_mean": 0.015,
+                                             "fill_std": 0.0
+                                           }}' \
+                    --async-scheduling \
+                    --all2all-backend "deepep_low_latency" \
+                    --gpu-memory-utilization 0.85 \
+                    --max-num-batched-tokens $VLLM_MOE_DP_CHUNK_SIZE \
+                    --profiler-config '{"profiler": "torch",
+                                        "torch_profiler_dir": "/traces",
+                                        "ignore_frontend": "true",
+                                        "delay_iterations": 5,
+                                        "max_iterations": 3}' \
+                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+                    --enable-eplb \
+                    --eplb-config '{"window_size":"100",
+                                    "step_interval":"1000",
+                                    "num_redundant_experts":"32",
+                                    "log_balancedness":"True",
+                                    "log_balancedness_interval":"100"}' &
+                done
+
+                # If any process exits, kill all and restart pod
+                wait -n
+                kill $(jobs -p) 2>/dev/null
+                exit 1
 
             env:
               - name: VLLM_FLASHINFER_MOE_BACKEND
@@ -117,9 +159,9 @@ spec:
 
               # Compile caches - persist across restarts for faster startup
               - name: VLLM_CACHE_ROOT
-                value: /mnt/lustre/tms/vllm_cache
+                value: /mnt/lustre/tms/vllm_cache_extdp
               - name: FLASHINFER_CACHE_DIR
-                value: /mnt/lustre/tms/flashinfer_cache
+                value: /mnt/lustre/tms/flashinfer_cache_extdp
 
               # Data parallelism - GPUs per pod
               - name: DP_SIZE_LOCAL
@@ -161,8 +203,17 @@ spec:
               - name: NVSHMEM_DEBUG
                 value: INFO
             ports:
-              - containerPort: 8000
-                name: http
+              - containerPort: 8200
+                name: vllm-rank0
+                protocol: TCP
+              - containerPort: 8201
+                name: vllm-rank1
+                protocol: TCP
+              - containerPort: 8202
+                name: vllm-rank2
+                protocol: TCP
+              - containerPort: 8203
+                name: vllm-rank3
                 protocol: TCP
             readinessProbe:
               httpGet:

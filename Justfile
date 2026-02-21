@@ -89,39 +89,39 @@ parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_
       < parallel-guidellm.yaml | kubectl apply -f -
 
 # Run inference-perf benchmark (kubernetes-sigs/inference-perf)
-inference-perf RATE='64' DURATION='300' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKERS='4' WORKER_MAX_CONCURRENCY='2048':
+# Uses concurrent load type: each worker maintains WORKER_MAX_CONCURRENCY in-flight requests
+inference-perf NUM_REQUESTS='25000' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKERS='4' WORKER_MAX_CONCURRENCY='2048':
   #!/usr/bin/env bash
   set -euo pipefail
   INPUT_MEAN={{INPUT_LEN}}
   OUTPUT_MEAN={{OUTPUT_LEN}}
-  export RATE={{RATE}}
-  export DURATION={{DURATION}}
+  export NUM_REQUESTS={{NUM_REQUESTS}}
   export NUM_WORKERS={{NUM_WORKERS}}
   export WORKER_MAX_CONCURRENCY={{WORKER_MAX_CONCURRENCY}}
   export INPUT_MEAN INPUT_MIN=$((INPUT_MEAN - INPUT_MEAN/5)) INPUT_MAX=$((INPUT_MEAN + INPUT_MEAN/5)) INPUT_STD=$((INPUT_MEAN/10))
   export OUTPUT_MEAN OUTPUT_MIN=$((OUTPUT_MEAN - OUTPUT_MEAN/5)) OUTPUT_MAX=$((OUTPUT_MEAN + OUTPUT_MEAN/5)) OUTPUT_STD=$((OUTPUT_MEAN/10))
   {{KN}} delete job inference-perf --ignore-not-found=true
   {{KN}} delete configmap inference-perf-config --ignore-not-found=true
-  envsubst '${RATE} ${DURATION} ${NUM_WORKERS} ${WORKER_MAX_CONCURRENCY} ${INPUT_MEAN} ${INPUT_MIN} ${INPUT_MAX} ${INPUT_STD} ${OUTPUT_MEAN} ${OUTPUT_MIN} ${OUTPUT_MAX} ${OUTPUT_STD}' \
+  envsubst '${NUM_REQUESTS} ${NUM_WORKERS} ${WORKER_MAX_CONCURRENCY} ${INPUT_MEAN} ${INPUT_MIN} ${INPUT_MAX} ${INPUT_STD} ${OUTPUT_MEAN} ${OUTPUT_MIN} ${OUTPUT_MAX} ${OUTPUT_STD}' \
     < inference-perf-job.yaml | {{KN}} apply -f -
-  echo "inference-perf job submitted (rate=${RATE} duration=${DURATION}s workers=${NUM_WORKERS} concurrency=${WORKER_MAX_CONCURRENCY} input=${INPUT_MEAN} output=${OUTPUT_MEAN})"
+  echo "inference-perf job submitted (concurrent, workers=${NUM_WORKERS} concurrency=${WORKER_MAX_CONCURRENCY} requests=${NUM_REQUESTS} input=${INPUT_MEAN} output=${OUTPUT_MEAN})"
   echo "  kubectl -n {{NAMESPACE}} logs -f job/inference-perf"
 
 # Get inference-perf results
 inference-perf-logs:
   {{KN}} logs -f job/inference-perf
 
-deploy_inferencepool:
+deploy_inferencepool ROUTING='load-aware':
   helm upgrade --install wide-ep-gb200-infpool \
     oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
     --version v1.2.0 \
-    -f {{GB200_DIR}}/inferencepool.values.yaml \
+    -f {{GB200_DIR}}/inferencepool-{{ROUTING}}.values.yaml \
     -n {{NAMESPACE}}
 
-start:
+start ROUTING='load-aware':
   {{KN}} apply -k {{GB200_DIR}} \
   && {{KN}} apply -f {{GB200_DIR}}/gateway.yaml \
-  && just deploy_inferencepool \
+  && just deploy_inferencepool {{ROUTING}} \
   && {{KN}} apply -f {{GB200_DIR}}/httproute.yaml
 
 stop:

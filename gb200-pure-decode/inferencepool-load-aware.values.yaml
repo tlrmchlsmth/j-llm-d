@@ -1,5 +1,5 @@
 # InferencePool for GB200 pure decode benchmark
-# No P/D plugins — random routing only
+# Load-aware routing via KV cache + queue scoring
 
 inferenceExtension:
   replicas: 1
@@ -42,13 +42,17 @@ inferenceExtension:
       - type: data-parallel-profile-handler
         parameters:
           primaryPort: 8000
-      - type: random-picker
-        parameters:
-          maxNumOfEndpoints: 1
+      - type: queue-scorer
+      - type: kv-cache-utilization-scorer
+      - type: max-score-picker
       schedulingProfiles:
       - name: default
         plugins:
-        - pluginRef: random-picker
+        - pluginRef: queue-scorer
+          weight: 2
+        - pluginRef: kv-cache-utilization-scorer
+          weight: 2
+        - pluginRef: max-score-picker
 
 inferencePool:
   name: wide-ep-gb200-infpool

@@ -1,0 +1,84 @@
+# InferencePool for GB200 pure decode benchmark
+# Random routing (no load-aware scoring)
+
+inferenceExtension:
+  replicas: 1
+  flags:
+    kv-cache-usage-percentage-metric: "vllm:kv_cache_usage_perc"
+    v: 1
+  image:
+    name: llm-d-inference-scheduler
+    hub: ghcr.io/llm-d
+    tag: v0.4.0
+  extProcPort: 9002
+  monitoring:
+    interval: "10s"
+    secret:
+      name: wide-ep-gb200-sa-metrics-reader-secret
+    prometheus:
+      enabled: false
+    gke:
+      enable: false
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: nvidia.com/gpu.present
+            operator: DoesNotExist
+  resources:
+    requests:
+      cpu: "8"
+      memory: 16Gi
+    limits:
+      cpu: "8"
+      memory: 16Gi
+  pluginsConfigFile: "custom-plugins.yaml"
+  pluginsCustomConfig:
+    custom-plugins.yaml: |
+      apiVersion: inference.networking.x-k8s.io/v1alpha1
+      kind: EndpointPickerConfig
+      plugins:
+      - type: data-parallel-profile-handler
+        parameters:
+          primaryPort: 8000
+      - type: random-picker
+        parameters:
+          maxNumOfEndpoints: 1
+      schedulingProfiles:
+      - name: default
+        plugins:
+        - pluginRef: random-picker
+
+inferencePool:
+  name: wide-ep-gb200-infpool
+  targetPorts:
+    - number: 8000
+    - number: 8001
+    - number: 8002
+    - number: 8003
+  modelServers:
+    matchLabels:
+      llm-d.ai/inferenceServing: "true"
+      llm-d.ai/model: DeepSeek-R1-NVFP4
+      llm-d.ai/deployment: decode-bench
+
+provider:
+  name: istio
+  istio:
+    destinationRule:
+      host: wide-ep-gb200-infpool-epp
+      trafficPolicy:
+        tls:
+          mode: SIMPLE
+          insecureSkipVerify: true
+        connectionPool:
+          http:
+            http1MaxPendingRequests: 256000
+            maxRequestsPerConnection: 256000
+            http2MaxRequests: 256000
+            idleTimeout: "900s"
+          tcp:
+            maxConnections: 256000
+            maxConnectionDuration: "1800s"
+            connectTimeout: "900s"

@@ -7,30 +7,6 @@ metadata:
     pd-config/workload: ${WORKLOAD_TYPE}
     pd-config/tp: "${TP}"
 spec:
-  ### Avoid topology affinity error ##
-  podAnnotations:
-    k8s.v1.cni.cncf.io/networks: |
-      [
-        {"name":"sriov-rdma-vf","namespace":"default","interface":"net1"},
-        {"name":"sriov-rdma-vf","namespace":"default","interface":"net2"},
-        {"name":"sriov-rdma-vf","namespace":"default","interface":"net3"},
-        {"name":"sriov-rdma-vf","namespace":"default","interface":"net4"},
-        {"name":"sriov-rdma-vf","namespace":"default","interface":"net5"},
-        {"name":"sriov-rdma-vf","namespace":"default","interface":"net6"},
-        {"name":"sriov-rdma-vf","namespace":"default","interface":"net7"},
-        {"name":"sriov-rdma-vf","namespace":"default","interface":"net8"}
-      ]
-  securityContext:
-  capabilities:
-    add:
-     - IPC_LOCK
-  resources:
-      limits:
-        nvidia.com/sriov-rdma-vf: 8
-      requests:
-        nvidia.com/sriov-rdma-vf: 8
-  ### Avoid topology affinity error ##
-
   backoffLimit: 100
   podFailurePolicy:
     rules:
@@ -45,6 +21,19 @@ spec:
   ttlSecondsAfterFinished: 86400
   template:
     metadata:
+      annotations:
+        k8s.v1.cni.cncf.io/networks: |
+          [
+            {"name":"sriov-rdma-vf","namespace":"default","interface":"net1"},
+            {"name":"sriov-rdma-vf","namespace":"default","interface":"net2"},
+            {"name":"sriov-rdma-vf","namespace":"default","interface":"net3"},
+            {"name":"sriov-rdma-vf","namespace":"default","interface":"net4"},
+            {"name":"sriov-rdma-vf","namespace":"default","interface":"net5"},
+            {"name":"sriov-rdma-vf","namespace":"default","interface":"net6"},
+            {"name":"sriov-rdma-vf","namespace":"default","interface":"net7"},
+            {"name":"sriov-rdma-vf","namespace":"default","interface":"net8"}
+          ]
+
       labels:
         app: pd-config-bench
         pd-config/workload: ${WORKLOAD_TYPE}
@@ -56,6 +45,15 @@ spec:
         - name: bench
           image: ${VLLM_IMAGE}
           imagePullPolicy: Always
+          securityContext:
+            capabilities:
+              add:
+                - IPC_LOCK
+          resources:
+            limits:
+              nvidia.com/sriov-rdma-vf: 8
+            requests:
+              nvidia.com/sriov-rdma-vf: 8
           command: ["/bin/bash", "-c"]
           args:
             - |

@@ -174,12 +174,106 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Total running requests across all vLLM instances",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 500,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max", "lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(vllm:num_requests_running{pod=~\"${deployment}-.*\"})",
+          "instant": false,
+          "legendFormat": "Running Requests",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Total Running Requests",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 17
       },
       "id": 200,
       "panels": [],
@@ -248,7 +342,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 10
+        "y": 18
       },
       "id": 4,
       "options": {
@@ -343,7 +437,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 10
+        "y": 18
       },
       "id": 5,
       "options": {
@@ -437,7 +531,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 18
+        "y": 26
       },
       "id": 9,
       "options": {
@@ -541,7 +635,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 18
+        "y": 26
       },
       "id": 11,
       "options": {
@@ -636,7 +730,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 26
+        "y": 34
       },
       "id": 8,
       "options": {
@@ -755,7 +849,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 26
+        "y": 34
       },
       "id": 14,
       "options": {
@@ -793,7 +887,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 42
       },
       "id": 300,
       "panels": [],
@@ -862,7 +956,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 35
+        "y": 43
       },
       "id": 6,
       "options": {
@@ -957,7 +1051,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 35
+        "y": 43
       },
       "id": 7,
       "options": {
@@ -1051,7 +1145,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 43
+        "y": 51
       },
       "id": 10,
       "options": {
@@ -1155,7 +1249,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 43
+        "y": 51
       },
       "id": 12,
       "options": {
@@ -1250,7 +1344,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 51
+        "y": 59
       },
       "id": 13,
       "options": {
@@ -1312,7 +1406,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 59
+        "y": 67
       },
       "id": 400,
       "panels": [],
@@ -1333,7 +1427,7 @@
         "h": 4,
         "w": 24,
         "x": 0,
-        "y": 60
+        "y": 68
       },
       "id": 405,
       "options": {
@@ -1411,7 +1505,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 64
+        "y": 72
       },
       "id": 401,
       "options": {
@@ -1530,7 +1624,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 64
+        "y": 72
       },
       "id": 402,
       "options": {
@@ -1657,7 +1751,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 72
+        "y": 80
       },
       "id": 403,
       "options": {
@@ -1752,7 +1846,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 72
+        "y": 80
       },
       "id": 404,
       "options": {

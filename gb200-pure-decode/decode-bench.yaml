@@ -110,6 +110,7 @@ spec:
                                              "fill_std": 0.0
                                            }}' \
                     --async-scheduling \
+                    --kv-cache-dtype fp8 \
                     --all2all-backend "deepep_low_latency" \
                     --gpu-memory-utilization 0.85 \
                     --max-num-batched-tokens $VLLM_MOE_DP_CHUNK_SIZE \
@@ -133,15 +134,17 @@ spec:
                 exit 1
 
             env:
-              - name: VLLM_FLASHINFER_MOE_BACKEND
-                value: "masked_gemm"
+              # Use NVFP4 dispatch, and then masked_gemm is required to avoid crashes
               - name: VLLM_DEEPEPLL_NVFP4_DISPATCH
                 value: "1"
+              - name: VLLM_FLASHINFER_MOE_BACKEND
+                value: "masked_gemm"
 
               # Needed for reasonable balancedness when using the DecodeBenchConnector
               - name: VLLM_MOE_ROUTING_SIMULATION_STRATEGY
                 value: "uniform_random"
-    
+   
+              # NVSHEMEM_QP_DEPTH should be >= 2 * VLLM_MOE_DP_CHUNK_SIZE
               - name: NVSHMEM_QP_DEPTH
                 value: "2048"
               - name: VLLM_MOE_DP_CHUNK_SIZE

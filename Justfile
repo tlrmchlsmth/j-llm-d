@@ -89,7 +89,7 @@ parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_
       < parallel-guidellm.yaml | kubectl apply -f -
 
 # Run inference-perf benchmark (kubernetes-sigs/inference-perf)
-inference-perf RATE='4096' DURATION='300' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKERS='4' WORKER_MAX_CONCURRENCY='2048':
+inference-perf RATE='64' DURATION='300' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKERS='4' WORKER_MAX_CONCURRENCY='2048':
   #!/usr/bin/env bash
   set -euo pipefail
   INPUT_MEAN={{INPUT_LEN}}
@@ -180,13 +180,13 @@ start-monitoring:
 stop-monitoring:
   helm uninstall prometheus -n {{NAMESPACE}} --ignore-not-found && helm uninstall grafana -n {{NAMESPACE}} --ignore-not-found && kubectl delete -f {{MONITORING_DIR}}/prometheus-rbac.yaml --ignore-not-found && kubectl delete -f {{MONITORING_DIR}}/grafana-rbac.yaml --ignore-not-found
 
-# Port-forward Grafana to localhost:3000
+# Port-forward Grafana to localhost:3000 (background)
 grafana:
-  kubectl port-forward -n {{NAMESPACE}} svc/grafana 3000:80
+  kubectl port-forward -n {{NAMESPACE}} svc/grafana 3000:80 > /dev/null 2>&1 &
 
-# Port-forward Prometheus to localhost:9090
+# Port-forward Prometheus to localhost:9090 (background)
 prometheus:
-  kubectl port-forward -n {{NAMESPACE}} svc/prometheus-server 9090:80
+  kubectl port-forward -n {{NAMESPACE}} svc/prometheus-server 9090:80 > /dev/null 2>&1 &
 
 # Load llm-d Grafana dashboards
 load-dashboards:

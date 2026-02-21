@@ -1,14 +1,15 @@
 set dotenv-load
 set dotenv-path := "../.env"
 
-NAMESPACE := "tms"
+NAMESPACE := "varun"
 KN := "kubectl -n " + NAMESPACE
 
 # Benchmark configuration
-#MODEL := "openai/gpt-oss-120b"
-MODEL := "zai-org/GLM-4.7-FP8"
-IMAGE := "ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.7-debug"
-GPU_MEM_UTIL := "0.95"
+MODEL := "openai/gpt-oss-120b"
+#MODEL := "zai-org/GLM-4.7-FP8"
+IMAGE := "quay.io/rh-ee-vsundarr/amd-vllm:224023-7.1-torch210"
+#IMAGE := "ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.7-debug"
+GPU_MEM_UTIL := "0.90"
 TARGET_DURATION := "60"
 MIN_PROMPTS := "200"
 HF_CACHE := "/mnt/nvme/models"

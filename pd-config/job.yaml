@@ -7,6 +7,30 @@ metadata:
     pd-config/workload: ${WORKLOAD_TYPE}
     pd-config/tp: "${TP}"
 spec:
+  ### Avoid topology affinity error ##
+  podAnnotations:
+    k8s.v1.cni.cncf.io/networks: |
+      [
+        {"name":"sriov-rdma-vf","namespace":"default","interface":"net1"},
+        {"name":"sriov-rdma-vf","namespace":"default","interface":"net2"},
+        {"name":"sriov-rdma-vf","namespace":"default","interface":"net3"},
+        {"name":"sriov-rdma-vf","namespace":"default","interface":"net4"},
+        {"name":"sriov-rdma-vf","namespace":"default","interface":"net5"},
+        {"name":"sriov-rdma-vf","namespace":"default","interface":"net6"},
+        {"name":"sriov-rdma-vf","namespace":"default","interface":"net7"},
+        {"name":"sriov-rdma-vf","namespace":"default","interface":"net8"}
+      ]
+  securityContext:
+  capabilities:
+    add:
+     - IPC_LOCK
+  resources:
+      limits:
+        nvidia.com/sriov-rdma-vf: 8
+      requests:
+        nvidia.com/sriov-rdma-vf: 8
+  ### Avoid topology affinity error ##
+
   backoffLimit: 100
   podFailurePolicy:
     rules:
@@ -41,6 +65,13 @@ spec:
               echo "CONFIG: model=${MODEL} tp=${TP} dp=${DP} gpu_count=${GPU_COUNT} ep=${ENABLE_EP} workload=${WORKLOAD_TYPE} isl=${ISL} osl=${OSL}"
               echo "TARGET_DURATION: ${TARGET_DURATION}s  MIN_PROMPTS: ${MIN_PROMPTS}"
               echo "CONCURRENCY_LEVELS: ${CONCURRENCY_LEVELS}"
+
+              ## RoCM fix for https://github.com/ROCm/hip/issues/3876 
+              # we hit this only when both TP and DP + EP are enabled
+              if [ "${ENABLE_EP}" = "true" ] && [ "${TP}" -gt 1 ]  && [ "${DP}" -gt 1 ]; then
+                echo "export TORCH_NCCL_BLOCKING_WAIT=true"
+                export TORCH_NCCL_BLOCKING_WAIT=true
+              fi
 
               # Configure decode specialization: DecodeBenchConnector fills KV cache
               # with dummy values so decode runs against a realistic ISL without
@@ -171,6 +202,8 @@ spec:
           env:
             - name: VLLM_MOE_ROUTING_SIMULATION_STRATEGY
               value: "uniform_random"
+            #- name: VLLM_ROCM_USE_AITER
+            #  value: "1"
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -179,8 +212,6 @@ spec:
                   optional: true
             - name: VLLM_LOGGING_LEVEL
               value: INFO
-#            - name: VLLM_ROCM_USE_AITER
-#              value: "1"
           volumeMounts:
             - name: shm
               mountPath: /dev/shm

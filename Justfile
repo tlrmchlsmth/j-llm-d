@@ -88,6 +88,29 @@ parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_
     envsubst '${N_WORKERS} ${MAX_CONCURRENCY} ${NUM_REQUESTS} ${INPUT_LEN} ${OUTPUT_LEN} ${OUTPUT_PATH}' \
       < parallel-guidellm.yaml | kubectl apply -f -
 
+# Run inference-perf benchmark (kubernetes-sigs/inference-perf)
+inference-perf RATE='4096' DURATION='300' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKERS='4' WORKER_MAX_CONCURRENCY='2048':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  INPUT_MEAN={{INPUT_LEN}}
+  OUTPUT_MEAN={{OUTPUT_LEN}}
+  export RATE={{RATE}}
+  export DURATION={{DURATION}}
+  export NUM_WORKERS={{NUM_WORKERS}}
+  export WORKER_MAX_CONCURRENCY={{WORKER_MAX_CONCURRENCY}}
+  export INPUT_MEAN INPUT_MIN=$((INPUT_MEAN - INPUT_MEAN/5)) INPUT_MAX=$((INPUT_MEAN + INPUT_MEAN/5)) INPUT_STD=$((INPUT_MEAN/10))
+  export OUTPUT_MEAN OUTPUT_MIN=$((OUTPUT_MEAN - OUTPUT_MEAN/5)) OUTPUT_MAX=$((OUTPUT_MEAN + OUTPUT_MEAN/5)) OUTPUT_STD=$((OUTPUT_MEAN/10))
+  {{KN}} delete job inference-perf --ignore-not-found=true
+  {{KN}} delete configmap inference-perf-config --ignore-not-found=true
+  envsubst '${RATE} ${DURATION} ${NUM_WORKERS} ${WORKER_MAX_CONCURRENCY} ${INPUT_MEAN} ${INPUT_MIN} ${INPUT_MAX} ${INPUT_STD} ${OUTPUT_MEAN} ${OUTPUT_MIN} ${OUTPUT_MAX} ${OUTPUT_STD}' \
+    < inference-perf-job.yaml | {{KN}} apply -f -
+  echo "inference-perf job submitted (rate=${RATE} duration=${DURATION}s workers=${NUM_WORKERS} concurrency=${WORKER_MAX_CONCURRENCY} input=${INPUT_MEAN} output=${OUTPUT_MEAN})"
+  echo "  kubectl -n {{NAMESPACE}} logs -f job/inference-perf"
+
+# Get inference-perf results
+inference-perf-logs:
+  {{KN}} logs -f job/inference-perf
+
 deploy_inferencepool:
   helm upgrade --install wide-ep-gb200-infpool \
     oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
@@ -98,24 +121,17 @@ deploy_inferencepool:
 start:
   {{KN}} apply -k {{GB200_DIR}} \
   && {{KN}} apply -f {{GB200_DIR}}/gateway.yaml \
-  && just patch_gateway \
   && just deploy_inferencepool \
   && {{KN}} apply -f {{GB200_DIR}}/httproute.yaml
-
-# Patch Istio-generated gateway deployment: bump resources and avoid GPU nodes
-patch_gateway:
-  {{KN}} patch deployment wide-ep-gb200-inference-gateway-istio --type=strategic -p '{ \
-    "spec": {"template": {"spec": { \
-      "affinity": {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [{"matchExpressions": [{"key": "nvidia.com/gpu.present", "operator": "DoesNotExist"}]}]}}}, \
-      "containers": [{"name": "istio-proxy", "resources": {"requests": {"cpu": "8", "memory": "16Gi"}, "limits": {"cpu": "8", "memory": "16Gi"}}}] \
-    }}}}'
 
 stop:
   helm uninstall wide-ep-gb200-infpool -n {{NAMESPACE}} 2>/dev/null || true \
   && {{KN}} delete -f {{GB200_DIR}}/httproute.yaml --ignore-not-found=true \
   && {{KN}} delete -f {{GB200_DIR}}/gateway.yaml --ignore-not-found=true \
   && {{KN}} delete -k {{GB200_DIR}} --ignore-not-found=true \
-  && {{KN}} delete job parallel-guidellm --ignore-not-found=true
+  && {{KN}} delete job parallel-guidellm --ignore-not-found=true \
+  && {{KN}} delete job inference-perf --ignore-not-found=true \
+  && {{KN}} delete configmap inference-perf-config --ignore-not-found=true
 
 restart:
   just stop && just start
@@ -176,12 +192,14 @@ prometheus:
 load-dashboards:
   #!/usr/bin/env bash
   set -euo pipefail
-  DASHBOARD_DIR="llm-d/docs/monitoring/grafana/dashboards"
-  for f in "$DASHBOARD_DIR"/*.json; do
-    NAME=$(basename "$f" .json)
-    echo "Creating ConfigMap for dashboard: $NAME"
-    {{KN}} create configmap "grafana-dashboard-$NAME" --from-file="$NAME.json=$f" --dry-run=client -o yaml | \
-      {{KN}} label -f - --local -o yaml grafana_dashboard=1 | \
-      {{KN}} apply -f -
+  for DASHBOARD_DIR in "llm-d/docs/monitoring/grafana/dashboards" "{{MONITORING_DIR}}"; do
+    for f in "$DASHBOARD_DIR"/*.json; do
+      [ -f "$f" ] || continue
+      NAME=$(basename "$f" .json)
+      echo "Creating ConfigMap for dashboard: $NAME"
+      {{KN}} create configmap "grafana-dashboard-$NAME" --from-file="$NAME.json=$f" --dry-run=client -o yaml | \
+        {{KN}} label -f - --local -o yaml grafana_dashboard=1 | \
+        {{KN}} apply -f -
+    done
   done
   echo "Dashboards loaded. Grafana will auto-discover them within 30 seconds."

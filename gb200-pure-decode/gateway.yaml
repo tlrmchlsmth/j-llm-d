@@ -1,3 +1,33 @@
+# ConfigMap for customizing the Istio-generated gateway deployment.
+# Istio reconciles the deployment from the Gateway resource, so direct
+# kubectl patches get overwritten. parametersRef is the stable way to
+# inject resource limits, affinity, etc.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wide-ep-gb200-gateway-options
+data:
+  deployment: |
+    spec:
+      template:
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: nvidia.com/gpu.present
+                    operator: DoesNotExist
+          containers:
+          - name: istio-proxy
+            resources:
+              requests:
+                cpu: "8"
+                memory: 16Gi
+              limits:
+                cpu: "8"
+                memory: 16Gi
+---
 # Gateway for GB200 decode-bench deployment
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -6,6 +36,11 @@ metadata:
   labels:
     istio.io/enable-inference-extproc: "true"
 spec:
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: wide-ep-gb200-gateway-options
   gatewayClassName: istio
   listeners:
   - name: default

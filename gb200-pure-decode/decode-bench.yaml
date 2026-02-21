@@ -33,7 +33,7 @@ spec:
             resourceClaimTemplateName: llm-d-dev-claim
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:f863994-07e22e2-00a944e
+            image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
             securityContext:
               capabilities:
                 add:
@@ -74,11 +74,11 @@ spec:
                                          }}' \
                   --async-scheduling \
                   --all2all-backend "deepep_low_latency" \
-                  --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
                   --gpu-memory-utilization 0.85 \
                   --max-num-batched-tokens $VLLM_MOE_DP_CHUNK_SIZE \
                   --profiler-config '{"profiler": "torch",
                                       "torch_profiler_dir": "/traces",
+                                      "ignore_frontend": "true",
                                       "delay_iterations": 5,
                                       "max_iterations": 3}' \
                   --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
@@ -88,9 +88,20 @@ spec:
                                   "num_redundant_experts":"32",
                                   "log_balancedness":"True",
                                   "log_balancedness_interval":"100"}' \
-                  --api-server-count 1
+                  --api-server-count 4
 
             env:
+              - name: VLLM_FLASHINFER_MOE_BACKEND
+                value: "masked_gemm"
+              - name: VLLM_DEEPEPLL_NVFP4_DISPATCH
+                value: "1"
+
+              # Needed for reasonable balancedness when using the DecodeBenchConnector
+              - name: VLLM_MOE_ROUTING_SIMULATION_STRATEGY
+                value: "uniform_random"
+    
+              - name: NVSHMEM_QP_DEPTH
+                value: "2048"
               - name: VLLM_MOE_DP_CHUNK_SIZE
                 value: "768"
 
@@ -114,8 +125,6 @@ spec:
               - name: DP_SIZE_LOCAL
                 value: "4"
 
-              - name: VLLM_DEEPEP_LOW_LATENCY_ALLOW_NVLINK
-                value: "1"
               - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"
 
@@ -128,6 +137,12 @@ spec:
                 value: "1"
               - name: NVIDIA_GDRCOPY
                 value: enabled
+
+              # Use fabric handles for NVSHMEM symmetric heap (MNNVL)
+              # Without this, NVSHMEM defaults to FILE_DESCRIPTOR (IPC handles)
+              # and falls back to ibrc transport instead of NVLink fabric
+              - name: NVSHMEM_CUMEM_HANDLE_TYPE
+                value: FABRIC
 
               # Override container default that disables VMM
               # VMM is required for fabric memory / MNNVL cross-pod communication
@@ -142,7 +157,7 @@ spec:
               - name: VLLM_LOGGING_LEVEL
                 value: INFO
               - name: NCCL_DEBUG
-                value: INFO
+                value: "TRACE"
               - name: NVSHMEM_DEBUG
                 value: INFO
             ports:

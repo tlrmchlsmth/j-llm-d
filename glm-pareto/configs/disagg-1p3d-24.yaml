@@ -1,0 +1,12 @@
+# 32 GPU disaggregated: 3 prefill (TP=4) + 5 decode (TP=4)
+# Base: glm-disagg
+# Couldn't run due to ports
+decode:
+  parallelism:
+    tensor: 4
+  replicas: 3
+
+prefill:
+  parallelism:
+    tensor: 1
+  replicas: 12

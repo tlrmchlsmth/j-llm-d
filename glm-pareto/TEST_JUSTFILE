@@ -1,12 +1,9 @@
 set dotenv-load
 set dotenv-path := "../.env"
 
-# Avoid users overlapping
-export NSP := env("NSP", env("USER", "anon"))
-
 # Configs to sweep (space-separated). Each name maps to configs/<name>.yaml.
 # Prefix determines base template: agg-* → glm-agg, disagg-* → glm-disagg.
-export CONFIGS := env("CONFIGS", "disagg-2p3d-32")
+export CONFIGS := env("CONFIGS", "disagg-3p5d-32 disagg-2p2d-24 disagg-2p1d-16 disagg-1p1d-8 agg-tp8 agg-tp4")
 
 # Max GPUs to use concurrently (configs are scheduled to fit within this budget)
 export MAX_GPUS := env("MAX_GPUS", "32")
@@ -22,30 +19,8 @@ export TARGET_DURATION := env("TARGET_DURATION", "60")
 export MIN_PROMPTS := env("MIN_PROMPTS", "100")
 export IMAGE := env("IMAGE", "quay.io/tms/poker:0.0.13")
 
-# Extra vLLM args to inject into all model server containers (space-separated)
-export EXTRA_ARGS := env("EXTRA_ARGS", "")
-
-
 default:
   just --list
-
-# --- Utils ---
-
-# Prepends NSP to a config; no-op if already prefixed.
-_build_ns CONFIG:
-  @case "{{CONFIG}}" in \
-      {{NSP}}-*) echo "{{CONFIG}}" ;; \
-      *) echo "{{NSP}}-{{CONFIG}}" ;; \
-  esac
-
-_is_ep_cfg CONFIG:
-  #!/usr/bin/env bash
-  python3 -c "
-  import yaml
-  with open('configs/{{CONFIG}}.yaml') as f:
-      d = yaml.safe_load(f)
-  print('yes' if d.get('expert_parallel', False) else 'no')
-  "
 
 # --- Full lifecycle ---
 
@@ -73,9 +48,8 @@ gpu-count CONFIG:
   for role in ('decode', 'prefill'):
       if role in d:
           tp = d[role].get('parallelism', {}).get('tensor', 1)
-          dp = d[role].get('parallelism', {}).get('data', 1)
           replicas = d[role].get('replicas', 1)
-          gpus += tp * dp * replicas
+          gpus += tp * replicas
   print(gpus)
   "
 
@@ -167,7 +141,7 @@ run-all:
 setup-ns CONFIG:
   #!/usr/bin/env bash
   set -euo pipefail
-  NS=$(just _build_ns {{CONFIG}})
+  NS="{{CONFIG}}"
   echo "Setting up namespace: $NS"
   kubectl create ns "$NS" --dry-run=client -o yaml | kubectl apply -f -
   # HF secret
@@ -212,47 +186,24 @@ setup-ns CONFIG:
 deploy CONFIG:
   #!/usr/bin/env bash
   set -euo pipefail
-  NS=$(just _build_ns {{CONFIG}})
+  NS="{{CONFIG}}"
   if [[ "{{CONFIG}}" == disagg-* ]]; then
     BASE=glm-disagg
   else
     BASE=glm-agg
   fi
-  IS_EP=$(just _is_ep_cfg {{CONFIG}})
-  MS_VALUES=$(mktemp)
-  trap "rm -f $MS_VALUES" EXIT
-  echo "Deploying $NS (base=$BASE, ep=${IS_EP})"
-  cd "../$BASE"
-  python3 -c "
-  import yaml, shlex, copy
-  with open('../glm-pareto/configs/{{CONFIG}}.yaml') as f:
-      overlay = yaml.safe_load(f)
-  overlay.pop('expert_parallel', None)
-  extra_args = shlex.split('{{EXTRA_ARGS}}')
-  ep = '$IS_EP' == 'yes'
-  if ep or extra_args:
-      with open('ms/values.yaml') as f:
-          base = yaml.safe_load(f)
-      for role in ('decode', 'prefill'):
-          base_role = base.get(role, {})
-          if base_role.get('containers') or base_role.get('create', False):
-              containers = copy.deepcopy(base_role.get('containers', [{}]))
-              args = list(containers[0].get('args', []))
-              if ep:
-                  args.append('--enable-expert-parallel')
-              args.extend(extra_args)
-              containers[0]['args'] = args
-              overlay.setdefault(role, {})['containers'] = containers
-  with open('$MS_VALUES', 'w') as f:
-      yaml.dump(overlay, f, default_flow_style=False)
-  "
-  DECODE_TP=$(python3 -c "import yaml; d=yaml.safe_load(open('../glm-pareto/configs/{{CONFIG}}.yaml')); print(d.get('decode',{}).get('parallelism',{}).get('tensor',8))")
-  PREFILL_TP=$(python3 -c "import yaml; d=yaml.safe_load(open('../glm-pareto/configs/{{CONFIG}}.yaml')); print(d.get('prefill',{}).get('parallelism',{}).get('tensor',4))")
-  if [[ "{{CONFIG}}" == disagg-* ]]; then
-    DECODE_TP="$DECODE_TP" PREFILL_TP="$PREFILL_TP" python3 scripts/gen-nic-values.py
+  MS_VALUES="$(cd .. && pwd)/glm-pareto/configs/{{CONFIG}}.yaml"
+  echo "Deploying $NS (base=$BASE)"
+  # Extract TP from config for NIC count (disagg: nvidia.com/sriov-rdma-vf matches TP)
+  if [[ "$BASE" == glm-disagg ]]; then
+    CONFIG_FILE="configs/{{CONFIG}}.yaml"
+    DECODE_TP=$(python3 -c "import yaml; d=yaml.safe_load(open('$CONFIG_FILE')); print(d.get('decode',{}).get('parallelism',{}).get('tensor',8))")
+    PREFILL_TP=$(python3 -c "import yaml; d=yaml.safe_load(open('$CONFIG_FILE')); print(d.get('prefill',{}).get('parallelism',{}).get('tensor',4))")
+    echo "  NIC count: decode=$DECODE_TP prefill=$PREFILL_TP (matches TP)"
   fi
-  MODEL="{{MODEL}}" MS_VALUES="$MS_VALUES" \
-    DECODE_TP="$DECODE_TP" PREFILL_TP="$PREFILL_TP" \
+  cd "../$BASE"
+  env MODEL="{{MODEL}}" MS_VALUES="$MS_VALUES" \
+    DECODE_TP="${DECODE_TP:-8}" PREFILL_TP="${PREFILL_TP:-4}" \
     helmfile apply -n "$NS"
   kubectl -n "$NS" apply -f httproute.yaml
 
@@ -260,7 +211,7 @@ deploy CONFIG:
 wait-ready CONFIG:
   #!/usr/bin/env bash
   set -euo pipefail
-  NS=$(just _build_ns {{CONFIG}})
+  NS="{{CONFIG}}"
   if [[ "{{CONFIG}}" == disagg-* ]]; then
     GUIDE=glm-disagg
   else
@@ -280,13 +231,13 @@ wait-ready CONFIG:
 teardown CONFIG:
   #!/usr/bin/env bash
   set -euo pipefail
-  NS=$(just _build_ns {{CONFIG}})
+  NS="{{CONFIG}}"
   if [[ "{{CONFIG}}" == disagg-* ]]; then
     BASE=glm-disagg
   else
     BASE=glm-agg
   fi
-  echo "Tearing down model servers in $NS {{CONFIG}}"
+  echo "Tearing down model servers in $NS"
   cd "../$BASE"
   helmfile destroy -n "$NS" || true
   kubectl -n "$NS" delete -f httproute.yaml --ignore-not-found=true 2>/dev/null || true
@@ -297,7 +248,7 @@ teardown CONFIG:
 sweep CONFIG:
   #!/usr/bin/env bash
   set -euo pipefail
-  NS=$(just _build_ns {{CONFIG}})
+  NS="{{CONFIG}}"
   if [[ "{{CONFIG}}" == disagg-* ]]; then
     TARGET=glm-disagg
   else
@@ -322,7 +273,7 @@ sweep CONFIG:
 wait-sweep CONFIG:
   #!/usr/bin/env bash
   set -euo pipefail
-  NS=$(just _build_ns {{CONFIG}})
+  NS="{{CONFIG}}"
   echo "Waiting for sweep job in $NS..."
   kubectl -n "$NS" wait --for=condition=complete --timeout=3h \
     "job/glm-pareto-{{CONFIG}}" || \
@@ -336,25 +287,19 @@ collect:
   set -euo pipefail
   NAMESPACES=""
   for CFG in {{CONFIGS}}; do
-    NS=$(just _build_ns ${CFG})
-    NAMESPACES="$NAMESPACES -n $NS"
+    NAMESPACES="$NAMESPACES -n $CFG"
   done
   python3 collect.py $NAMESPACES
 
 # Collect results and upload to Google Sheets
-collect-sheets TITLE="":
+collect-sheets TITLE="GLM Pareto Sweep":
   #!/usr/bin/env bash
   set -euo pipefail
-  TITLE="{{TITLE}}"
-  if [[ -z "$TITLE" ]]; then
-    TITLE="$(basename '{{MODEL}}') Pareto Sweep"
-  fi
   NAMESPACES=""
   for CFG in {{CONFIGS}}; do
-    NS=$(just _build_ns ${CFG})
-    NAMESPACES="$NAMESPACES -n $NS"
+    NAMESPACES="$NAMESPACES -n $CFG"
   done
-  python3 collect.py $NAMESPACES --sheets "$TITLE"
+  python3 collect.py $NAMESPACES --sheets "{{TITLE}}"
 
 # --- Status & Cleanup ---
 
@@ -362,10 +307,9 @@ collect-sheets TITLE="":
 status:
   #!/usr/bin/env bash
   for CFG in {{CONFIGS}}; do
-    NS=$(just _build_ns ${CFG})
-    echo "=== $NS ==="
-    kubectl -n "$NS" get jobs -l app=glm-pareto 2>/dev/null || echo "  (namespace not found)"
-    kubectl -n "$NS" get pods -l llm-d.ai/inference-serving=true --no-headers 2>/dev/null || true
+    echo "=== $CFG ==="
+    kubectl -n "$CFG" get jobs -l app=glm-pareto 2>/dev/null || echo "  (namespace not found)"
+    kubectl -n "$CFG" get pods -l llm-d.ai/inference-serving=true --no-headers 2>/dev/null || true
     echo ""
   done
 
@@ -373,8 +317,7 @@ status:
 clean:
   #!/usr/bin/env bash
   for CFG in {{CONFIGS}}; do
-    NS=$(just _build_ns ${CFG})
-    kubectl -n "$NS" delete jobs -l app=glm-pareto --ignore-not-found=true 2>/dev/null || true
+    kubectl -n "$CFG" delete jobs -l app=glm-pareto --ignore-not-found=true 2>/dev/null || true
   done
 
 # Tear down model servers in all namespaces
@@ -388,7 +331,64 @@ teardown-all:
 destroy-all:
   #!/usr/bin/env bash
   for CFG in {{CONFIGS}}; do
-    NS=$(just _build_ns ${CFG})
-    echo "Deleting namespace $NS"
-    kubectl delete ns "$NS" --ignore-not-found=true 2>/dev/null || true
+    echo "Deleting namespace $CFG"
+    kubectl delete ns "$CFG" --ignore-not-found=true 2>/dev/null || true
   done
+
+# --- GPU–NIC Topology ---
+
+# Dump GPU <-> NIC pairing for a running config. Requires model server pods to be up.
+# From inside a pod: shows PCI topology and (when available) nvidia-smi topo or rocm-smi.
+# GPU–NIC pairing matters for GPUDirect RDMA: devices sharing the same PCIe root complex
+# (PIX/PXB in nvidia-smi topo) achieve best throughput.
+gpu-nic-topo CONFIG="disagg-1p1d-8":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  NS="{{CONFIG}}"
+  if [[ "{{CONFIG}}" == disagg-* ]]; then
+    GUIDE=glm-disagg
+  else
+    GUIDE=glm-agg
+  fi
+  POD=$(kubectl -n "$NS" get pods -l "llm-d.ai/guide=$GUIDE,llm-d.ai/inference-serving=true" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [ -z "$POD" ]; then
+    echo "No model server pod in namespace $NS. Deploy first with: just deploy {{CONFIG}}"
+    echo ""
+    echo "For node-level topology without a pod, use:"
+    echo "  kubectl debug node/<NODE> -it --image=ubuntu:22.04 -- chroot /host lspci -tv"
+    echo "  kubectl debug node/<NODE> -it --image=nvidia/cuda:12-base -- chroot /host nvidia-smi topo -m"
+    exit 1
+  fi
+  echo "=== GPU–NIC topology from pod $POD (node: $(kubectl -n "$NS" get pod "$POD" -o jsonpath='{.spec.nodeName}')) ==="
+  echo ""
+  echo "--- PCI tree (GPU + NIC placement) ---"
+  kubectl -n "$NS" exec "$POD" -c vllm -- lspci -tv 2>/dev/null || kubectl -n "$NS" exec "$POD" -c vllm -- ls -la /sys/bus/pci/devices/ 2>/dev/null || echo "  (lspci not in image, try node debug)"
+  echo ""
+  echo "--- NVIDIA GPU topology (if NVIDIA GPUs) ---"
+  kubectl -n "$NS" exec "$POD" -c vllm -- nvidia-smi topo -m 2>/dev/null || echo "  (nvidia-smi not in image — AMD/other GPU)"
+  echo ""
+  echo "--- AMD ROCm topology (if AMD GPUs) ---"
+  kubectl -n "$NS" exec "$POD" -c vllm -- rocm-smi --showtoponuma 2>/dev/null || echo "  (rocm-smi not available)"
+  echo ""
+  echo "--- Assigned SR-IOV VFs (PCIDEVICE env) ---"
+  kubectl -n "$NS" exec "$POD" -c vllm -- printenv PCIDEVICE_NVIDIA_COM_SRIOV_RDMA_VF 2>/dev/null || kubectl -n "$NS" exec "$POD" -c vllm -- printenv | grep -i pcidevice 2>/dev/null || echo "  (no SR-IOV VF assigned to this pod)"
+  echo ""
+  echo "Interpretation: PIX = same PCI switch (best), PXB = multi-bridge, NODE = same NUMA, SYS = cross-NUMA."
+
+# Node-level topology (no model pods required). Run from a debug pod on the node.
+# Example: just gpu-nic-topo-node 10.0.76.204
+gpu-nic-topo-node NODE:
+  #!/usr/bin/env bash
+  echo "Run these on node {{NODE}} (e.g. via 'kubectl debug node/{{NODE}} -it --image=... -- bash'):"
+  echo ""
+  echo "  # PCI tree"
+  echo "  lspci -tv"
+  echo ""
+  echo "  # NVIDIA GPU+NIC topology (PIX=best pairing)"
+  echo "  nvidia-smi topo -m"
+  echo ""
+  echo "  # Full hwloc topology (install: apt-get -y install hwloc && lstopo --of console)"
+  echo "  lstopo --of console"
+  echo ""
+  echo "One-liner debug pod:"
+  echo "  kubectl debug node/{{NODE}} -it --image=ubuntu:22.04 --target=node -- chroot /host bash -c 'lspci -tv; echo; nvidia-smi topo -m 2>/dev/null || true'"

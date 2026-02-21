@@ -1,0 +1,11 @@
+# 32 GPU disaggregated: 3 prefill (TP=4) + 5 decode (TP=4)
+# Base: glm-disagg
+decode:
+  parallelism:
+    tensor: 8
+  replicas: 3
+
+prefill:
+  parallelism:
+    tensor: 4
+  replicas: 2

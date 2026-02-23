@@ -366,7 +366,7 @@
           "editorMode": "code",
           "expr": "vllm:num_requests_running{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}",
           "instant": false,
-          "legendFormat": "{{pod}}",
+          "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
           "refId": "A"
         }
@@ -461,7 +461,7 @@
           "editorMode": "code",
           "expr": "rate(vllm:generation_tokens_total{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[1m])",
           "instant": false,
-          "legendFormat": "{{pod}}",
+          "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
           "refId": "A"
         }
@@ -555,7 +555,7 @@
           "editorMode": "code",
           "expr": "vllm:num_requests_waiting{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}",
           "instant": false,
-          "legendFormat": "{{pod}}",
+          "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
           "refId": "A"
         }
@@ -659,7 +659,7 @@
           "editorMode": "code",
           "expr": "vllm:kv_cache_usage_perc{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}",
           "instant": false,
-          "legendFormat": "{{pod}}",
+          "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
           "refId": "A"
         }
@@ -980,7 +980,7 @@
           "editorMode": "code",
           "expr": "vllm:num_requests_running{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}",
           "instant": false,
-          "legendFormat": "{{pod}}",
+          "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
           "refId": "A"
         }
@@ -1075,7 +1075,7 @@
           "editorMode": "code",
           "expr": "rate(vllm:generation_tokens_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[1m])",
           "instant": false,
-          "legendFormat": "{{pod}}",
+          "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
           "refId": "A"
         }
@@ -1169,7 +1169,7 @@
           "editorMode": "code",
           "expr": "vllm:num_requests_waiting{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}",
           "instant": false,
-          "legendFormat": "{{pod}}",
+          "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
           "refId": "A"
         }
@@ -1273,7 +1273,7 @@
           "editorMode": "code",
           "expr": "vllm:kv_cache_usage_perc{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}",
           "instant": false,
-          "legendFormat": "{{pod}}",
+          "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
           "refId": "A"
         }
@@ -1775,7 +1775,7 @@
           "editorMode": "code",
           "expr": "(sum(rate(vllm:time_to_first_token_seconds_sum{pod=~\"${deployment}-.*\"}[1m])) by (pod) / sum(rate(vllm:time_to_first_token_seconds_count{pod=~\"${deployment}-.*\"}[1m])) by (pod)) - (sum(rate(vllm:request_queue_time_seconds_sum{pod=~\"${deployment}-.*\"}[1m])) by (pod) / sum(rate(vllm:request_queue_time_seconds_count{pod=~\"${deployment}-.*\"}[1m])) by (pod)) - (sum(rate(vllm:request_prefill_time_seconds_sum{pod=~\"${deployment}-.*\"}[1m])) by (pod) / sum(rate(vllm:request_prefill_time_seconds_count{pod=~\"${deployment}-.*\"}[1m])) by (pod))",
           "instant": false,
-          "legendFormat": "{{pod}}",
+          "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
           "refId": "A"
         }

@@ -10,7 +10,7 @@ metadata:
 spec:
   replicas: 1
   leaderWorkerTemplate:
-    size: 8
+    size: 4
     workerTemplate:
       metadata:
         labels:
@@ -32,41 +32,74 @@ spec:
           - name: compute-domain-channel
             resourceClaimTemplateName: llm-d-dev-claim
         initContainers:
-          - name: routing-proxy
-            image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.4.0-rc.1
+          - name: routing-proxy-rank0
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.5.0
             imagePullPolicy: Always
             args:
               - --port=8000
               - --vllm-port=8200
-              - --data-parallel-size=4
               - --secure-proxy=false
               - --connector=nixlv2
             ports:
               - containerPort: 8000
-                name: sidecar
+                name: proxy-rank0
                 protocol: TCP
+            restartPolicy: Always
+            resources: {}
+            securityContext:
+              allowPrivilegeEscalation: false
+          - name: routing-proxy-rank1
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.5.0
+            imagePullPolicy: Always
+            args:
+              - --port=8001
+              - --vllm-port=8201
+              - --secure-proxy=false
+              - --connector=nixlv2
+            ports:
               - containerPort: 8001
-                name: sidecar-rank1
+                name: proxy-rank1
                 protocol: TCP
+            restartPolicy: Always
+            resources: {}
+            securityContext:
+              allowPrivilegeEscalation: false
+          - name: routing-proxy-rank2
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.5.0
+            imagePullPolicy: Always
+            args:
+              - --port=8002
+              - --vllm-port=8202
+              - --secure-proxy=false
+              - --connector=nixlv2
+            ports:
               - containerPort: 8002
-                name: sidecar-rank2
+                name: proxy-rank2
                 protocol: TCP
+            restartPolicy: Always
+            resources: {}
+            securityContext:
+              allowPrivilegeEscalation: false
+          - name: routing-proxy-rank3
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.5.0
+            imagePullPolicy: Always
+            args:
+              - --port=8003
+              - --vllm-port=8203
+              - --secure-proxy=false
+              - --connector=nixlv2
+            ports:
               - containerPort: 8003
-                name: sidecar-rank3
+                name: proxy-rank3
                 protocol: TCP
-            env:
-              - name: POD_IP
-                valueFrom:
-                  fieldRef:
-                    fieldPath: status.podIP
             restartPolicy: Always
             resources: {}
             securityContext:
               allowPrivilegeEscalation: false
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e << works
-            # image: quay.io/tms/llm-d-cuda-dev:886dd05 << Flashinfer broken
+            image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
+            #image: quay.io/tms/llm-d-cuda-dev:gb200_working-89fbb12fe <-- It's broken
             securityContext:
               capabilities:
                 add:
@@ -127,7 +160,8 @@ spec:
                                         "ignore_frontend": "true",
                                         "delay_iterations": 5,
                                         "max_iterations": 3}' \
-                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' &
+                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+                    --enable-force-include-usage &
                 done
 
                 #    --enable-eplb \

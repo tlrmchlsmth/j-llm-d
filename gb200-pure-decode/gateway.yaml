@@ -16,8 +16,9 @@ data:
               requiredDuringSchedulingIgnoredDuringExecution:
                 nodeSelectorTerms:
                 - matchExpressions:
-                  - key: nvidia.com/gpu.present
-                    operator: DoesNotExist
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: ["amd64"]
           containers:
           - name: istio-proxy
             resources:

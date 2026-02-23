@@ -91,7 +91,7 @@ parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_
 
 # Run inference-perf benchmark (kubernetes-sigs/inference-perf)
 # Uses concurrent load type: each worker maintains WORKER_MAX_CONCURRENCY in-flight requests
-inference-perf NUM_REQUESTS='25000' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKERS='4' WORKER_MAX_CONCURRENCY='2048':
+inference-perf NUM_REQUESTS='25000' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKERS='2' WORKER_MAX_CONCURRENCY='2048' WARMUP_CONCURRENCY='64' WARMUP_REQUESTS='256':
   #!/usr/bin/env bash
   set -euo pipefail
   INPUT_MEAN={{INPUT_LEN}}
@@ -100,13 +100,15 @@ inference-perf NUM_REQUESTS='25000' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKER
   export NUM_WORKERS={{NUM_WORKERS}}
   export WORKER_MAX_CONCURRENCY={{WORKER_MAX_CONCURRENCY}}
   export CONCURRENCY=$((NUM_WORKERS * WORKER_MAX_CONCURRENCY))
+  export WARMUP_CONCURRENCY={{WARMUP_CONCURRENCY}}
+  export WARMUP_REQUESTS={{WARMUP_REQUESTS}}
   export INPUT_MEAN INPUT_MIN=$((INPUT_MEAN - INPUT_MEAN/5)) INPUT_MAX=$((INPUT_MEAN + INPUT_MEAN/5)) INPUT_STD=$((INPUT_MEAN/10))
   export OUTPUT_MEAN OUTPUT_MIN=$((OUTPUT_MEAN - OUTPUT_MEAN/5)) OUTPUT_MAX=$((OUTPUT_MEAN + OUTPUT_MEAN/5)) OUTPUT_STD=$((OUTPUT_MEAN/10))
   {{KN}} delete job inference-perf --ignore-not-found=true
   {{KN}} delete configmap inference-perf-config --ignore-not-found=true
-  envsubst '${NUM_REQUESTS} ${NUM_WORKERS} ${WORKER_MAX_CONCURRENCY} ${CONCURRENCY} ${INPUT_MEAN} ${INPUT_MIN} ${INPUT_MAX} ${INPUT_STD} ${OUTPUT_MEAN} ${OUTPUT_MIN} ${OUTPUT_MAX} ${OUTPUT_STD}' \
+  envsubst '${NUM_REQUESTS} ${NUM_WORKERS} ${WORKER_MAX_CONCURRENCY} ${CONCURRENCY} ${WARMUP_CONCURRENCY} ${WARMUP_REQUESTS} ${INPUT_MEAN} ${INPUT_MIN} ${INPUT_MAX} ${INPUT_STD} ${OUTPUT_MEAN} ${OUTPUT_MIN} ${OUTPUT_MAX} ${OUTPUT_STD}' \
     < inference-perf-job.yaml | {{KN}} apply -f -
-  echo "inference-perf job submitted (concurrent, workers=${NUM_WORKERS} concurrency=${CONCURRENCY} requests=${NUM_REQUESTS} input=${INPUT_MEAN} output=${OUTPUT_MEAN})"
+  echo "inference-perf job submitted (concurrent, workers=${NUM_WORKERS} concurrency=${CONCURRENCY} warmup=${WARMUP_CONCURRENCY}x${WARMUP_REQUESTS} requests=${NUM_REQUESTS} input=${INPUT_MEAN} output=${OUTPUT_MEAN})"
   echo "  kubectl -n {{NAMESPACE}} logs -f job/inference-perf"
 
 # Get inference-perf results
@@ -206,12 +208,28 @@ copy-traces:
   if [ -d "$TRACE_DIR" ]; then
     echo "Total size: $(du -sh $TRACE_DIR | cut -f1)"
   fi
+  echo "Run 'just process-traces $N' to combine and fix for Perfetto"
+
+# Combine per-rank traces and fix Perfetto overlaps
+process-traces N='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [ -z "{{N}}" ]; then
+    # Find the latest trace directory
+    N=$(ls -d ./traces/[0-9]* 2>/dev/null | sort -t/ -k3 -n | tail -1 | xargs basename)
+    if [ -z "$N" ]; then
+      echo "No trace directories found in ./traces/"
+      exit 1
+    fi
+  fi
+  echo "Processing traces/$N ..."
+  python3 profiling/process_traces.py "traces/$N"
 
 # === Monitoring ===
 
 # Install Prometheus and Grafana (namespace-scoped, no cluster permissions needed)
 start-monitoring:
-  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update && helm repo add grafana https://grafana.github.io/helm-charts --force-update && helm repo update && kubectl apply -f {{MONITORING_DIR}}/prometheus-rbac.yaml && kubectl apply -f {{MONITORING_DIR}}/grafana-rbac.yaml && helm upgrade --install prometheus prometheus-community/prometheus -n {{NAMESPACE}} -f {{MONITORING_DIR}}/prometheus-values.yaml --set rbac.create=false && helm upgrade --install grafana grafana/grafana -n {{NAMESPACE}} -f {{MONITORING_DIR}}/grafana-values.yaml --set rbac.create=false
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update && helm repo add grafana https://grafana.github.io/helm-charts --force-update && helm repo update && kubectl apply -f {{MONITORING_DIR}}/prometheus-rbac.yaml && kubectl apply -f {{MONITORING_DIR}}/grafana-rbac.yaml && helm upgrade --install prometheus prometheus-community/prometheus -n {{NAMESPACE}} -f {{MONITORING_DIR}}/prometheus-values.yaml --set rbac.create=false --set serviceAccounts.server.create=false && helm upgrade --install grafana grafana/grafana -n {{NAMESPACE}} -f {{MONITORING_DIR}}/grafana-values.yaml --set rbac.create=false
 
 # Uninstall monitoring stack
 stop-monitoring:

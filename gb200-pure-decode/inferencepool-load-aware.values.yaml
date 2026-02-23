@@ -3,8 +3,6 @@
 
 inferenceExtension:
   replicas: 1
-  flags:
-    kv-cache-usage-percentage-metric: "vllm:kv_cache_usage_perc"
   image:
     name: llm-d-inference-scheduler
     hub: ghcr.io/llm-d
@@ -21,8 +19,9 @@ inferenceExtension:
       requiredDuringSchedulingIgnoredDuringExecution:
         nodeSelectorTerms:
         - matchExpressions:
-          - key: nvidia.com/gpu.present
-            operator: DoesNotExist
+          - key: kubernetes.io/arch
+            operator: In
+            values: ["amd64"]
   resources:
     requests:
       cpu: "8"
@@ -36,18 +35,14 @@ inferenceExtension:
       apiVersion: inference.networking.x-k8s.io/v1alpha1
       kind: EndpointPickerConfig
       plugins:
-      - type: data-parallel-profile-handler
-        parameters:
-          primaryPort: 8000
       - type: active-request-scorer
-      - type: queue-scorer
+      - type: weighted-random-picker
       schedulingProfiles:
       - name: default
         plugins:
         - pluginRef: active-request-scorer
           weight: 1
-        - pluginRef: queue-scorer
-          weight: 1
+        - pluginRef: weighted-random-picker
 
 inferencePool:
   name: wide-ep-gb200-infpool

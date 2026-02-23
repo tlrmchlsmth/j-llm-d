@@ -1,6 +1,14 @@
 server:
   persistentVolume:
     enabled: false
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: kubernetes.io/arch
+            operator: In
+            values: ["amd64"]
 
 extraScrapeConfigs: |
   - job_name: 'vllm-decode'
@@ -15,6 +23,9 @@ extraScrapeConfigs: |
         action: keep
       - source_labels: [__meta_kubernetes_pod_container_name]
         regex: vllm
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: '820.'
         action: keep
       - source_labels: [__meta_kubernetes_pod_name]
         target_label: pod

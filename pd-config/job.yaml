@@ -21,24 +21,21 @@ spec:
   ttlSecondsAfterFinished: 86400
   template:
     metadata:
-      annotations:
-        k8s.v1.cni.cncf.io/networks: |
-          [
-            {"name":"sriov-rdma-vf","namespace":"default","interface":"net1"},
-            {"name":"sriov-rdma-vf","namespace":"default","interface":"net2"},
-            {"name":"sriov-rdma-vf","namespace":"default","interface":"net3"},
-            {"name":"sriov-rdma-vf","namespace":"default","interface":"net4"},
-            {"name":"sriov-rdma-vf","namespace":"default","interface":"net5"},
-            {"name":"sriov-rdma-vf","namespace":"default","interface":"net6"},
-            {"name":"sriov-rdma-vf","namespace":"default","interface":"net7"},
-            {"name":"sriov-rdma-vf","namespace":"default","interface":"net8"}
-          ]
-
       labels:
         app: pd-config-bench
         pd-config/workload: ${WORKLOAD_TYPE}
         pd-config/tp: "${TP}"
+      annotations:
+        k8s.v1.cni.cncf.io/networks: |-
+          ${MULTUS_NETWORKS}
     spec:
+      tolerations:
+        - key: "amd.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "nvidia.com/sriov-rdma-vf"
+          operator: "Exists"
+          effect: "NoSchedule"
       priorityClassName: ${PRIORITY_CLASS}
       restartPolicy: Never
       containers:
@@ -49,11 +46,6 @@ spec:
             capabilities:
               add:
                 - IPC_LOCK
-          resources:
-            limits:
-              nvidia.com/sriov-rdma-vf: 8
-            requests:
-              nvidia.com/sriov-rdma-vf: 8
           command: ["/bin/bash", "-c"]
           args:
             - |
@@ -193,10 +185,12 @@ spec:
               amd.com/gpu: "${GPU_COUNT}"
               cpu: "32"
               memory: 100Gi
+              nvidia.com/sriov-rdma-vf: "${GPU_COUNT}"
             requests:
               amd.com/gpu: "${GPU_COUNT}"
               cpu: "32"
               memory: 100Gi
+              nvidia.com/sriov-rdma-vf: "${GPU_COUNT}"
           env:
             - name: VLLM_MOE_ROUTING_SIMULATION_STRATEGY
               value: "uniform_random"

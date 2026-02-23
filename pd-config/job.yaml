@@ -73,9 +73,9 @@ spec:
               # with dummy values so decode runs against a realistic ISL without
               # actually computing the prefill.
               KV_ARGS=""
-              if [ "${WORKLOAD_TYPE}" = "decode" ]; then
-                KV_ARGS='--kv-transfer-config {"kv_connector":"DecodeBenchConnector","kv_role":"kv_both"}'
-              fi
+              #if [ "${WORKLOAD_TYPE}" = "decode" ]; then
+              #  KV_ARGS='--kv-transfer-config {"kv_connector":"DecodeBenchConnector","kv_role":"kv_both"}'
+              #fi
 
               # Expert parallelism flag
               EP_ARGS=""
@@ -200,6 +200,14 @@ spec:
           env:
             - name: VLLM_MOE_ROUTING_SIMULATION_STRATEGY
               value: "uniform_random"
+            - name: UCX_TLS
+              value: "self,sm,rocm,rc"
+            - name: UCX_IB_GID_INDEX
+              value: "3"
+            - name: UCX_IB_TRAFFIC_CLASS
+              value: "41"
+            - name: UCX_MAX_RMA_RAILS
+              value: "1"
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:

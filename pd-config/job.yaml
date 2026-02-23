@@ -38,6 +38,12 @@ spec:
           effect: "NoSchedule"
       priorityClassName: ${PRIORITY_CLASS}
       restartPolicy: Never
+      initContainers: 
+        - name: qos-downgrade
+          image: ${VLLM_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c", "exit 0"]
+          resources: {}
       containers:
         - name: bench
           image: ${VLLM_IMAGE}
@@ -194,6 +200,12 @@ spec:
           env:
             - name: VLLM_MOE_ROUTING_SIMULATION_STRATEGY
               value: "uniform_random"
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  key: HF_TOKEN
+                  name: hf-secret
+                  optional: true
             #- name: VLLM_ROCM_USE_AITER
             #  value: "1"
             - name: HF_TOKEN

@@ -8,6 +8,7 @@ GH_TOKEN := "$GH_TOKEN"
 KN := "kubectl -n " + NAMESPACE
 
 GB200_DIR := "gb200-pure-decode"
+DEV_DIR := "dev"
 MONITORING_DIR := "monitoring"
 
 default:
@@ -98,13 +99,14 @@ inference-perf NUM_REQUESTS='25000' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKER
   export NUM_REQUESTS={{NUM_REQUESTS}}
   export NUM_WORKERS={{NUM_WORKERS}}
   export WORKER_MAX_CONCURRENCY={{WORKER_MAX_CONCURRENCY}}
+  export CONCURRENCY=$((NUM_WORKERS * WORKER_MAX_CONCURRENCY))
   export INPUT_MEAN INPUT_MIN=$((INPUT_MEAN - INPUT_MEAN/5)) INPUT_MAX=$((INPUT_MEAN + INPUT_MEAN/5)) INPUT_STD=$((INPUT_MEAN/10))
   export OUTPUT_MEAN OUTPUT_MIN=$((OUTPUT_MEAN - OUTPUT_MEAN/5)) OUTPUT_MAX=$((OUTPUT_MEAN + OUTPUT_MEAN/5)) OUTPUT_STD=$((OUTPUT_MEAN/10))
   {{KN}} delete job inference-perf --ignore-not-found=true
   {{KN}} delete configmap inference-perf-config --ignore-not-found=true
-  envsubst '${NUM_REQUESTS} ${NUM_WORKERS} ${WORKER_MAX_CONCURRENCY} ${INPUT_MEAN} ${INPUT_MIN} ${INPUT_MAX} ${INPUT_STD} ${OUTPUT_MEAN} ${OUTPUT_MIN} ${OUTPUT_MAX} ${OUTPUT_STD}' \
+  envsubst '${NUM_REQUESTS} ${NUM_WORKERS} ${WORKER_MAX_CONCURRENCY} ${CONCURRENCY} ${INPUT_MEAN} ${INPUT_MIN} ${INPUT_MAX} ${INPUT_STD} ${OUTPUT_MEAN} ${OUTPUT_MIN} ${OUTPUT_MAX} ${OUTPUT_STD}' \
     < inference-perf-job.yaml | {{KN}} apply -f -
-  echo "inference-perf job submitted (concurrent, workers=${NUM_WORKERS} concurrency=${WORKER_MAX_CONCURRENCY} requests=${NUM_REQUESTS} input=${INPUT_MEAN} output=${OUTPUT_MEAN})"
+  echo "inference-perf job submitted (concurrent, workers=${NUM_WORKERS} concurrency=${CONCURRENCY} requests=${NUM_REQUESTS} input=${INPUT_MEAN} output=${OUTPUT_MEAN})"
   echo "  kubectl -n {{NAMESPACE}} logs -f job/inference-perf"
 
 # Get inference-perf results
@@ -118,11 +120,20 @@ deploy_inferencepool ROUTING='load-aware':
     -f {{GB200_DIR}}/inferencepool-{{ROUTING}}.values.yaml \
     -n {{NAMESPACE}}
 
-start ROUTING='load-aware':
-  {{KN}} apply -k {{GB200_DIR}} \
-  && {{KN}} apply -f {{GB200_DIR}}/gateway.yaml \
-  && just deploy_inferencepool {{ROUTING}} \
-  && {{KN}} apply -f {{GB200_DIR}}/httproute.yaml
+VLLM_DEV_VENV := "/mnt/lustre/tms/vllm-venv"
+
+start ROUTING='load-aware' DEV='false':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{KN}} apply -k {{GB200_DIR}}
+  {{KN}} apply -f {{GB200_DIR}}/gateway.yaml
+  just deploy_inferencepool {{ROUTING}}
+  {{KN}} apply -f {{GB200_DIR}}/httproute.yaml
+  if [ "{{DEV}}" = "true" ]; then
+    echo "Patching decode-bench for dev mode (VLLM_DEV_VENV={{VLLM_DEV_VENV}})..."
+    {{KN}} patch lws wide-ep-gb200-decode-bench --type=json \
+      -p '[{"op":"replace","path":"/spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/0","value":{"name":"VLLM_DEV_VENV","value":"{{VLLM_DEV_VENV}}"}}]'
+  fi
 
 stop:
   helm uninstall wide-ep-gb200-infpool -n {{NAMESPACE}} 2>/dev/null || true \
@@ -133,8 +144,34 @@ stop:
   && {{KN}} delete job inference-perf --ignore-not-found=true \
   && {{KN}} delete configmap inference-perf-config --ignore-not-found=true
 
-restart:
-  just stop && just start
+restart ROUTING='load-aware' DEV='false':
+  just stop && just start {{ROUTING}} {{DEV}}
+
+# === Dev Environment ===
+
+# Deploy the persistent dev pod (CPU-only, for editing/compiling vLLM on Lustre)
+dev-start:
+  {{KN}} apply -f {{DEV_DIR}}/dev-pod.yaml
+
+# Exec into the dev pod
+dev:
+  {{KN}} exec -it vllm-dev -- /bin/bash
+
+# Build vLLM from source on Lustre (runs in background, survives disconnects)
+dev-build:
+  {{KN}} exec vllm-dev -- bash -c 'source {{VLLM_DEV_VENV}}/bin/activate && cd /mnt/lustre/tms/vllm-dev && nohup uv pip install --no-deps --no-build-isolation -e . > /mnt/lustre/tms/build.log 2>&1 & echo "Build started (PID $$!), follow with: just dev-build-log"'
+
+# Tail the dev build log
+dev-build-log:
+  {{KN}} exec vllm-dev -- tail -f /mnt/lustre/tms/build.log
+
+# Delete the dev pod
+dev-stop:
+  {{KN}} delete -f {{DEV_DIR}}/dev-pod.yaml --ignore-not-found=true
+
+# Flush vLLM/FlashInfer compile caches on Lustre (run after image or config changes)
+flush-cache:
+  {{KN}} exec vllm-dev -- bash -c 'rm -rf /mnt/lustre/tms/vllm_cache_extdp /mnt/lustre/tms/flashinfer_cache_extdp && echo "Compile caches flushed"'
 
 # Copy PyTorch traces from all decode pods to local ./traces/N directory
 copy-traces:

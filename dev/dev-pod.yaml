@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-dev
+  labels:
+    app: vllm-dev
+spec:
+  restartPolicy: Always
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: nvidia.com/gpu.present
+            operator: DoesNotExist
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+  containers:
+    - name: dev
+      image: quay.io/tms/vllm-dev:cu130
+      imagePullPolicy: Always
+      command: ["sleep", "infinity"]
+      resources:
+        requests:
+          cpu: "16"
+          memory: 64Gi
+        limits:
+          cpu: "16"
+          memory: 64Gi
+      env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-secret
+              key: HF_TOKEN
+              optional: true
+        - name: HF_HOME
+          value: /mnt/lustre/hf_cache
+        - name: VLLM_CACHE_ROOT
+          value: /mnt/lustre/tms/vllm_cache_extdp
+        - name: FLASHINFER_CACHE_DIR
+          value: /mnt/lustre/tms/flashinfer_cache_extdp
+        - name: TORCH_CUDA_ARCH_LIST
+          value: "9.0a;10.0+PTX"
+      volumeMounts:
+        - mountPath: /mnt/lustre
+          name: lustre
+        - mountPath: /dev/shm
+          name: dshm
+      workingDir: /mnt/lustre/tms/vllm-dev
+  volumes:
+    - name: lustre
+      persistentVolumeClaim:
+        claimName: lustre-pvc-vllm
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi

@@ -65,7 +65,8 @@ spec:
               allowPrivilegeEscalation: false
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
+            image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e << works
+            # image: quay.io/tms/llm-d-cuda-dev:886dd05 << Flashinfer broken
             securityContext:
               capabilities:
                 add:
@@ -84,8 +85,15 @@ spec:
                 # Launches 4 independent vLLM processes (one per GPU)
                 # Routing sidecar maps port 800X → localhost:820X
                 #################
+                # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
+                if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
+                  echo "Using dev venv at ${VLLM_DEV_VENV}"
+                  source "${VLLM_DEV_VENV}/bin/activate"
+                else
+                  source /opt/vllm/bin/activate
+                fi
+
                 uv pip uninstall pplx-kernels
-                source /opt/vllm/bin/activate
 
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
 
@@ -135,6 +143,10 @@ spec:
                 exit 1
 
             env:
+              # Set to a Lustre venv path to override baked-in vLLM (e.g. /mnt/lustre/tms/vllm-venv)
+              - name: VLLM_DEV_VENV
+                value: ""
+
               # Use NVFP4 dispatch, and then masked_gemm is required to avoid crashes
               - name: VLLM_DEEPEPLL_NVFP4_DISPATCH
                 value: "1"

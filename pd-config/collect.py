@@ -873,6 +873,12 @@ def upload_to_sheets(
         if wt == "decode":
             pareto_start_row = len(table_rows) + 2
             pareto_rows = build_pareto_data(wt_results)
+
+            # Calculate required rows first
+            required_rows = pareto_start_row + len(pareto_rows)
+            if ws.row_count < required_rows:
+                ws.resize(rows=required_rows)
+
             ws.update(range_name=f"A{pareto_start_row}", values=pareto_rows)
 
             num_series = len(set(r.config_label for r in wt_results))

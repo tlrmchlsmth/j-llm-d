@@ -123,6 +123,10 @@ deploy_inferencepool ROUTING='load-aware':
     -n {{NAMESPACE}}
 
 VLLM_DEV_VENV := "/mnt/lustre/tms/vllm-venv"
+VLLM_DEV_SRC := "/mnt/lustre/tms/vllm-dev"
+VLLM_DEV_REMOTE := "https://github.com/tlrmchlsmth/vllm.git"
+VLLM_DEV_BRANCH := "gb200_working"
+VLLM_BUILD_JOBS := "16"
 
 start ROUTING='load-aware' DEV='false':
   #!/usr/bin/env bash
@@ -160,8 +164,8 @@ dev:
   {{KN}} exec -it vllm-dev -- /bin/bash
 
 # Build vLLM from source on Lustre (runs in background, survives disconnects)
-dev-build:
-  {{KN}} exec vllm-dev -- bash -c 'source {{VLLM_DEV_VENV}}/bin/activate && cd /mnt/lustre/tms/vllm-dev && nohup uv pip install --no-deps --no-build-isolation -e . > /mnt/lustre/tms/build.log 2>&1 & echo "Build started (PID $$!), follow with: just dev-build-log"'
+dev-build REMOTE=VLLM_DEV_REMOTE BRANCH=VLLM_DEV_BRANCH JOBS=VLLM_BUILD_JOBS:
+  {{KN}} exec vllm-dev -- bash -c 'source {{VLLM_DEV_VENV}}/bin/activate && cd {{VLLM_DEV_SRC}} && git remote set-url origin {{REMOTE}} && git fetch origin && git checkout {{BRANCH}} && git reset --hard origin/{{BRANCH}} && MAX_JOBS={{JOBS}} nohup uv pip install --no-deps --no-build-isolation -e . > /mnt/lustre/tms/build.log 2>&1 & echo "Build started ({{REMOTE}} {{BRANCH}}, jobs={{JOBS}}), follow with: just dev-build-log"'
 
 # Tail the dev build log
 dev-build-log:
@@ -175,6 +179,48 @@ dev-stop:
 flush-cache:
   {{KN}} exec vllm-dev -- bash -c 'rm -rf /mnt/lustre/tms/vllm_cache_extdp /mnt/lustre/tms/flashinfer_cache_extdp && echo "Compile caches flushed"'
 
+# Profile all decode pods, copy traces, combine, fix, and open in Finder
+profile:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  # Get decode pod IPs
+  DECODE_IPS=$({{KN}} get pods -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | .status.podIP' | tr '\n' ' ')
+  if [[ -z "$DECODE_IPS" ]]; then
+    echo "No decode pods found"
+    exit 1
+  fi
+  PORTS="8200 8201 8202 8203"
+
+  echo "Starting profile on all decode ranks..."
+  {{KN}} exec poker -- bash -c "
+    for IP in $DECODE_IPS; do
+      for PORT in $PORTS; do
+        curl -s -X POST http://\$IP:\$PORT/start_profile &
+      done
+    done
+    wait
+  "
+
+  echo "Waiting for profiles to complete..."
+  {{KN}} exec poker -- bash -c "
+    for IP in $DECODE_IPS; do
+      for PORT in $PORTS; do
+        echo \"  Stopping \$IP:\$PORT...\"
+        curl -s -X POST http://\$IP:\$PORT/stop_profile
+      done
+    done
+  "
+
+  echo "Copying and processing traces..."
+  just get-decode-pods
+  just copy-traces
+  TRACE_DIR=$(ls -d ./traces/[0-9]* 2>/dev/null | sort -t/ -k3 -n | tail -1)
+  N=$(basename "$TRACE_DIR")
+  just process-traces "$N"
+  echo "Opening $TRACE_DIR"
+  open "$TRACE_DIR"
+
 # Copy PyTorch traces from all decode pods to local ./traces/N directory
 copy-traces:
   #!/usr/bin/env bash
@@ -182,7 +228,6 @@ copy-traces:
 
   # Ensure we have fresh pod info
   if [ ! -f .tmp/decode_pods.txt ]; then
-    echo "Pod info not cached, fetching..."
     just get-decode-pods
   fi
 
@@ -204,6 +249,9 @@ copy-traces:
     {{KN}} cp "$POD_NAME:/traces" "$POD_DIR" 2>/dev/null || echo "  No traces found in $POD_NAME or copy failed"
   done < .tmp/decode_pods.txt
 
+  # Remove empty pod directories (pods that had no traces)
+  find "$TRACE_DIR" -maxdepth 1 -type d -empty -delete 2>/dev/null || true
+
   echo "Traces copied to $TRACE_DIR"
   if [ -d "$TRACE_DIR" ]; then
     echo "Total size: $(du -sh $TRACE_DIR | cut -f1)"
@@ -214,9 +262,9 @@ copy-traces:
 process-traces N='':
   #!/usr/bin/env bash
   set -euo pipefail
-  if [ -z "{{N}}" ]; then
-    # Find the latest trace directory
-    N=$(ls -d ./traces/[0-9]* 2>/dev/null | sort -t/ -k3 -n | tail -1 | xargs basename)
+  N="{{N}}"
+  if [ -z "$N" ]; then
+    N=$(ls -d ./traces/[0-9]* 2>/dev/null | sort -t/ -k3 -n | tail -1 | xargs basename 2>/dev/null)
     if [ -z "$N" ]; then
       echo "No trace directories found in ./traces/"
       exit 1

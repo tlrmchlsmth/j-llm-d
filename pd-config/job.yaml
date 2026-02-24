@@ -25,13 +25,33 @@ spec:
         app: pd-config-bench
         pd-config/workload: ${WORKLOAD_TYPE}
         pd-config/tp: "${TP}"
+      annotations:
+        k8s.v1.cni.cncf.io/networks: |-
+          ${MULTUS_NETWORKS}
     spec:
+      tolerations:
+        - key: "amd.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "nvidia.com/sriov-rdma-vf"
+          operator: "Exists"
+          effect: "NoSchedule"
       priorityClassName: ${PRIORITY_CLASS}
       restartPolicy: Never
+      initContainers: 
+        - name: qos-downgrade
+          image: ${VLLM_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c", "exit 0"]
+          resources: {}
       containers:
         - name: bench
           image: ${VLLM_IMAGE}
           imagePullPolicy: Always
+          securityContext:
+            capabilities:
+              add:
+                - IPC_LOCK
           command: ["/bin/bash", "-c"]
           args:
             - |
@@ -164,13 +184,23 @@ spec:
               amd.com/gpu: "${GPU_COUNT}"
               cpu: "32"
               memory: 100Gi
+              nvidia.com/sriov-rdma-vf: "${GPU_COUNT}"
             requests:
               amd.com/gpu: "${GPU_COUNT}"
               cpu: "32"
               memory: 100Gi
+              nvidia.com/sriov-rdma-vf: "${GPU_COUNT}"
           env:
             - name: VLLM_MOE_ROUTING_SIMULATION_STRATEGY
               value: "uniform_random"
+            - name: UCX_TLS
+              value: "self,sm,rocm,rc"
+            - name: UCX_IB_GID_INDEX
+              value: "3"
+            - name: UCX_IB_TRAFFIC_CLASS
+              value: "41"
+            - name: UCX_MAX_RMA_RAILS
+              value: "1"
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:

@@ -6,8 +6,11 @@ HF_TOKEN := "$HF_TOKEN"
 GH_TOKEN := "$GH_TOKEN"
 
 KN := "kubectl -n " + NAMESPACE
+NVIDIA_KUBECONFIG := "$NVIDIA_KUBECONFIG"
+KN_FP4 := "kubectl --kubeconfig " + NVIDIA_KUBECONFIG + " -n " + NAMESPACE
 
 GB200_DIR := "gb200-pure-decode"
+EXAMPLE_DIR := "llm-d/guides/wide-ep-lws"
 DEV_DIR := "dev"
 MONITORING_DIR := "monitoring"
 
@@ -51,7 +54,18 @@ create-secrets:
   && kubectl create secret generic gh-token-secret --from-literal=GH_TOKEN={{GH_TOKEN}} -n {{NAMESPACE}}
 
 start-poker:
-    {{KN}} apply -f poker/poker.yaml
+  #!/usr/bin/env bash
+  export POKER_IMAGE="{{env_var('POKER_IMAGE')}}"
+  export POKER_TAG="{{env_var('POKER_TAG')}}"
+
+  # Use nvidia kubeconfig if available, otherwise default
+  if [[ -n "${NVIDIA_KUBECONFIG:-}" ]]; then
+    KUBECTL_CMD="kubectl --kubeconfig {{NVIDIA_KUBECONFIG}} -n {{NAMESPACE}}"
+  else
+    KUBECTL_CMD="{{KN}}"
+  fi
+
+  envsubst '${POKER_IMAGE} ${POKER_TAG}' < poker/poker.yaml | $KUBECTL_CMD apply -f -
 
 # Fetch decode pod names and IPs and cache them
 get-decode-pods:
@@ -68,26 +82,100 @@ poke:
   set -euo pipefail
   mkdir -p ./.tmp
 
+  # Use nvidia kubeconfig if available, otherwise default
+  if [[ -n "${NVIDIA_KUBECONFIG:-}" ]]; then
+    KUBECTL_CMD="kubectl --kubeconfig {{NVIDIA_KUBECONFIG}} -n {{NAMESPACE}}"
+  else
+    KUBECTL_CMD="{{KN}}"
+  fi
+
+  # Fetch configs locally and save to files
+  echo "Fetching deployment configs locally..."
+  cat llm-d/guides/wide-ep-lws/manifests/modelserver/gb200_dsv31_fp4/decode.yaml 2>/dev/null > .tmp/decode_config.yaml || echo "decode config not found" > .tmp/decode_config.yaml
+  cat llm-d/guides/wide-ep-lws/manifests/modelserver/gb200_dsv31_fp4/prefill.yaml 2>/dev/null > .tmp/prefill_config.yaml || echo "prefill config not found" > .tmp/prefill_config.yaml
+
   # Export variables for envsubst
   export BASE_URL="http://wide-ep-gb200-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
   export NAMESPACE="{{NAMESPACE}}"
+  export GRAFANA_URL="http://grafana.vllm.svc.cluster.local"
 
-  envsubst '${BASE_URL} ${NAMESPACE}' < Justfile.remote > .tmp/Justfile.remote.tmp
-  kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/poker:/app/Justfile
-  {{KN}} exec -it poker -- /bin/zsh
+  envsubst '${BASE_URL} ${NAMESPACE} ${GRAFANA_URL}' < Justfile.remote > .tmp/Justfile.remote.tmp
+  $KUBECTL_CMD cp .tmp/Justfile.remote.tmp poker:/app/Justfile
+  $KUBECTL_CMD cp annotate.sh poker:/app/annotate.sh
+  $KUBECTL_CMD cp .tmp/decode_config.yaml poker:/app/decode_config.yaml
+  $KUBECTL_CMD cp .tmp/prefill_config.yaml poker:/app/prefill_config.yaml
+  $KUBECTL_CMD exec -it poker -- chmod +x /app/annotate.sh
+  $KUBECTL_CMD exec -it poker -- /bin/zsh
 
 
-parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_LEN='128' OUTPUT_LEN='1000' N_WORKERS='4':
-  {{KN}} delete job parallel-guidellm --ignore-not-found=true \
-  && env \
+# Wait for poker + model serving pods to be ready, then run `just eval` from poker
+auto-eval:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  mkdir -p ./.tmp
+
+  if [[ -n "${NVIDIA_KUBECONFIG:-}" ]]; then
+    KUBECTL_CMD="kubectl --kubeconfig {{NVIDIA_KUBECONFIG}} -n {{NAMESPACE}}"
+  else
+    KUBECTL_CMD="{{KN}}"
+  fi
+
+  echo "Waiting for poker pod..."
+  until $KUBECTL_CMD get pod poker &>/dev/null; do sleep 5; done
+  $KUBECTL_CMD wait --for=condition=Ready pod/poker --timeout=300s
+  echo "Poker pod is ready."
+
+  echo "Waiting for decode pods..."
+  until $KUBECTL_CMD get pods -l llm-d.ai/role=decode --no-headers 2>/dev/null | grep -q .; do sleep 10; done
+  $KUBECTL_CMD wait --for=condition=Ready pods -l llm-d.ai/role=decode --timeout=1800s
+  echo "Decode pods are ready."
+
+  echo "Waiting for prefill pods..."
+  until $KUBECTL_CMD get pods -l llm-d.ai/role=prefill --no-headers 2>/dev/null | grep -q .; do sleep 10; done
+  $KUBECTL_CMD wait --for=condition=Ready pods -l llm-d.ai/role=prefill --timeout=1800s
+  echo "Prefill pods are ready."
+
+  # Set up poker pod (same as poke)
+  echo "Fetching deployment configs locally..."
+  cat llm-d/guides/wide-ep-lws/manifests/modelserver/gb200_dsv31_fp4/decode.yaml 2>/dev/null > .tmp/decode_config.yaml || echo "decode config not found" > .tmp/decode_config.yaml
+  cat llm-d/guides/wide-ep-lws/manifests/modelserver/gb200_dsv31_fp4/prefill.yaml 2>/dev/null > .tmp/prefill_config.yaml || echo "prefill config not found" > .tmp/prefill_config.yaml
+
+  export BASE_URL="http://llm-d-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
+  export NAMESPACE="{{NAMESPACE}}"
+  export GRAFANA_URL="http://grafana.vllm.svc.cluster.local"
+
+  envsubst '${BASE_URL} ${NAMESPACE} ${GRAFANA_URL}' < Justfile.remote > .tmp/Justfile.remote.tmp
+  $KUBECTL_CMD cp .tmp/Justfile.remote.tmp poker:/app/Justfile
+  $KUBECTL_CMD cp annotate.sh poker:/app/annotate.sh
+  $KUBECTL_CMD cp .tmp/decode_config.yaml poker:/app/decode_config.yaml
+  $KUBECTL_CMD cp .tmp/prefill_config.yaml poker:/app/prefill_config.yaml
+  $KUBECTL_CMD exec poker -- chmod +x /app/annotate.sh
+
+  echo "All pods ready. Running eval..."
+  $KUBECTL_CMD exec poker -- just eval
+
+parallel-guidellm RR CONCURRENT_PER_WORKER REQUESTS_PER_WORKER INPUT_LEN OUTPUT_LEN N_WORKERS:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [[ -n "${NVIDIA_KUBECONFIG:-}" ]]; then
+    KUBECTL_CMD="kubectl --kubeconfig {{NVIDIA_KUBECONFIG}} -n {{NAMESPACE}}"
+  else
+    KUBECTL_CMD="{{KN}}"
+  fi
+  $KUBECTL_CMD delete job parallel-guidellm --ignore-not-found=true
+  env \
     N_WORKERS={{N_WORKERS}} \
     MAX_CONCURRENCY={{CONCURRENT_PER_WORKER}} \
     NUM_REQUESTS={{REQUESTS_PER_WORKER}} \
+    RATE={{RR}} \
     INPUT_LEN={{INPUT_LEN}} \
     OUTPUT_LEN={{OUTPUT_LEN}} \
+    BASE_URL="http://llm-d-inference-gateway-istio.vllm.svc.cluster.local" \
     OUTPUT_PATH="parallel-guidellm-$(date +%Y%m%d-%H%M%S)" \
-    envsubst '${N_WORKERS} ${MAX_CONCURRENCY} ${NUM_REQUESTS} ${INPUT_LEN} ${OUTPUT_LEN} ${OUTPUT_PATH}' \
-      < parallel-guidellm.yaml | kubectl apply -f -
+    POKER_IMAGE="{{env_var('POKER_IMAGE')}}" \
+    POKER_TAG="{{env_var('POKER_TAG')}}" \
+    envsubst '${N_WORKERS} ${MAX_CONCURRENCY} ${NUM_REQUESTS} ${RATE} ${INPUT_LEN} ${OUTPUT_LEN} ${BASE_URL} ${OUTPUT_PATH} ${POKER_IMAGE} ${POKER_TAG}' \
+      < parallel-guidellm.yaml | $KUBECTL_CMD apply -f -
 
 # Run inference-perf benchmark (kubernetes-sigs/inference-perf)
 # Uses concurrent load type: each worker maintains WORKER_MAX_CONCURRENCY in-flight requests
@@ -174,6 +262,15 @@ dev-stop:
 # Flush vLLM/FlashInfer compile caches on Lustre (run after image or config changes)
 flush-cache:
   {{KN}} exec vllm-dev -- bash -c 'rm -rf /mnt/lustre/tms/vllm_cache_extdp /mnt/lustre/tms/flashinfer_cache_extdp && echo "Compile caches flushed"'
+
+start-fp4:
+  cd {{EXAMPLE_DIR}} && {{KN_FP4}} apply -k ./manifests/modelserver/gb200_dsv31_fp4
+
+stop-fp4:
+  cd {{EXAMPLE_DIR}} && {{KN_FP4}} delete -k ./manifests/modelserver/gb200_dsv31_fp4 --ignore-not-found=true
+
+restart-fp4:
+  just stop-fp4 && just start-fp4
 
 # Copy PyTorch traces from all decode pods to local ./traces/N directory
 copy-traces:

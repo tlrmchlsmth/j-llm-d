@@ -37,7 +37,10 @@ This repository uses `just` as the task runner. Commands are defined in `Justfil
 The Justfile requires a `.env` file with:
 - `HF_TOKEN` - HuggingFace token for model access
 - `GH_TOKEN` - GitHub token
-- `NAMESPACE` - Kubernetes namespace (default: `tms-llm-d-wide-ep`)
+- `NAMESPACE` - Kubernetes namespace (default: `vllm`)
+- `NVIDIA_KUBECONFIG` - Path to alternate kubeconfig for nvidia cluster (fp4 deployments)
+- `POKER_IMAGE` - Poker container image repository (required)
+- `POKER_TAG` - Poker container image tag (required)
 
 ### Deployment Commands
 
@@ -62,6 +65,15 @@ just start-poker
 
 # Get an interactive shell in the poker pod with Justfile.remote
 just poke
+
+# FP4 model deployment (nvidia cluster)
+just start-fp4      # Deploy fp4 model servers only
+just stop-fp4       # Clean up fp4 deployment
+just restart-fp4    # Restart fp4 deployment
+
+# Poker pod deployment (auto-detects cluster via NVIDIA_KUBECONFIG)
+just start-poker    # Deploy poker pod (uses nvidia cluster if NVIDIA_KUBECONFIG set)
+just poke           # Interactive shell in poker pod (auto-detects cluster)
 ```
 
 ### Monitoring and Debugging
@@ -79,6 +91,33 @@ just cks-nodes
 # Copy PyTorch traces from all decode pods to ./traces/N (N auto-increments)
 just copy-traces
 ```
+
+#### Grafana Annotations
+
+Benchmark commands automatically create Grafana annotations that appear as vertical lines on time series panels, marking benchmark start/end with parameters.
+
+**Automatic annotations**: The `benchmark` and `benchmark_g` commands in `Justfile.remote` automatically create annotations when executed.
+
+**Manual annotation creation** (from within poker pod):
+```bash
+# Panel-specific annotation (appears on specific dashboard panel)
+curl -X POST "http://grafana.vllm.svc.cluster.local/api/annotations" \
+  -u "admin:admin" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dashboardId": 7,
+    "panelId": 1,
+    "time": '"$(date +%s)000"',
+    "text": "BENCHMARK START\nType: GuideILM\nConcurrency: 128\nRequests: 1000",
+    "tags": ["benchmark", "start"]
+  }'
+```
+
+**Finding Dashboard and Panel IDs**:
+- **Dashboard ID**: Check the URL when viewing your dashboard: `http://localhost:3000/d/DASHBOARD_ID/dashboard-name`
+- **Panel ID**: Edit the panel → look at the URL: `...&editPanel=PANEL_ID`
+
+**Authentication**: Annotations require Grafana authentication. The default `admin:admin` credentials are configured in the `_annotate` function in `Justfile.remote`.
 
 ### Benchmarking
 
@@ -135,6 +174,7 @@ python agg.py [N] [--use-total] [--show-details]
 - `parallel-guidellm.yaml` - Kubernetes Job template for parallel benchmarking
 - `llm-d/guides/wide-ep-lws/` - Wide expert-parallelism guide (primary focus of this workspace)
   - `manifests/modelserver/coreweave/` - CoreWeave-specific model server configs
+  - `manifests/modelserver/gb200_dsv31_fp4/` - Nvidia cluster FP4 model server configs
   - `manifests/gateway/istio/` - Istio gateway configurations
   - `inferencepool.values.yaml` - Helm values for InferencePool
 
@@ -155,12 +195,14 @@ python agg.py [N] [--use-total] [--show-details]
 
 - The wide-ep-lws guide requires **24x H200 GPUs** with InfiniBand RDMA across 3 nodes
 - Default model is `deepseek-ai/DeepSeek-R1-0528` configured with DP=8 (1 prefill + 2 decode workers)
+- FP4 model deployment uses `nvidia/DeepSeek-R1-0528-FP4-v2` on nvidia cluster via gb200_dsv31_fp4 manifests
 - Deployment uses LeaderWorkerSet for multi-host inference coordination
 - vLLM API servers can take **7-10 minutes** to start up for large MoE models
 - CoreWeave-specific configurations include custom scheduler (`custom-binpack-scheduler`) and RDMA resources
-- The poker pod image (`quay.io/tms/poker:0.0.10`) includes pre-installed benchmarking tools
+- The poker pod image (configured via required `POKER_IMAGE` env var) includes pre-installed benchmarking tools (vllm, guidellm, lm_eval)
 - PyTorch profiling traces are stored in decode pods at `/traces` and copied locally to `./traces/` (gitignored)
 - Decode pod information is cached in `.tmp/decode_pods.txt` to avoid repeated kubectl queries
+- Dual cluster support: CoreWeave (default kubectl) and nvidia cluster (via NVIDIA_KUBECONFIG)
 
 ## Just Variable Expansion Notes
 

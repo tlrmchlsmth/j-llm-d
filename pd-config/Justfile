@@ -40,6 +40,23 @@ default:
 # Render a single Job YAML to stdout (separated by ---)
 _job-yaml JOB_NAME GPU_COUNT TP DP ENABLE_EP WORKLOAD_TYPE ISL OSL CONCURRENCY_LEVELS:
   #!/usr/bin/env bash
+  # 1. Define the network generator function
+  generate_multus_networks() {
+    local count=$1
+    local networks="["
+
+    for i in $(seq 1 "$count"); do
+      networks+=$(printf '{"name":"sriov-rdma-vf","namespace":"default","interface":"net%d"}' "$i")
+      
+      if [ "$i" -lt "$count" ]; then
+        networks+=","
+      fi
+    done
+    
+    networks+="]"
+    echo "$networks"
+  }
+  MULTUS_NETWORKS=$(generate_multus_networks {{GPU_COUNT}})
   echo "---"
   env \
     JOB_NAME={{JOB_NAME}} \
@@ -58,7 +75,8 @@ _job-yaml JOB_NAME GPU_COUNT TP DP ENABLE_EP WORKLOAD_TYPE ISL OSL CONCURRENCY_L
     GPU_MEM_UTIL={{GPU_MEM_UTIL}} \
     HF_CACHE_HOST_PATH="{{HF_CACHE}}" \
     PRIORITY_CLASS="{{PRIORITY_CLASS}}" \
-    envsubst '${JOB_NAME} ${GPU_COUNT} ${TP} ${DP} ${ENABLE_EP} ${MODEL} ${VLLM_IMAGE} ${WORKLOAD_TYPE} ${ISL} ${OSL} ${CONCURRENCY_LEVELS} ${TARGET_DURATION} ${MIN_PROMPTS} ${GPU_MEM_UTIL} ${HF_CACHE_HOST_PATH} ${PRIORITY_CLASS}' \
+    MULTUS_NETWORKS="$MULTUS_NETWORKS" \
+    envsubst '${JOB_NAME} ${GPU_COUNT} ${TP} ${DP} ${ENABLE_EP} ${MODEL} ${VLLM_IMAGE} ${WORKLOAD_TYPE} ${ISL} ${OSL} ${CONCURRENCY_LEVELS} ${TARGET_DURATION} ${MIN_PROMPTS} ${GPU_MEM_UTIL} ${HF_CACHE_HOST_PATH} ${PRIORITY_CLASS} ${MULTUS_NETWORKS}' \
       < job.yaml
 
 # Launch a single benchmark Job

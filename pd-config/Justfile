@@ -1,13 +1,15 @@
 set dotenv-load
 set dotenv-path := "../.env"
 
-NAMESPACE := "tms"
+NAMESPACE := env_var_or_default("NAMESPACE", "tms")
 KN := "kubectl -n " + NAMESPACE
 
 # Benchmark configuration
 #MODEL := "openai/gpt-oss-120b"
-MODEL := "zai-org/GLM-4.7-FP8"
-IMAGE := "ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.7-debug"
+#MODEL := "zai-org/GLM-4.7-FP8"
+#IMAGE := "ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.7-debug"
+MODEL := "RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic"
+IMAGE := "ghcr.io/llm-d/llm-d-rocm:v0.5.0"
 GPU_MEM_UTIL := "0.95"
 TARGET_DURATION := "60"
 MIN_PROMPTS := "200"
@@ -19,22 +21,29 @@ ENABLE_EP := "false"   # Enable --enable-expert-parallel (used by bench, always 
 MIN_GPU := "1"         # Min GPUs per job (skip configs below this)
 MAX_GPU := "8"         # Max GPUs per job (limited by GPUs per node)
 
-QPS := "1 16 32 64 128 256 inf"
-
 # Prefill workload
 PREFILL_ISL := "4096"
 PREFILL_OSL := "1"
 PREFILL_CONCURRENCIES := "1 4 8 16"
+# Prefill QPS workload
+PREFILL_QPS := "1 4 8 16 32"
+PREFILL_QPS_NP := "200"
 
 # Decode workload
 DECODE_ISL := "4096"
 DECODE_OSL := "512"
 DECODE_CONCURRENCIES := "4 16 32 64 128 256 512"
+# Decode QPS workload
+DECODE_QPS := "2 4 8 16 32 64"
+DECODE_QPS_NP := "512"
 
 # Aggregated workload (actual ISL/OSL, no P/D specialization)
 AGG_ISL := "4096"
 AGG_OSL := "512"
 AGG_CONCURRENCIES := "1 4 8 16 32 64"
+# Agg QPS workload
+AGG_QPS := "1 4 8 12 16 32 64"
+AGG_QPS_NP := "200"
 
 default:
   just --list
@@ -75,11 +84,14 @@ _job-yaml JOB_NAME GPU_COUNT TP DP ENABLE_EP WORKLOAD_TYPE ISL OSL SWEEP_RANGE S
     SWEEP_TYPE="{{SWEEP_TYPE}}" \
     TARGET_DURATION={{TARGET_DURATION}} \
     MIN_PROMPTS={{MIN_PROMPTS}} \
+    PREFILL_QPS_NP={{PREFILL_QPS_NP}} \
+    DECODE_QPS_NP={{DECODE_QPS_NP}} \
+    AGG_QPS_NP={{AGG_QPS_NP}} \
     GPU_MEM_UTIL={{GPU_MEM_UTIL}} \
     HF_CACHE_HOST_PATH="{{HF_CACHE}}" \
     PRIORITY_CLASS="{{PRIORITY_CLASS}}" \
     MULTUS_NETWORKS="$MULTUS_NETWORKS" \
-    envsubst '${JOB_NAME} ${GPU_COUNT} ${TP} ${DP} ${ENABLE_EP} ${MODEL} ${VLLM_IMAGE} ${WORKLOAD_TYPE} ${ISL} ${OSL} ${SWEEP_RANGE} ${SWEEP_TYPE} ${TARGET_DURATION} ${MIN_PROMPTS} ${GPU_MEM_UTIL} ${HF_CACHE_HOST_PATH} ${PRIORITY_CLASS} ${MULTUS_NETWORKS}' \
+    envsubst '${JOB_NAME} ${GPU_COUNT} ${TP} ${DP} ${ENABLE_EP} ${MODEL} ${VLLM_IMAGE} ${WORKLOAD_TYPE} ${ISL} ${OSL} ${SWEEP_RANGE} ${SWEEP_TYPE} ${TARGET_DURATION} ${MIN_PROMPTS} ${GPU_MEM_UTIL} ${HF_CACHE_HOST_PATH} ${PRIORITY_CLASS} ${MULTUS_NETWORKS} ${PREFILL_QPS_NP} ${DECODE_QPS_NP} ${AGG_QPS_NP}' \
       < job.yaml
 
 # Launch a single benchmark Job
@@ -134,14 +146,14 @@ bench-full-rr:
   COUNT=0
   YAML=""
   for TP in 1 2 4 8; do
-    for DP in 1 2 4 8; do
+    for DP in 1; do
       GPU_COUNT=$((TP * DP))
       # Enable EP if using DP
       if [ $DP -ne 1 ]; then EP=true; else EP=false; fi
       if [ $GPU_COUNT -ge {{MIN_GPU}} ] && [ $GPU_COUNT -le {{MAX_GPU}} ]; then
-        YAML+="$(just _job-yaml "pd-config-prefill-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{QPS}}" qps)"$'\n'
-        YAML+="$(just _job-yaml "pd-config-decode-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP decode {{DECODE_ISL}} {{DECODE_OSL}} "{{QPS}}" qps)"$'\n'
-        YAML+="$(just _job-yaml "pd-config-agg-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP aggregated {{AGG_ISL}} {{AGG_OSL}} "{{QPS}}" qps)"$'\n'
+        YAML+="$(just _job-yaml "pd-config-prefill-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_QPS}}" qps)"$'\n'
+        YAML+="$(just _job-yaml "pd-config-decode-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_QPS}}" qps)"$'\n'
+        YAML+="$(just _job-yaml "pd-config-agg-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_QPS}}" qps)"$'\n'
         COUNT=$((COUNT + 3))
       fi
     done

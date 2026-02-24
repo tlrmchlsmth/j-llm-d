@@ -3,9 +3,9 @@ kind: Job
 metadata:
     name: ${JOB_NAME}
     labels:
-    app: pd-config-bench
-    pd-config/workload: ${WORKLOAD_TYPE}
-    pd-config/tp: "${TP}"
+      app: pd-config-bench
+      pd-config/workload: ${WORKLOAD_TYPE}
+      pd-config/tp: "${TP}"
 spec:
   backoffLimit: 100
   podFailurePolicy:
@@ -140,40 +140,56 @@ spec:
                 if [ "${SWEEP_TYPE}" = "concurrency" ]; then
                   MC=$VAL
                   QPS=inf
+                  MC_ARG="--max-concurrency $MC"
+                  QPS_ARG=""
                   CALIB_N=$((MC > 20 ? MC : 20))
+
+                  echo "CALIBRATION: concurrency=$MC QPS=$QPS num_prompts=$CALIB_N"
+                  CALIB_OUTPUT=$(vllm bench serve \
+                    --base-url http://localhost:8000 \
+                    --model ${MODEL} \
+                    --dataset-name random \
+                    --random-input-len ${ISL} \
+                    --random-output-len ${OSL} \
+                    --num-prompts $CALIB_N \
+                    --ignore-eos \
+                    ${MC_ARG} \
+                    ${QPS_ARG} \
+                    --seed $(date +%M%H%M%S) 2>&1)
+                  echo "$CALIB_OUTPUT"
+
+                  if [ "${WORKLOAD_TYPE}" = "decode" ]; then
+                    THROUGHPUT=$(echo "$CALIB_OUTPUT" | grep -i "Output token throughput" | grep -oE '[0-9]+\.[0-9]+' | tail -1)
+                    TOKENS_PER_REQ=${OSL}
+                  else
+                    THROUGHPUT=$(echo "$CALIB_OUTPUT" | grep -i "Total Token throughput" | grep -oE '[0-9]+\.[0-9]+' | tail -1)
+                    TOKENS_PER_REQ=$((${ISL} + ${OSL}))
+                  fi
+                  if [ -n "${THROUGHPUT:-}" ]; then
+                    NP=$(python3 -c "import math; r=float('$THROUGHPUT')/$TOKENS_PER_REQ; print(max(${MIN_PROMPTS}, math.ceil(r * ${TARGET_DURATION})))")
+                  else
+                    NP=${MIN_PROMPTS}
+                  fi
+                  echo "COMPUTED_NUM_PROMPTS: $NP (throughput=${THROUGHPUT:-n/a} tok/s)"
+
                 else
                   MC=None
                   QPS=$VAL
-                  [[ "$QPS" == "inf" ]] && CALIB_N=1024 || CALIB_N=$(( QPS > 20 ? QPS : 20 ))
+                  MC_ARG=""
+                  QPS_ARG="--request-rate ${QPS}"
+
+                  if [ "${WORKLOAD_TYPE}" = "decode" ]; then
+                    NP=${DECODE_QPS_NP}
+                  elif [ "${WORKLOAD_TYPE}" = "prefill" ]; then
+                    NP=${PREFILL_QPS_NP}
+                  else
+                    NP=${AGG_QPS_NP}
+                  fi
+                  
+                  echo "NP = $NP"
                 fi
 
-                echo "CALIBRATION: concurrency=$MC num_prompts=$CALIB_N"
-                CALIB_OUTPUT=$(vllm bench serve \
-                  --base-url http://localhost:8000 \
-                  --model ${MODEL} \
-                  --dataset-name random \
-                  --random-input-len ${ISL} \
-                  --random-output-len ${OSL} \
-                  --max-concurrency $MC \
-                  --request-rate $QPS \
-                  --num-prompts $CALIB_N \
-                  --ignore-eos \
-                  --seed $(date +%M%H%M%S) 2>&1)
-                echo "$CALIB_OUTPUT"
 
-                if [ "${WORKLOAD_TYPE}" = "decode" ]; then
-                  THROUGHPUT=$(echo "$CALIB_OUTPUT" | grep -i "Output token throughput" | grep -oE '[0-9]+\.[0-9]+' | tail -1)
-                  TOKENS_PER_REQ=${OSL}
-                else
-                  THROUGHPUT=$(echo "$CALIB_OUTPUT" | grep -i "Total Token throughput" | grep -oE '[0-9]+\.[0-9]+' | tail -1)
-                  TOKENS_PER_REQ=$((${ISL} + ${OSL}))
-                fi
-                if [ -n "${THROUGHPUT:-}" ]; then
-                  NP=$(python3 -c "import math; r=float('$THROUGHPUT')/$TOKENS_PER_REQ; print(max(${MIN_PROMPTS}, math.ceil(r * ${TARGET_DURATION})))")
-                else
-                  NP=${MIN_PROMPTS}
-                fi
-                echo "COMPUTED_NUM_PROMPTS: $NP (throughput=${THROUGHPUT:-n/a} tok/s)"
 
                 echo "BENCH_RUN: concurrency=$MC tp=${TP} dp=${DP} workload=${WORKLOAD_TYPE} num_prompts=$NP"
                 vllm bench serve \
@@ -182,12 +198,12 @@ spec:
                   --dataset-name random \
                   --random-input-len ${ISL} \
                   --random-output-len ${OSL} \
-                  --max-concurrency $MC \
-                  --request-rate $QPS \
+                  ${MC_ARG} \
+                  ${QPS_ARG} \
                   --num-prompts $NP \
                   --ignore-eos \
                   --seed $(date +%M%H%M%S)
-                echo "BENCH_RUN_END: concurrency=$MC"
+                echo "BENCH_RUN_END: concurrency=$MC QPS=$QPS"
               done
 
               echo ""

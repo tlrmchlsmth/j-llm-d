@@ -1,0 +1,68 @@
+# ConfigMap for customizing the Istio-generated gateway deployment.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wide-ep-llm-d-gateway-options
+data:
+  deployment: |
+    spec:
+      template:
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: ["amd64"]
+          containers:
+          - name: istio-proxy
+            resources:
+              requests:
+                cpu: "8"
+                memory: 16Gi
+              limits:
+                cpu: "8"
+                memory: 16Gi
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: wide-ep-llm-d-inference-gateway
+  labels:
+    istio.io/enable-inference-extproc: "true"
+spec:
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: wide-ep-llm-d-gateway-options
+  gatewayClassName: istio
+  listeners:
+  - name: default
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Same
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wide-ep-llm-d-inference-gateway-istio
+  labels:
+    gateway.networking.k8s.io/gateway-name: wide-ep-llm-d-inference-gateway
+    istio.io/enable-inference-extproc: "true"
+spec:
+  selector:
+    gateway.networking.k8s.io/gateway-name: wide-ep-llm-d-inference-gateway
+  ports:
+  - name: status-port
+    port: 15021
+    protocol: TCP
+    targetPort: 15021
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: 8080

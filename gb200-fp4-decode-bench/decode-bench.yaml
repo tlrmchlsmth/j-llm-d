@@ -1,0 +1,321 @@
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: wide-ep-llm-d-decode-bench
+  labels:
+    llm-d.ai/inferenceServing: "true"
+    llm-d.ai/model: DeepSeek-R1-0528-FP4-v2
+    llm-d.ai/role: decode
+    llm-d.ai/deployment: decode-bench
+spec:
+  replicas: 1
+  leaderWorkerTemplate:
+    size: 4
+    workerTemplate:
+      metadata:
+        labels:
+          llm-d.ai/inferenceServing: "true"
+          llm-d.ai/model: DeepSeek-R1-0528-FP4-v2
+          llm-d.ai/role: decode
+          llm-d.ai/deployment: decode-bench
+      spec:
+        serviceAccountName: deepseek-r1
+        imagePullSecrets:
+          - name: rh-ee-ecrncevi-ecrncevi-vllm-pull-pull-secret
+        volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 2Gi
+          - name: lustre
+            persistentVolumeClaim:
+              claimName: lustre-pvc-vllm
+        resourceClaims:
+          - name: compute-domain-channel
+            resourceClaimTemplateName: llm-d-dev-claim
+        initContainers:
+          - name: routing-proxy-rank0
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:latest@sha256:e408208da659a8d5b33be94eaaff437c0af8b0ea920a87e023901d66ae62a9bc
+            imagePullPolicy: Always
+            args:
+              - --port=8000
+              - --vllm-port=8200
+              - --secure-proxy=false
+              - --connector=nixlv2
+            ports:
+              - containerPort: 8000
+                name: proxy-rank0
+                protocol: TCP
+            restartPolicy: Always
+            resources: {}
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+          - name: routing-proxy-rank1
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:latest@sha256:e408208da659a8d5b33be94eaaff437c0af8b0ea920a87e023901d66ae62a9bc
+            imagePullPolicy: Always
+            args:
+              - --port=8001
+              - --vllm-port=8201
+              - --secure-proxy=false
+              - --connector=nixlv2
+            ports:
+              - containerPort: 8001
+                name: proxy-rank1
+                protocol: TCP
+            restartPolicy: Always
+            resources: {}
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+          - name: routing-proxy-rank2
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:latest@sha256:e408208da659a8d5b33be94eaaff437c0af8b0ea920a87e023901d66ae62a9bc
+            imagePullPolicy: Always
+            args:
+              - --port=8002
+              - --vllm-port=8202
+              - --secure-proxy=false
+              - --connector=nixlv2
+            ports:
+              - containerPort: 8002
+                name: proxy-rank2
+                protocol: TCP
+            restartPolicy: Always
+            resources: {}
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+          - name: routing-proxy-rank3
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:latest@sha256:e408208da659a8d5b33be94eaaff437c0af8b0ea920a87e023901d66ae62a9bc
+            imagePullPolicy: Always
+            args:
+              - --port=8003
+              - --vllm-port=8203
+              - --secure-proxy=false
+              - --connector=nixlv2
+            ports:
+              - containerPort: 8003
+                name: proxy-rank3
+                protocol: TCP
+            restartPolicy: Always
+            resources: {}
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+        containers:
+          - name: vllm
+            image: quay.io/rh-ee-ecrncevi/llm-dev-cuda13:v0.5.0-arm64-upstream-824f9e8f3c7f0a688b6093d0c85ed6b39ba314e1
+            securityContext:
+              capabilities:
+                add:
+                  - IPC_LOCK
+                  - SYS_RAWIO
+              runAsGroup: 0
+              runAsUser: 0
+            imagePullPolicy: Always
+            command:
+              - /bin/bash
+              - -c
+            args:
+              - |-
+                set -e
+                #################
+                # RUN vLLM decode-bench with external DP load balancing
+                # Launches 4 independent vLLM processes (one per GPU)
+                # Routing sidecar maps port 800X -> localhost:820X
+                #################
+                START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
+
+                # Forward logs to Lustre for crash debugging
+                LOG_DIR="/mnt/lustre/vllm-vlm-elvircrn/logs/decode-bench"
+                mkdir -p $LOG_DIR
+                LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d_%H%M%S).log"
+                exec > >(tee -a "$LOG_FILE") 2>&1
+                echo "=== Decode-bench worker starting at $(date) ==="
+                source /opt/vllm/bin/activate
+                uv pip uninstall pplx-kernels
+
+                # Cherry-pick NVFP4 EPLB contiguity fix
+                cd /opt/vllm-source
+                git remote add elvircrn https://github.com/elvircrn/vllm.git 2>/dev/null || true
+                git fetch elvircrn fix-eplb-nvfp4-contiguous
+                git fetch elvircrn mla-fused-concat-quant
+                git cherry-pick --no-commit 00a944ef8e
+
+                # MLA torch.concat optimization
+                git cherry-pick --no-commit e93799b752
+
+                for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
+                  VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
+                  FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
+                  CUDA_VISIBLE_DEVICES=$R vllm serve \
+                    nvidia/DeepSeek-R1-0528-FP4-v2 \
+                    --port $((8200 + R)) \
+                    --disable-uvicorn-access-log \
+                    --enable-expert-parallel \
+                    --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
+                    --data-parallel-rank $((START_RANK + R)) \
+                    --data-parallel-size-local 1 \
+                    --data-parallel-address ${LWS_LEADER_ADDRESS} \
+                    --data-parallel-rpc-port 5555 \
+                    --trust-remote-code \
+                    --kv_transfer_config '{"kv_connector":"DecodeBenchConnector",
+                                           "kv_role":"kv_both",
+                                           "kv_connector_extra_config": {
+                                             "fill_mean": 0.015,
+                                             "fill_std": 0.0
+                                           }}' \
+                    --async-scheduling \
+                    --all2all-backend "deepep_low_latency" \
+                    --gpu-memory-utilization 0.85 \
+                    --max-num-batched-tokens $VLLM_MOE_DP_CHUNK_SIZE \
+                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+                    --enable-force-include-usage &
+                done
+
+                # If any process exits, kill all and restart pod
+                wait -n
+                kill $(jobs -p) 2>/dev/null
+                exit 1
+
+            env:
+              - name: HF_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: hf-token
+                    key: HF_TOKEN
+              - name: MAX_JOBS
+                value: "64"
+              - name: CMAKE_BUILD_PARALLEL_LEVEL
+                value: "64"
+              - name: MAKEFLAGS
+                value: "-j64"
+              - name: NVCC_THREADS
+                value: "64"
+              - name: CUDA_HOME
+                value: "/usr/local/cuda-13"
+              - name: HF_HOME
+                value: /mnt/lustre/vllm-vlm-elvircrn
+              - name: TRANSFORMERS_CACHE
+                value: /mnt/lustre/vllm-vlm-elvircrn
+              - name: HF_HUB_CACHE
+                value: /mnt/lustre/vllm-vlm-elvircrn
+
+              # Compile caches - persist across restarts for faster startup
+              - name: VLLM_CACHE_ROOT
+                value: /mnt/lustre/vllm-vlm-elvircrn/vllm_cache
+              - name: FLASHINFER_CACHE_DIR
+                value: /mnt/lustre/vllm-vlm-elvircrn/flashinfer_cache
+
+              # Data parallelism - GPUs per pod
+              - name: DP_SIZE_LOCAL
+                value: "4"
+
+              # NVFP4 dispatch + masked_gemm required for NVFP4 with DeepEP low-latency
+              - name: VLLM_DEEPEPLL_NVFP4_DISPATCH
+                value: "1"
+              - name: VLLM_FLASHINFER_MOE_BACKEND
+                value: "masked_gemm"
+
+              # Needed for reasonable balancedness when using the DecodeBenchConnector
+              - name: VLLM_MOE_ROUTING_SIMULATION_STRATEGY
+                value: "uniform_random"
+
+              # NVSHMEM_QP_DEPTH should be >= 2 * VLLM_MOE_DP_CHUNK_SIZE
+              - name: NVSHMEM_QP_DEPTH
+                value: "2048"
+              - name: VLLM_MOE_DP_CHUNK_SIZE
+                value: "768"
+
+              # DeepEP configuration
+              - name: VLLM_DEEPEP_LOW_LATENCY_ALLOW_NVLINK
+                value: "1"
+              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
+                value: "1"
+
+              # Common vLLM settings
+              - name: TRITON_LIBCUDA_PATH
+                value: /usr/lib64
+              - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
+                value: "1"
+              - name: VLLM_USE_DEEP_GEMM
+                value: "1"
+              - name: NVIDIA_GDRCOPY
+                value: enabled
+
+              # Use fabric handles for NVSHMEM symmetric heap (MNNVL)
+              - name: NVSHMEM_CUMEM_HANDLE_TYPE
+                value: FABRIC
+
+              # Override container default that disables VMM
+              - name: NVSHMEM_DISABLE_CUDA_VMM
+                value: "0"
+
+              # NIXL side channel for KV cache coordination
+              - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+
+              # UCX configuration for NIXL
+              - name: UCX_NET_DEVICES
+                value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+
+              # Engine startup timeout
+              - name: VLLM_ENGINE_READY_TIMEOUT_S
+                value: "1800"
+
+              # Debug logging
+              - name: VLLM_LOGGING_LEVEL
+                value: INFO
+              - name: NCCL_DEBUG
+                value: INFO
+              - name: NVSHMEM_DEBUG
+                value: INFO
+
+              # Avoid HF API requests
+              - name: HF_HUB_OFFLINE
+                value: "1"
+              - name: TRANSFORMERS_OFFLINE
+                value: "1"
+
+              - name: VLLM_MLA_FUSED_CONCAT_QUANT
+                value: "1"
+
+            ports:
+              - containerPort: 8200
+                name: vllm-rank0
+                protocol: TCP
+              - containerPort: 8201
+                name: vllm-rank1
+                protocol: TCP
+              - containerPort: 8202
+                name: vllm-rank2
+                protocol: TCP
+              - containerPort: 8203
+                name: vllm-rank3
+                protocol: TCP
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              initialDelaySeconds: 60
+              periodSeconds: 10
+            resources:
+              claims:
+                - name: compute-domain-channel
+              limits:
+                ephemeral-storage: 75Gi
+                memory: 512Gi
+                nvidia.com/gpu: "4"
+              requests:
+                cpu: 64
+                ephemeral-storage: 75Gi
+                memory: 512Gi
+                nvidia.com/gpu: "4"
+            volumeMounts:
+              - mountPath: /dev/shm
+                name: dshm
+              - name: lustre
+                mountPath: /mnt/lustre/vllm-vlm-elvircrn
+            workingDir: /code

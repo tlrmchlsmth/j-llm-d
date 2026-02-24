@@ -62,9 +62,6 @@ create-secrets:
   && kubectl create secret generic gh-token-secret --from-literal=GH_TOKEN={{GH_TOKEN}} -n {{NAMESPACE}}
 
 start-poker:
-<<<<<<< HEAD
-    POKER_NAME={{POKER_NAME}} envsubst '${POKER_NAME}' < poker/poker.yaml | {{KN}} apply -f -
-=======
   #!/usr/bin/env bash
   export POKER_IMAGE="{{env_var('POKER_IMAGE')}}"
   export POKER_TAG="{{env_var('POKER_TAG')}}"
@@ -77,7 +74,6 @@ start-poker:
   fi
 
   envsubst '${POKER_IMAGE} ${POKER_TAG}' < poker/poker.yaml | $KUBECTL_CMD apply -f -
->>>>>>> c97f430 (Add GB200 FP4 deployment, benchmarking, and profiling tools)
 
 # Fetch decode pod names and IPs and cache them
 get-decode-pods:
@@ -111,11 +107,6 @@ poke:
   export NAMESPACE="{{NAMESPACE}}"
   export GRAFANA_URL="http://grafana.vllm.svc.cluster.local"
 
-<<<<<<< HEAD
-  envsubst '${BASE_URL} ${NAMESPACE}' < Justfile.remote > .tmp/Justfile.remote.tmp
-  kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/{{POKER_NAME}}:/app/Justfile
-  {{KN}} exec -it {{POKER_NAME}} -- /bin/zsh
-=======
   envsubst '${BASE_URL} ${NAMESPACE} ${GRAFANA_URL}' < Justfile.remote > .tmp/Justfile.remote.tmp
   $KUBECTL_CMD cp .tmp/Justfile.remote.tmp poker:/app/Justfile
   $KUBECTL_CMD cp annotate.sh poker:/app/annotate.sh
@@ -123,7 +114,6 @@ poke:
   $KUBECTL_CMD cp .tmp/prefill_config.yaml poker:/app/prefill_config.yaml
   $KUBECTL_CMD exec -it poker -- chmod +x /app/annotate.sh
   $KUBECTL_CMD exec -it poker -- /bin/zsh
->>>>>>> c97f430 (Add GB200 FP4 deployment, benchmarking, and profiling tools)
 
 
 # Wait for poker + model serving pods to be ready, then run `just eval` from poker
@@ -158,7 +148,7 @@ auto-eval:
   cat llm-d/guides/wide-ep-lws/manifests/modelserver/gb200_dsv31_fp4/decode.yaml 2>/dev/null > .tmp/decode_config.yaml || echo "decode config not found" > .tmp/decode_config.yaml
   cat llm-d/guides/wide-ep-lws/manifests/modelserver/gb200_dsv31_fp4/prefill.yaml 2>/dev/null > .tmp/prefill_config.yaml || echo "prefill config not found" > .tmp/prefill_config.yaml
 
-  export BASE_URL="http://llm-d-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
+  export BASE_URL="http://wide-ep-llm-d-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
   export NAMESPACE="{{NAMESPACE}}"
   export GRAFANA_URL="http://grafana.vllm.svc.cluster.local"
 
@@ -188,7 +178,7 @@ parallel-guidellm RR CONCURRENT_PER_WORKER REQUESTS_PER_WORKER INPUT_LEN OUTPUT_
     RATE={{RR}} \
     INPUT_LEN={{INPUT_LEN}} \
     OUTPUT_LEN={{OUTPUT_LEN}} \
-    BASE_URL="http://llm-d-inference-gateway-istio.vllm.svc.cluster.local" \
+    BASE_URL="http://wide-ep-llm-d-inference-gateway-istio.vllm.svc.cluster.local" \
     OUTPUT_PATH="parallel-guidellm-$(date +%Y%m%d-%H%M%S)" \
     POKER_IMAGE="{{env_var('POKER_IMAGE')}}" \
     POKER_TAG="{{env_var('POKER_TAG')}}" \
@@ -310,7 +300,6 @@ dev-stop:
 flush-cache:
   {{KN}} exec vllm-dev -- bash -c 'rm -rf /mnt/lustre/tms/vllm_cache_extdp /mnt/lustre/tms/flashinfer_cache_extdp && echo "Compile caches flushed"'
 
-<<<<<<< HEAD
 # Profile all decode pods, copy traces, combine, fix, and open in Finder
 profile:
   #!/usr/bin/env bash
@@ -352,7 +341,7 @@ profile:
   just process-traces "$N"
   echo "Opening $TRACE_DIR"
   open "$TRACE_DIR"
-=======
+
 start-fp4:
   cd {{EXAMPLE_DIR}} && {{KN_FP4}} apply -k ./manifests/modelserver/gb200_dsv31_fp4
 
@@ -361,7 +350,6 @@ stop-fp4:
 
 restart-fp4:
   just stop-fp4 && just start-fp4
->>>>>>> c97f430 (Add GB200 FP4 deployment, benchmarking, and profiling tools)
 
 # Copy PyTorch traces from all decode pods to local ./traces/N directory
 copy-traces:

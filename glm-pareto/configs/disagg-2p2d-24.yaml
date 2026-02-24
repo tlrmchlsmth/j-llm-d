@@ -8,5 +8,5 @@ decode:
 
 prefill:
   parallelism:
-    tensor: 2
-  replicas: 4
+    tensor: 4
+  replicas: 2

@@ -13,8 +13,6 @@
 *.tmp
 *.temp
 
-venv/
-
 # Generated helm values (disagg NIC config)
 glm-disagg/ms/values-nic-generated.yaml
 

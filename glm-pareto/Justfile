@@ -6,7 +6,7 @@ export NSP := env("NSP", env("USER", "anon"))
 
 # Configs to sweep (space-separated). Each name maps to configs/<name>.yaml.
 # Prefix determines base template: agg-* → glm-agg, disagg-* → glm-disagg.
-export CONFIGS := env("CONFIGS", "disagg-2p3d-32")
+export CONFIGS := env("CONFIGS", "disagg-3p5d-32 disagg-2p2d-24 disagg-2p1d-16 disagg-1p1d-8 agg-tp8 agg-tp4")
 
 # Max GPUs to use concurrently (configs are scheduled to fit within this budget)
 export MAX_GPUS := env("MAX_GPUS", "32")
@@ -24,7 +24,6 @@ export IMAGE := env("IMAGE", "quay.io/tms/poker:0.0.13")
 
 # Extra vLLM args to inject into all model server containers (space-separated)
 export EXTRA_ARGS := env("EXTRA_ARGS", "")
-
 
 default:
   just --list

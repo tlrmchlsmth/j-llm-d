@@ -17,7 +17,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: poker
-          image: quay.io/tms/poker:0.0.10
+          image: ${POKER_IMAGE}:${POKER_TAG}
           imagePullPolicy: Always
           resources:
             limits:
@@ -37,10 +37,10 @@ spec:
               echo "GUIDELLM__MAX_CONCURRENCY=${GUIDELLM__MAX_CONCURRENCY}" > /guide-llm/${OUTPUT_PATH}/cmd
               echo "GUIDELLM__REQUEST_TIMEOUT=${GUIDELLM__REQUEST_TIMEOUT}" >> /guide-llm/${OUTPUT_PATH}/cmd
               echo "exec guidellm benchmark \
-                --target "http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local" \
+                --target "${BASE_URL}" \
                 --rate-type constant \
                 --max-requests "${NUM_REQUESTS}" \
-                --rate "1024" \
+                --rate "${RATE}" \
                 --data '{"prompt_tokens": ${INPUT_LEN}, 
                          "output_tokens": ${OUTPUT_LEN}}' \
                 --output-path "/guide-llm/${OUTPUT_PATH}/${JOB_COMPLETION_INDEX}.json" \
@@ -51,10 +51,10 @@ spec:
 
               
               exec guidellm benchmark \
-                --target "http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local" \
+                --target "${BASE_URL}" \
                 --rate-type constant \
                 --max-requests "${NUM_REQUESTS}" \
-                --rate "1024" \
+                --rate "${RATE}" \
                 --data '{"prompt_tokens": ${INPUT_LEN}, 
                          "output_tokens": ${OUTPUT_LEN}}' \
                 --output-path "/guide-llm/${OUTPUT_PATH}/${JOB_COMPLETION_INDEX}.json" \
@@ -80,4 +80,4 @@ spec:
       volumes:
         - name: guide-llm
           persistentVolumeClaim:
-            claimName: guide-llm
+            claimName: lustre-pvc-vllm

@@ -25,7 +25,7 @@ spec:
                 values: ["amd64"]
       containers:
         - name: poker
-          image: quay.io/tms/poker:0.0.12
+          image: ${POKER_IMAGE}:${POKER_TAG}
           imagePullPolicy: Always
           resources:
             limits:
@@ -38,18 +38,18 @@ spec:
               # These are poorly behaved.
               #  --warmup-percent "0.20" \
               #  --cooldown-percent "0.20" \
-              
+
               mkdir -p /guide-llm/${OUTPUT_PATH}
 
               # For experiment tracking
               echo "GUIDELLM__MAX_CONCURRENCY=${GUIDELLM__MAX_CONCURRENCY}" > /guide-llm/${OUTPUT_PATH}/cmd
               echo "GUIDELLM__REQUEST_TIMEOUT=${GUIDELLM__REQUEST_TIMEOUT}" >> /guide-llm/${OUTPUT_PATH}/cmd
               echo "exec guidellm benchmark \
-                --target "http://wide-ep-gb200-inference-gateway-istio.vllm.svc.cluster.local" \
+                --target "${BASE_URL}" \
                 --rate-type constant \
                 --max-requests "${NUM_REQUESTS}" \
-                --rate "1024" \
-                --data '{"prompt_tokens": ${INPUT_LEN}, 
+                --rate "${RATE}" \
+                --data '{"prompt_tokens": ${INPUT_LEN},
                          "output_tokens": ${OUTPUT_LEN}}' \
                 --output-path "/guide-llm/${OUTPUT_PATH}/${JOB_COMPLETION_INDEX}.json" \
                 --output-sampling 500 \
@@ -57,13 +57,13 @@ spec:
                 --disable-progress" >> /guide-llm/${OUTPUT_PATH}/cmd
 
 
-              
+
               exec guidellm benchmark \
-                --target "http://wide-ep-gb200-inference-gateway-istio.vllm.svc.cluster.local" \
+                --target "${BASE_URL}" \
                 --rate-type constant \
                 --max-requests "${NUM_REQUESTS}" \
-                --rate "1024" \
-                --data '{"prompt_tokens": ${INPUT_LEN}, 
+                --rate "${RATE}" \
+                --data '{"prompt_tokens": ${INPUT_LEN},
                          "output_tokens": ${OUTPUT_LEN}}' \
                 --output-path "/guide-llm/${OUTPUT_PATH}/${JOB_COMPLETION_INDEX}.json" \
                 --output-sampling 500 \
@@ -84,3 +84,5 @@ spec:
 
       volumes:
         - name: guide-llm
+          persistentVolumeClaim:
+            claimName: lustre-pvc-vllm

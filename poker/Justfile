@@ -1,11 +1,13 @@
-IMAGE := "quay.io/tms/poker"
+set dotenv-load := true
+set dotenv-filename := "../.env"
+set dotenv-required := true
 
 default:
   just --list
 
 # Build for a specific arch (arm64 or amd64)
 build-arch VERSION ARCH:
-  podman build --platform linux/{{ARCH}} -t {{IMAGE}}:{{VERSION}}-{{ARCH}} .
+  podman build --platform linux/{{ARCH}} -t $POKER_IMAGE:{{VERSION}}-{{ARCH}} .
 
 # Build both architectures
 build VERSION:
@@ -14,7 +16,7 @@ build VERSION:
 
 # Push arch-specific images
 push-arch VERSION ARCH:
-  podman push {{IMAGE}}:{{VERSION}}-{{ARCH}}
+  podman push $POKER_IMAGE:{{VERSION}}-{{ARCH}}
 
 # Push both arch images
 push-images VERSION:
@@ -23,14 +25,14 @@ push-images VERSION:
 
 # Create and push multi-arch manifest
 push-manifest VERSION:
-  podman manifest create {{IMAGE}}:{{VERSION}}
-  podman manifest add {{IMAGE}}:{{VERSION}} {{IMAGE}}:{{VERSION}}-arm64
-  podman manifest add {{IMAGE}}:{{VERSION}} {{IMAGE}}:{{VERSION}}-amd64
-  podman manifest push {{IMAGE}}:{{VERSION}}
+  podman manifest create $POKER_IMAGE:{{VERSION}}
+  podman manifest add $POKER_IMAGE:{{VERSION}} $POKER_IMAGE:{{VERSION}}-arm64
+  podman manifest add $POKER_IMAGE:{{VERSION}} $POKER_IMAGE:{{VERSION}}-amd64
+  podman manifest push $POKER_IMAGE:{{VERSION}}
 
 # Build and release (full workflow)
 release VERSION:
   just build {{VERSION}}
   just push-images {{VERSION}}
   just push-manifest {{VERSION}}
-  @echo "Released {{IMAGE}}:{{VERSION}}"
+  @echo "Released $POKER_IMAGE:{{VERSION}}"

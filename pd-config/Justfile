@@ -19,6 +19,8 @@ ENABLE_EP := "false"   # Enable --enable-expert-parallel (used by bench, always 
 MIN_GPU := "1"         # Min GPUs per job (skip configs below this)
 MAX_GPU := "8"         # Max GPUs per job (limited by GPUs per node)
 
+QPS := "1 16 32 64 128 256 inf"
+
 # Prefill workload
 PREFILL_ISL := "4096"
 PREFILL_OSL := "1"
@@ -38,7 +40,7 @@ default:
   just --list
 
 # Render a single Job YAML to stdout (separated by ---)
-_job-yaml JOB_NAME GPU_COUNT TP DP ENABLE_EP WORKLOAD_TYPE ISL OSL CONCURRENCY_LEVELS:
+_job-yaml JOB_NAME GPU_COUNT TP DP ENABLE_EP WORKLOAD_TYPE ISL OSL SWEEP_RANGE SWEEP_TYPE:
   #!/usr/bin/env bash
   # 1. Define the network generator function
   generate_multus_networks() {
@@ -69,19 +71,20 @@ _job-yaml JOB_NAME GPU_COUNT TP DP ENABLE_EP WORKLOAD_TYPE ISL OSL CONCURRENCY_L
     WORKLOAD_TYPE={{WORKLOAD_TYPE}} \
     ISL={{ISL}} \
     OSL={{OSL}} \
-    CONCURRENCY_LEVELS="{{CONCURRENCY_LEVELS}}" \
+    SWEEP_RANGE="{{SWEEP_RANGE}}" \
+    SWEEP_TYPE="{{SWEEP_TYPE}}" \
     TARGET_DURATION={{TARGET_DURATION}} \
     MIN_PROMPTS={{MIN_PROMPTS}} \
     GPU_MEM_UTIL={{GPU_MEM_UTIL}} \
     HF_CACHE_HOST_PATH="{{HF_CACHE}}" \
     PRIORITY_CLASS="{{PRIORITY_CLASS}}" \
     MULTUS_NETWORKS="$MULTUS_NETWORKS" \
-    envsubst '${JOB_NAME} ${GPU_COUNT} ${TP} ${DP} ${ENABLE_EP} ${MODEL} ${VLLM_IMAGE} ${WORKLOAD_TYPE} ${ISL} ${OSL} ${CONCURRENCY_LEVELS} ${TARGET_DURATION} ${MIN_PROMPTS} ${GPU_MEM_UTIL} ${HF_CACHE_HOST_PATH} ${PRIORITY_CLASS} ${MULTUS_NETWORKS}' \
+    envsubst '${JOB_NAME} ${GPU_COUNT} ${TP} ${DP} ${ENABLE_EP} ${MODEL} ${VLLM_IMAGE} ${WORKLOAD_TYPE} ${ISL} ${OSL} ${SWEEP_RANGE} ${SWEEP_TYPE} ${TARGET_DURATION} ${MIN_PROMPTS} ${GPU_MEM_UTIL} ${HF_CACHE_HOST_PATH} ${PRIORITY_CLASS} ${MULTUS_NETWORKS}' \
       < job.yaml
 
 # Launch a single benchmark Job
-_job JOB_NAME GPU_COUNT TP DP ENABLE_EP WORKLOAD_TYPE ISL OSL CONCURRENCY_LEVELS:
-  just _job-yaml {{JOB_NAME}} {{GPU_COUNT}} {{TP}} {{DP}} {{ENABLE_EP}} {{WORKLOAD_TYPE}} {{ISL}} {{OSL}} "{{CONCURRENCY_LEVELS}}" \
+_job JOB_NAME GPU_COUNT TP DP ENABLE_EP WORKLOAD_TYPE ISL OSL SWEEP_RANGE SWEEP_TYPE:
+  just _job-yaml {{JOB_NAME}} {{GPU_COUNT}} {{TP}} {{DP}} {{ENABLE_EP}} {{WORKLOAD_TYPE}} {{ISL}} {{OSL}} "{{SWEEP_RANGE}}" {{SWEEP_TYPE}} \
     | {{KN}} replace --force -f -
 
 # Launch TP sweep Jobs (prefill + decode at TP=1,2,4,8, DP=1, EP configurable)
@@ -94,8 +97,8 @@ bench-dp:
   set -euo pipefail
   YAML=""
   for DP in 1 2 4 8; do
-    YAML+="$(just _job-yaml "pd-config-prefill-dp${DP}" $DP 1 $DP true prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}")"$'\n'
-    YAML+="$(just _job-yaml "pd-config-decode-dp${DP}" $DP 1 $DP true decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}")"$'\n'
+    YAML+="$(just _job-yaml "pd-config-prefill-dp${DP}" $DP 1 $DP true prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}" concurrency)"$'\n'
+    YAML+="$(just _job-yaml "pd-config-decode-dp${DP}" $DP 1 $DP true decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}" concurrency)"$'\n'
   done
   echo "$YAML" | {{KN}} replace --force -f -
 
@@ -115,9 +118,30 @@ bench-full:
       # Enable EP if using DP
       if [ $DP -ne 1 ]; then EP=true; else EP=false; fi
       if [ $GPU_COUNT -ge {{MIN_GPU}} ] && [ $GPU_COUNT -le {{MAX_GPU}} ]; then
-        YAML+="$(just _job-yaml "pd-config-prefill-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}")"$'\n'
-        YAML+="$(just _job-yaml "pd-config-decode-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}")"$'\n'
-        YAML+="$(just _job-yaml "pd-config-agg-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}")"$'\n'
+        YAML+="$(just _job-yaml "pd-config-prefill-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}" concurrency)"$'\n'
+        YAML+="$(just _job-yaml "pd-config-decode-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}" concurrency)"$'\n'
+        YAML+="$(just _job-yaml "pd-config-agg-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}" concurrency)"$'\n'
+        COUNT=$((COUNT + 3))
+      fi
+    done
+  done
+  echo "$YAML" | {{KN}} replace --force -f -
+  echo "Launched $COUNT jobs ($(( COUNT / 3 )) TP×DP configs × 3 workloads)"
+
+bench-full-rr:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  COUNT=0
+  YAML=""
+  for TP in 1 2 4 8; do
+    for DP in 1 2 4 8; do
+      GPU_COUNT=$((TP * DP))
+      # Enable EP if using DP
+      if [ $DP -ne 1 ]; then EP=true; else EP=false; fi
+      if [ $GPU_COUNT -ge {{MIN_GPU}} ] && [ $GPU_COUNT -le {{MAX_GPU}} ]; then
+        YAML+="$(just _job-yaml "pd-config-prefill-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{QPS}}" qps)"$'\n'
+        YAML+="$(just _job-yaml "pd-config-decode-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP decode {{DECODE_ISL}} {{DECODE_OSL}} "{{QPS}}" qps)"$'\n'
+        YAML+="$(just _job-yaml "pd-config-agg-tp${TP}dp${DP}" $GPU_COUNT $TP $DP $EP aggregated {{AGG_ISL}} {{AGG_OSL}} "{{QPS}}" qps)"$'\n'
         COUNT=$((COUNT + 3))
       fi
     done
@@ -132,22 +156,22 @@ bench-all:
 # (internal) Emit YAML for bench recipe
 _bench-yaml:
   #!/usr/bin/env bash
-  just _job-yaml pd-config-prefill-tp1 1 1 1 {{ENABLE_EP}} prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
-  just _job-yaml pd-config-prefill-tp2 2 2 1 {{ENABLE_EP}} prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
-  just _job-yaml pd-config-prefill-tp4 4 4 1 {{ENABLE_EP}} prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
-  just _job-yaml pd-config-prefill-tp8 8 8 1 {{ENABLE_EP}} prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}"
-  just _job-yaml pd-config-decode-tp1 1 1 1 {{ENABLE_EP}} decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
-  just _job-yaml pd-config-decode-tp2 2 2 1 {{ENABLE_EP}} decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
-  just _job-yaml pd-config-decode-tp4 4 4 1 {{ENABLE_EP}} decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
-  just _job-yaml pd-config-decode-tp8 8 8 1 {{ENABLE_EP}} decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}"
+  just _job-yaml pd-config-prefill-tp1 1 1 1 {{ENABLE_EP}} prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}" concurrency
+  just _job-yaml pd-config-prefill-tp2 2 2 1 {{ENABLE_EP}} prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}" concurrency
+  just _job-yaml pd-config-prefill-tp4 4 4 1 {{ENABLE_EP}} prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}" concurrency
+  just _job-yaml pd-config-prefill-tp8 8 8 1 {{ENABLE_EP}} prefill {{PREFILL_ISL}} {{PREFILL_OSL}} "{{PREFILL_CONCURRENCIES}}" concurrency
+  just _job-yaml pd-config-decode-tp1 1 1 1 {{ENABLE_EP}} decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}" concurrency
+  just _job-yaml pd-config-decode-tp2 2 2 1 {{ENABLE_EP}} decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}" concurrency
+  just _job-yaml pd-config-decode-tp4 4 4 1 {{ENABLE_EP}} decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}" concurrency
+  just _job-yaml pd-config-decode-tp8 8 8 1 {{ENABLE_EP}} decode {{DECODE_ISL}} {{DECODE_OSL}} "{{DECODE_CONCURRENCIES}}" concurrency
 
 # (internal) Emit YAML for bench-agg recipe
 _bench-agg-yaml:
   #!/usr/bin/env bash
-  just _job-yaml pd-config-agg-tp1 1 1 1 {{ENABLE_EP}} aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
-  just _job-yaml pd-config-agg-tp2 2 2 1 {{ENABLE_EP}} aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
-  just _job-yaml pd-config-agg-tp4 4 4 1 {{ENABLE_EP}} aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
-  just _job-yaml pd-config-agg-tp8 8 8 1 {{ENABLE_EP}} aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}"
+  just _job-yaml pd-config-agg-tp1 1 1 1 {{ENABLE_EP}} aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}" concurrency 
+  just _job-yaml pd-config-agg-tp2 2 2 1 {{ENABLE_EP}} aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}" concurrency
+  just _job-yaml pd-config-agg-tp4 4 4 1 {{ENABLE_EP}} aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}" concurrency
+  just _job-yaml pd-config-agg-tp8 8 8 1 {{ENABLE_EP}} aggregated {{AGG_ISL}} {{AGG_OSL}} "{{AGG_CONCURRENCIES}}" concurrency
 
 # Wait for all benchmark Jobs to complete
 wait:

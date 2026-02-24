@@ -1,8 +1,8 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: ${JOB_NAME}
-  labels:
+    name: ${JOB_NAME}
+    labels:
     app: pd-config-bench
     pd-config/workload: ${WORKLOAD_TYPE}
     pd-config/tp: "${TP}"
@@ -60,7 +60,12 @@ spec:
               echo "PD_CONFIG_START"
               echo "CONFIG: model=${MODEL} tp=${TP} dp=${DP} gpu_count=${GPU_COUNT} ep=${ENABLE_EP} workload=${WORKLOAD_TYPE} isl=${ISL} osl=${OSL}"
               echo "TARGET_DURATION: ${TARGET_DURATION}s  MIN_PROMPTS: ${MIN_PROMPTS}"
-              echo "CONCURRENCY_LEVELS: ${CONCURRENCY_LEVELS}"
+              if [ "${SWEEP_TYPE}" = "concurrency" ]; then
+                echo "CONCURRENCY_LEVELS: ${SWEEP_RANGE}"
+              fi
+              if [ "${SWEEP_TYPE}" = "qps" ]; then
+                echo "QPS : ${SWEEP_RANGE}"
+              fi
 
               # Configure decode specialization: DecodeBenchConnector fills KV cache
               # with dummy values so decode runs against a realistic ISL without
@@ -110,27 +115,38 @@ spec:
               done
               echo "vLLM server ready after ${ELAPSED}s"
 
-              # Extend decode concurrency range for higher GPU counts (more GPUs handle more users)
-              # Keeps base range for comparison, adds higher levels up to max_base * GPU_COUNT.
-              # Note: use BENCH_CONCURRENCIES (not ${CONCURRENCY_LEVELS}) for the loop
-              # because envsubst replaces all ${CONCURRENCY_LEVELS} at template time.
-              BENCH_CONCURRENCIES="${CONCURRENCY_LEVELS}"
-              SCALE_FACTOR=${GPU_COUNT}
-              if [ "${WORKLOAD_TYPE}" = "decode" ] && [ $SCALE_FACTOR -gt 1 ]; then
-                MAX_C=$(echo ${CONCURRENCY_LEVELS} | tr ' ' '\n' | sort -n | tail -1)
-                EXTRA=$((MAX_C * 2))
-                while [ $EXTRA -le $((MAX_C * SCALE_FACTOR)) ]; do
-                  BENCH_CONCURRENCIES="$BENCH_CONCURRENCIES $EXTRA"
-                  EXTRA=$((EXTRA * 2))
-                done
-                echo "EXTENDED_CONCURRENCIES: $BENCH_CONCURRENCIES (base + extended for ${GPU_COUNT} GPUs)"
+
+              BENCH_SWEEP_RANGE="${SWEEP_RANGE}"
+              if [ "${SWEEP_TYPE}" = "concurrency" ]; then
+                # Extend decode concurrency range for higher GPU counts (more GPUs handle more users)
+                # Keeps base range for comparison, adds higher levels up to max_base * GPU_COUNT.
+                # Note: use BENCH_CONCURRENCIES (not ${CONCURRENCY_LEVELS}) for the loop
+                # because envsubst replaces all ${CONCURRENCY_LEVELS} at template time.
+                SCALE_FACTOR=${GPU_COUNT}
+                if [ "${WORKLOAD_TYPE}" = "decode" ] && [ $SCALE_FACTOR -gt 1 ]; then
+                  MAX_C=$(echo ${SWEEP_RANGE} | tr ' ' '\n' | sort -n | tail -1)
+                  EXTRA=$((MAX_C * 2))
+                  while [ $EXTRA -le $((MAX_C * SCALE_FACTOR)) ]; do
+                    BENCH_SWEEP_RANGE="$BENCH_SWEEP_RANGE $EXTRA"
+                    EXTRA=$((EXTRA * 2))
+                  done
+                  echo "EXTENDED_CONCURRENCIES: $BENCH_CONCURRENCIES (base + extended for ${GPU_COUNT} GPUs)"
+                fi
               fi
 
               # Run benchmarks at each concurrency level
-              for MC in $BENCH_CONCURRENCIES; do
-                echo ""
+              for VAL in $BENCH_SWEEP_RANGE; do
 
-                CALIB_N=$((MC > 20 ? MC : 20))
+                if [ "${SWEEP_TYPE}" = "concurrency" ]; then
+                  MC=$VAL
+                  QPS=inf
+                  CALIB_N=$((MC > 20 ? MC : 20))
+                else
+                  MC=None
+                  QPS=$VAL
+                  [[ "$QPS" == "inf" ]] && CALIB_N=1024 || CALIB_N=$(( QPS > 20 ? QPS : 20 ))
+                fi
+
                 echo "CALIBRATION: concurrency=$MC num_prompts=$CALIB_N"
                 CALIB_OUTPUT=$(vllm bench serve \
                   --base-url http://localhost:8000 \
@@ -139,6 +155,7 @@ spec:
                   --random-input-len ${ISL} \
                   --random-output-len ${OSL} \
                   --max-concurrency $MC \
+                  --request-rate $QPS \
                   --num-prompts $CALIB_N \
                   --ignore-eos \
                   --seed $(date +%M%H%M%S) 2>&1)
@@ -166,6 +183,7 @@ spec:
                   --random-input-len ${ISL} \
                   --random-output-len ${OSL} \
                   --max-concurrency $MC \
+                  --request-rate $QPS \
                   --num-prompts $NP \
                   --ignore-eos \
                   --seed $(date +%M%H%M%S)

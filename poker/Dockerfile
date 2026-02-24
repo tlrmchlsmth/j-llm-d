@@ -11,7 +11,7 @@ RUN apt-get update && \
         iproute2 iputils-ping dnsutils curl iperf3 \
         hey wrk apache2-utils \
         jq ripgrep fzf bat fd-find less \
-        git \
+        git vim \
         tmux zsh \
         nodejs npm \
         ca-certificates \
@@ -35,6 +35,9 @@ RUN git clone --depth=1 --filter=blob:none https://github.com/tlrmchlsmth/dotfil
     && cd .dotfiles \
     && PIP_BREAK_SYSTEM_PACKAGES=1 bash install.sh \
     && rm -rf .git
+
+# vllm for benchmarking
+RUN uv pip install vllm
 
 # guidellm
 RUN git clone --depth=1 --filter=blob:none \

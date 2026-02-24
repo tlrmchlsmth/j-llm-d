@@ -98,8 +98,8 @@ spec:
               allowPrivilegeEscalation: false
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
-            #image: quay.io/tms/llm-d-cuda-dev:gb200_working-89fbb12fe <-- It's broken
+            #image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
+            image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
             securityContext:
               capabilities:
                 add:
@@ -128,6 +128,10 @@ spec:
 
                 uv pip uninstall pplx-kernels
 
+                # Derive batch-size-dependent env vars from MAX_TOKENS
+                export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
+                export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2))  # should be >= 2 * VLLM_MOE_DP_CHUNK_SIZE
+
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
 
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
@@ -154,13 +158,15 @@ spec:
                     --kv-cache-dtype fp8 \
                     --all2all-backend "deepep_low_latency" \
                     --gpu-memory-utilization 0.85 \
-                    --max-num-batched-tokens $VLLM_MOE_DP_CHUNK_SIZE \
+                    --max-num-batched-tokens $MAX_TOKENS \
+                    --max-num-seqs $MAX_TOKENS \
                     --profiler-config '{"profiler": "torch",
                                         "torch_profiler_dir": "/traces",
                                         "ignore_frontend": "true",
                                         "delay_iterations": 5,
                                         "max_iterations": 3}' \
                     --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+                    --max-cudagraph-capture-size 768 \
                     --enable-force-include-usage &
                 done
 
@@ -191,11 +197,12 @@ spec:
               - name: VLLM_MOE_ROUTING_SIMULATION_STRATEGY
                 value: "uniform_random"
    
-              # NVSHEMEM_QP_DEPTH should be >= 2 * VLLM_MOE_DP_CHUNK_SIZE
-              - name: NVSHMEM_QP_DEPTH
-                value: "2048"
-              - name: VLLM_MOE_DP_CHUNK_SIZE
-                value: "768"
+              - name: MAX_TOKENS
+                value: "1024"
+
+              # Enable on-demand profiling via /start_profile and /stop_profile
+              - name: VLLM_TORCH_PROFILER_DIR
+                value: "/traces"
 
               # HuggingFace token and cache location
               - name: HF_TOKEN

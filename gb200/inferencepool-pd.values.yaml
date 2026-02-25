@@ -1,5 +1,5 @@
-# InferencePool for GB200 pure decode benchmark
-# Load-aware routing via active-request + queue scoring
+# InferencePool for GB200 P/D (Prefill/Decode disaggregated)
+# Full P/D routing with prefix-cache, active-request, and queue scoring
 
 inferenceExtension:
   replicas: 1
@@ -11,7 +11,7 @@ inferenceExtension:
   monitoring:
     interval: "10s"
     secret:
-      name: wide-ep-gb200-sa-metrics-reader-secret
+      name: ${DEPLOY_NAME}-sa-metrics-reader-secret
     prometheus:
       enabled: false
   affinity:
@@ -35,17 +35,37 @@ inferenceExtension:
       apiVersion: inference.networking.x-k8s.io/v1alpha1
       kind: EndpointPickerConfig
       plugins:
+      - type: prefill-header-handler
+      - type: prefill-filter
+      - type: decode-filter
+      - type: prefix-cache-scorer
       - type: active-request-scorer
+      - type: queue-scorer
+      - type: pd-profile-handler
       - type: weighted-random-picker
+        parameters:
+          threshold: 0
+          hashBlockSize: 5
       schedulingProfiles:
-      - name: default
+      - name: prefill
         plugins:
+        - pluginRef: prefill-filter
+        - pluginRef: prefix-cache-scorer
+          weight: 3
+        - pluginRef: active-request-scorer
+          weight: 2
+        - pluginRef: queue-scorer
+          weight: 2
+        - pluginRef: weighted-random-picker
+      - name: decode
+        plugins:
+        - pluginRef: decode-filter
         - pluginRef: active-request-scorer
           weight: 1
         - pluginRef: weighted-random-picker
 
 inferencePool:
-  name: wide-ep-gb200-infpool
+  name: ${DEPLOY_NAME}-infpool
   targetPorts:
     - number: 8000
     - number: 8001
@@ -55,13 +75,13 @@ inferencePool:
     matchLabels:
       llm-d.ai/inferenceServing: "true"
       llm-d.ai/model: DeepSeek-R1-NVFP4
-      llm-d.ai/deployment: decode-bench
+      llm-d.ai/deployment: pd
 
 provider:
   name: istio
   istio:
     destinationRule:
-      host: wide-ep-gb200-infpool-epp
+      host: ${DEPLOY_NAME}-infpool-epp
       trafficPolicy:
         tls:
           mode: SIMPLE

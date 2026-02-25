@@ -7,7 +7,11 @@ GH_TOKEN := "$GH_TOKEN"
 
 KN := "kubectl -n " + NAMESPACE
 
-GB200_DIR := "gb200-pure-decode"
+NAME_PREFIX := env("USER", "dev")
+DEPLOY_NAME := NAME_PREFIX + "-wide-ep"
+POKER_NAME := NAME_PREFIX + "-poker"
+
+GB200_DIR := "gb200"
 DEV_DIR := "dev"
 MONITORING_DIR := "monitoring"
 
@@ -51,7 +55,7 @@ create-secrets:
   && kubectl create secret generic gh-token-secret --from-literal=GH_TOKEN={{GH_TOKEN}} -n {{NAMESPACE}}
 
 start-poker:
-    {{KN}} apply -f poker/poker.yaml
+    POKER_NAME={{POKER_NAME}} envsubst '${POKER_NAME}' < poker/poker.yaml | {{KN}} apply -f -
 
 # Fetch decode pod names and IPs and cache them
 get-decode-pods:
@@ -69,12 +73,12 @@ poke:
   mkdir -p ./.tmp
 
   # Export variables for envsubst
-  export BASE_URL="http://wide-ep-gb200-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
+  export BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
   export NAMESPACE="{{NAMESPACE}}"
 
   envsubst '${BASE_URL} ${NAMESPACE}' < Justfile.remote > .tmp/Justfile.remote.tmp
-  kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/poker:/app/Justfile
-  {{KN}} exec -it poker -- /bin/zsh
+  kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/{{POKER_NAME}}:/app/Justfile
+  {{KN}} exec -it {{POKER_NAME}} -- /bin/zsh
 
 
 parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_LEN='128' OUTPUT_LEN='1000' N_WORKERS='4':
@@ -116,10 +120,15 @@ inference-perf-logs:
   {{KN}} logs -f job/inference-perf
 
 deploy_inferencepool ROUTING='load-aware':
-  helm upgrade --install wide-ep-gb200-infpool \
+  #!/usr/bin/env bash
+  set -euo pipefail
+  mkdir -p ./.tmp
+  export DEPLOY_NAME="{{DEPLOY_NAME}}"
+  envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/inferencepool-{{ROUTING}}.values.yaml > .tmp/inferencepool-values.yaml
+  helm upgrade --install {{DEPLOY_NAME}}-infpool \
     oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
     --version v1.2.0 \
-    -f {{GB200_DIR}}/inferencepool-{{ROUTING}}.values.yaml \
+    -f .tmp/inferencepool-values.yaml \
     -n {{NAMESPACE}}
 
 VLLM_DEV_VENV := "/mnt/lustre/tms/vllm-venv"
@@ -128,30 +137,49 @@ VLLM_DEV_REMOTE := "https://github.com/tlrmchlsmth/vllm.git"
 VLLM_DEV_BRANCH := "gb200_working"
 VLLM_BUILD_JOBS := "16"
 
-start ROUTING='load-aware' DEV='false':
+start MODE='pd' ROUTING='load-aware' DEV='false':
   #!/usr/bin/env bash
   set -euo pipefail
+  export DEPLOY_NAME="{{DEPLOY_NAME}}"
+
+  # Generate wrapper kustomization with user-specific namePrefix
+  printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: {{NAME_PREFIX}}-\nresources:\n  - overlays/{{MODE}}\n' \
+    > {{GB200_DIR}}/kustomization.yaml
   {{KN}} apply -k {{GB200_DIR}}
-  {{KN}} apply -f {{GB200_DIR}}/gateway.yaml
-  just deploy_inferencepool {{ROUTING}}
-  {{KN}} apply -f {{GB200_DIR}}/httproute.yaml
+  rm -f {{GB200_DIR}}/kustomization.yaml
+
+  envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/gateway.yaml | {{KN}} apply -f -
+  if [ "{{MODE}}" = "pd" ]; then
+    just deploy_inferencepool pd
+  else
+    just deploy_inferencepool {{ROUTING}}
+  fi
+  envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/httproute.yaml | {{KN}} apply -f -
   if [ "{{DEV}}" = "true" ]; then
-    echo "Patching decode-bench for dev mode (VLLM_DEV_VENV={{VLLM_DEV_VENV}})..."
-    {{KN}} patch lws wide-ep-gb200-decode-bench --type=json \
+    echo "Patching for dev mode (VLLM_DEV_VENV={{VLLM_DEV_VENV}})..."
+    {{KN}} patch lws {{DEPLOY_NAME}}-decode --type=json \
       -p '[{"op":"replace","path":"/spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/0","value":{"name":"VLLM_DEV_VENV","value":"{{VLLM_DEV_VENV}}"}}]'
+    if [ "{{MODE}}" = "pd" ]; then
+      {{KN}} patch lws {{DEPLOY_NAME}}-prefill --type=json \
+        -p '[{"op":"replace","path":"/spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/0","value":{"name":"VLLM_DEV_VENV","value":"{{VLLM_DEV_VENV}}"}}]'
+    fi
   fi
 
 stop:
-  helm uninstall wide-ep-gb200-infpool -n {{NAMESPACE}} 2>/dev/null || true \
-  && {{KN}} delete -f {{GB200_DIR}}/httproute.yaml --ignore-not-found=true \
-  && {{KN}} delete -f {{GB200_DIR}}/gateway.yaml --ignore-not-found=true \
-  && {{KN}} delete -k {{GB200_DIR}} --ignore-not-found=true \
+  helm uninstall {{DEPLOY_NAME}}-infpool -n {{NAMESPACE}} 2>/dev/null || true \
+  && {{KN}} delete httproute {{DEPLOY_NAME}}-route --ignore-not-found=true \
+  && {{KN}} delete gateway {{DEPLOY_NAME}}-inference-gateway --ignore-not-found=true \
+  && {{KN}} delete configmap {{DEPLOY_NAME}}-gateway-options --ignore-not-found=true \
+  && {{KN}} delete service {{DEPLOY_NAME}}-inference-gateway-istio --ignore-not-found=true \
+  && {{KN}} delete lws {{DEPLOY_NAME}}-decode --ignore-not-found=true \
+  && {{KN}} delete lws {{DEPLOY_NAME}}-prefill --ignore-not-found=true \
+  && {{KN}} delete sa {{DEPLOY_NAME}} --ignore-not-found=true \
   && {{KN}} delete job parallel-guidellm --ignore-not-found=true \
   && {{KN}} delete job inference-perf --ignore-not-found=true \
   && {{KN}} delete configmap inference-perf-config --ignore-not-found=true
 
-restart ROUTING='load-aware' DEV='false':
-  just stop && just start {{ROUTING}} {{DEV}}
+restart MODE='pd' ROUTING='load-aware' DEV='false':
+  just stop && just start {{MODE}} {{ROUTING}} {{DEV}}
 
 # === Dev Environment ===
 
@@ -193,7 +221,7 @@ profile:
   PORTS="8200 8201 8202 8203"
 
   echo "Starting profile on all decode ranks..."
-  {{KN}} exec poker -- bash -c "
+  {{KN}} exec {{POKER_NAME}} -- bash -c "
     for IP in $DECODE_IPS; do
       for PORT in $PORTS; do
         curl -s -X POST http://\$IP:\$PORT/start_profile &
@@ -203,7 +231,7 @@ profile:
   "
 
   echo "Waiting for profiles to complete..."
-  {{KN}} exec poker -- bash -c "
+  {{KN}} exec {{POKER_NAME}} -- bash -c "
     for IP in $DECODE_IPS; do
       for PORT in $PORTS; do
         echo \"  Stopping \$IP:\$PORT...\"

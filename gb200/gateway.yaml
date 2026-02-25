@@ -5,7 +5,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: wide-ep-gb200-gateway-options
+  name: ${DEPLOY_NAME}-gateway-options
 data:
   deployment: |
     spec:
@@ -33,7 +33,7 @@ data:
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: wide-ep-gb200-inference-gateway
+  name: ${DEPLOY_NAME}-inference-gateway
   labels:
     istio.io/enable-inference-extproc: "true"
 spec:
@@ -41,7 +41,7 @@ spec:
     parametersRef:
       group: ""
       kind: ConfigMap
-      name: wide-ep-gb200-gateway-options
+      name: ${DEPLOY_NAME}-gateway-options
   gatewayClassName: istio
   listeners:
   - name: default
@@ -55,13 +55,13 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: wide-ep-gb200-inference-gateway-istio
+  name: ${DEPLOY_NAME}-inference-gateway-istio
   labels:
-    gateway.networking.k8s.io/gateway-name: wide-ep-gb200-inference-gateway
+    gateway.networking.k8s.io/gateway-name: ${DEPLOY_NAME}-inference-gateway
     istio.io/enable-inference-extproc: "true"
 spec:
   selector:
-    gateway.networking.k8s.io/gateway-name: wide-ep-gb200-inference-gateway
+    gateway.networking.k8s.io/gateway-name: ${DEPLOY_NAME}-inference-gateway
   ports:
   - name: status-port
     port: 15021

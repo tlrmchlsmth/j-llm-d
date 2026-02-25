@@ -1,12 +1,11 @@
 apiVersion: leaderworkerset.x-k8s.io/v1
 kind: LeaderWorkerSet
 metadata:
-  name: wide-ep-gb200-decode-bench
+  name: wide-ep-decode
   labels:
     llm-d.ai/inferenceServing: "true"
     llm-d.ai/model: DeepSeek-R1-NVFP4
     llm-d.ai/role: decode
-    llm-d.ai/deployment: decode-bench
 spec:
   replicas: 1
   leaderWorkerTemplate:
@@ -17,9 +16,8 @@ spec:
           llm-d.ai/inferenceServing: "true"
           llm-d.ai/model: DeepSeek-R1-NVFP4
           llm-d.ai/role: decode
-          llm-d.ai/deployment: decode-bench
       spec:
-        serviceAccountName: wide-ep-gb200
+        serviceAccountName: wide-ep
         volumes:
           - name: dshm
             emptyDir:
@@ -114,9 +112,9 @@ spec:
             args:
               - |-
                 #################
-                # RUN vLLM decode-bench with external DP load balancing
+                # RUN vLLM with external DP load balancing
                 # Launches 4 independent vLLM processes (one per GPU)
-                # Routing sidecar maps port 800X → localhost:820X
+                # Routing sidecar maps port 800X -> localhost:820X
                 #################
                 # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
@@ -148,12 +146,7 @@ spec:
                     --data-parallel-address ${LWS_LEADER_ADDRESS} \
                     --data-parallel-rpc-port 5555 \
                     --trust-remote-code \
-                    --kv_transfer_config '{"kv_connector":"DecodeBenchConnector",
-                                           "kv_role":"kv_both",
-                                           "kv_connector_extra_config": {
-                                             "fill_mean": 0.015,
-                                             "fill_std": 0.0
-                                           }}' \
+                    --kv_transfer_config "$KV_TRANSFER_CONFIG" \
                     --async-scheduling \
                     --kv-cache-dtype fp8 \
                     --all2all-backend "deepep_low_latency" \
@@ -175,7 +168,7 @@ spec:
                 #                    "step_interval":"1000",
                 #                    "num_redundant_experts":"32",
                 #                    "log_balancedness":"True",
-                #                    "log_balancedness_interval":"100"}' \ 
+                #                    "log_balancedness_interval":"100"}' \
 
                 # If any process exits, kill all and restart pod
                 wait -n
@@ -193,10 +186,6 @@ spec:
               - name: VLLM_FLASHINFER_MOE_BACKEND
                 value: "masked_gemm"
 
-              # Needed for reasonable balancedness when using the DecodeBenchConnector
-              - name: VLLM_MOE_ROUTING_SIMULATION_STRATEGY
-                value: "uniform_random"
-   
               - name: MAX_TOKENS
                 value: "1024"
 
@@ -248,6 +237,11 @@ spec:
               - name: NVSHMEM_DISABLE_CUDA_VMM
                 value: "0"
 
+              # UCX configuration for NIXL - use only working InfiniBand devices
+              # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
+              - name: UCX_NET_DEVICES
+                value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S
                 value: "1800"
@@ -259,6 +253,9 @@ spec:
                 value: "TRACE"
               - name: NVSHMEM_DEBUG
                 value: INFO
+
+              # KV_TRANSFER_CONFIG and VLLM_NIXL_SIDE_CHANNEL_HOST are
+              # added by overlays (pd vs decode-bench use different connectors)
             ports:
               - containerPort: 8200
                 name: vllm-rank0

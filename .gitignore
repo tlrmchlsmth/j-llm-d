@@ -13,6 +13,9 @@
 *.tmp
 *.temp
 
+# Generated helm values (disagg NIC config)
+glm-disagg/ms/values-nic-generated.yaml
+
 # Results and output directories
 results-*/
 guide-llm-results/

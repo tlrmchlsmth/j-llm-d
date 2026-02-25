@@ -27,7 +27,6 @@ export IMAGE := env("IMAGE", "quay.io/tms/poker:0.0.13")
 # Extra vLLM args to inject into all model server containers (space-separated)
 export EXTRA_ARGS := env("EXTRA_ARGS", "")
 
-
 default:
   just --list
 
@@ -243,7 +242,6 @@ deploy CONFIG:
     BASE=glm-agg
   fi
   IS_EP=$(just _is_ep_cfg {{CONFIG}})
-  # Build overlay: strip expert_parallel, inject EP flag + EXTRA_ARGS into containers
   MS_VALUES=$(mktemp)
   trap "rm -f $MS_VALUES" EXIT
   echo "Deploying $NS (base=$BASE, ep=${IS_EP})"
@@ -271,7 +269,14 @@ deploy CONFIG:
   with open('$MS_VALUES', 'w') as f:
       yaml.dump(overlay, f, default_flow_style=False)
   "
-  MODEL="{{MODEL}}" MS_VALUES="$MS_VALUES" helmfile apply -n "$NS"
+  DECODE_TP=$(python3 -c "import yaml; d=yaml.safe_load(open('../glm-pareto/configs/{{CONFIG}}.yaml')); print(d.get('decode',{}).get('parallelism',{}).get('tensor',8))")
+  PREFILL_TP=$(python3 -c "import yaml; d=yaml.safe_load(open('../glm-pareto/configs/{{CONFIG}}.yaml')); print(d.get('prefill',{}).get('parallelism',{}).get('tensor',4))")
+  if [[ "{{CONFIG}}" == disagg-* ]]; then
+    DECODE_TP="$DECODE_TP" PREFILL_TP="$PREFILL_TP" python3 scripts/gen-nic-values.py
+  fi
+  MODEL="{{MODEL}}" MS_VALUES="$MS_VALUES" \
+    DECODE_TP="$DECODE_TP" PREFILL_TP="$PREFILL_TP" \
+    helmfile apply -n "$NS"
   kubectl -n "$NS" apply -f httproute.yaml
 
 # Wait for model server pods to be ready

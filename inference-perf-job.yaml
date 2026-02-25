@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inference-perf-config
+data:
+  config.yml: |
+    server:
+      type: vllm
+      model_name: nvidia/DeepSeek-R1-NVFP4
+      base_url: http://wide-ep-gb200-inference-gateway-istio.vllm.svc.cluster.local
+      ignore_eos: true
+
+    api:
+      type: completion
+      streaming: true
+
+    tokenizer:
+      pretrained_model_name_or_path: nvidia/DeepSeek-R1-NVFP4
+
+    data:
+      type: random
+      input_distribution:
+        min: ${INPUT_MIN}
+        max: ${INPUT_MAX}
+        mean: ${INPUT_MEAN}
+        std_dev: ${INPUT_STD}
+      output_distribution:
+        min: ${OUTPUT_MIN}
+        max: ${OUTPUT_MAX}
+        mean: ${OUTPUT_MEAN}
+        std_dev: ${OUTPUT_STD}
+
+    load:
+      type: concurrent
+      num_workers: ${NUM_WORKERS}
+      worker_max_concurrency: ${WORKER_MAX_CONCURRENCY}
+      stages:
+      - concurrency_level: ${CONCURRENCY}
+        num_requests: ${NUM_REQUESTS}
+      request_timeout: 900.0
+
+    report:
+      request_lifecycle:
+        summary: true
+        per_stage: true
+        per_request: false
+
+    storage:
+      local:
+        path: /workspace
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inference-perf
+  labels:
+    app: inference-perf
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: inference-perf
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values: ["amd64"]
+      containers:
+        - name: inference-perf
+          image: python:3.12-slim
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              pip install inference-perf && \
+              inference-perf --config_file /etc/config/config.yml
+          resources:
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-secret
+                  key: HF_TOKEN
+                  optional: true
+          volumeMounts:
+            - name: config
+              mountPath: /etc/config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: inference-perf-config

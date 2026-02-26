@@ -7,7 +7,7 @@ metadata:
     llm-d.ai/model: DeepSeek-R1-NVFP4
     llm-d.ai/role: prefill
 spec:
-  replicas: 1
+  replicas: 2
   leaderWorkerTemplate:
     size: 1
     workerTemplate:
@@ -48,8 +48,9 @@ spec:
               - |-
                 #################
                 # RUN vLLM prefill with external DP load balancing
-                # Launches 4 independent vLLM processes (one per GPU)
-                # No routing sidecar - serves directly on ports 8000-8003
+                # TP_SIZE controls tensor parallelism (GPUs per DP rank)
+                # DP_SIZE_LOCAL is derived: 4 GPUs / TP_SIZE
+                # No routing sidecar - serves directly on ports 8000+
                 #################
                 # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
@@ -61,14 +62,19 @@ spec:
 
                 uv pip uninstall pplx-kernels
 
+                DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
 
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
+                  GPU_START=$((R * TP_SIZE))
+                  GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
+
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
-                  CUDA_VISIBLE_DEVICES=$R vllm serve \
+                  CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
                     nvidia/DeepSeek-R1-NVFP4 \
                     --port $((8000 + R)) \
+                    --tensor-parallel-size $TP_SIZE \
                     --disable-uvicorn-access-log \
                     --enable-expert-parallel \
                     --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
@@ -82,13 +88,14 @@ spec:
                     --kv-cache-dtype fp8 \
                     --all2all-backend "deepep_high_throughput" \
                     --gpu-memory-utilization 0.85 \
-                    --profiler-config '{"profiler": "torch",
-                                        "torch_profiler_dir": "/traces",
-                                        "ignore_frontend": "true",
-                                        "delay_iterations": 5,
-                                        "max_iterations": 3}' \
                     --enable-force-include-usage &
                 done
+
+                    #--profiler-config '{"profiler": "torch",
+                    #                    "torch_profiler_dir": "/traces",
+                    #                    "ignore_frontend": "true",
+                    #                    "delay_iterations": 5,
+                    #                    "max_iterations": 3}' \
 
                 # If any process exits, kill all and restart pod
                 wait -n
@@ -120,8 +127,8 @@ spec:
               - name: FLASHINFER_CACHE_DIR
                 value: /mnt/lustre/tms/flashinfer_cache_extdp
 
-              # Data parallelism - GPUs per pod
-              - name: DP_SIZE_LOCAL
+              # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
+              - name: TP_SIZE
                 value: "4"
 
               - name: VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE
@@ -144,7 +151,9 @@ spec:
               # UCX configuration for NIXL - use only working InfiniBand devices
               # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
               - name: UCX_NET_DEVICES
-                value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+              #  value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+              # Some ports are down on a couple of nodes.
+                value: "mlx5_0:1,mlx5_1:1"
 
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S
@@ -153,10 +162,10 @@ spec:
               # Debug logging
               - name: VLLM_LOGGING_LEVEL
                 value: INFO
-              - name: NCCL_DEBUG
-                value: "TRACE"
-              - name: NVSHMEM_DEBUG
-                value: INFO
+              #- name: NCCL_DEBUG
+              #  value: "TRACE"
+              #- name: NVSHMEM_DEBUG
+              #  value: INFO
 
               # KV_TRANSFER_CONFIG and VLLM_NIXL_SIDE_CHANNEL_HOST are
               # added by overlays (pd vs decode-bench use different connectors)

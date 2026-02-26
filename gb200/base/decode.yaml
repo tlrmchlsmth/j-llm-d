@@ -9,7 +9,7 @@ metadata:
 spec:
   replicas: 1
   leaderWorkerTemplate:
-    size: 4
+    size: 12
     workerTemplate:
       metadata:
         labels:
@@ -113,7 +113,8 @@ spec:
               - |-
                 #################
                 # RUN vLLM with external DP load balancing
-                # Launches 4 independent vLLM processes (one per GPU)
+                # TP_SIZE controls tensor parallelism (GPUs per DP rank)
+                # DP_SIZE_LOCAL is derived: 4 GPUs / TP_SIZE
                 # Routing sidecar maps port 800X -> localhost:820X
                 #################
                 # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
@@ -130,14 +131,19 @@ spec:
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
                 export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2))  # should be >= 2 * VLLM_MOE_DP_CHUNK_SIZE
 
+                DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
 
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
+                  GPU_START=$((R * TP_SIZE))
+                  GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
+
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
-                  CUDA_VISIBLE_DEVICES=$R vllm serve \
+                  CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
                     nvidia/DeepSeek-R1-NVFP4 \
                     --port $((8200 + R)) \
+                    --tensor-parallel-size $TP_SIZE \
                     --disable-uvicorn-access-log \
                     --enable-expert-parallel \
                     --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
@@ -150,25 +156,26 @@ spec:
                     --async-scheduling \
                     --kv-cache-dtype fp8 \
                     --all2all-backend "deepep_low_latency" \
-                    --gpu-memory-utilization 0.85 \
+                    --gpu-memory-utilization 0.75 \
                     --max-num-batched-tokens $MAX_TOKENS \
                     --max-num-seqs $MAX_TOKENS \
-                    --profiler-config '{"profiler": "torch",
-                                        "torch_profiler_dir": "/traces",
-                                        "ignore_frontend": "true",
-                                        "delay_iterations": 5,
-                                        "max_iterations": 3}' \
                     --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
                     --max-cudagraph-capture-size 768 \
+                    --enable-eplb \
+                    --eplb-config '{"window_size":"100",
+                                    "step_interval":"1000",
+                                    "num_redundant_experts":"32",
+                                    "log_balancedness":"True",
+                                    "log_balancedness_interval":"100"}' \
                     --enable-force-include-usage &
                 done
 
-                #    --enable-eplb \
-                #    --eplb-config '{"window_size":"100",
-                #                    "step_interval":"1000",
-                #                    "num_redundant_experts":"32",
-                #                    "log_balancedness":"True",
-                #                    "log_balancedness_interval":"100"}' \
+                    #--profiler-config '{"profiler": "torch",
+                    #                    "torch_profiler_dir": "/traces",
+                    #                    "ignore_frontend": "true",
+                    #                    "delay_iterations": 5,
+                    #                    "max_iterations": 3}' \
+
 
                 # If any process exits, kill all and restart pod
                 wait -n
@@ -209,9 +216,9 @@ spec:
               - name: FLASHINFER_CACHE_DIR
                 value: /mnt/lustre/tms/flashinfer_cache_extdp
 
-              # Data parallelism - GPUs per pod
-              - name: DP_SIZE_LOCAL
-                value: "4"
+              # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
+              - name: TP_SIZE
+                value: "1"
 
               - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"
@@ -240,7 +247,9 @@ spec:
               # UCX configuration for NIXL - use only working InfiniBand devices
               # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
               - name: UCX_NET_DEVICES
-                value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+              #  value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+              # Some ports are down on a couple of nodes.
+                value: "mlx5_0:1,mlx5_1:1"
 
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S
@@ -249,10 +258,10 @@ spec:
               # Debug logging
               - name: VLLM_LOGGING_LEVEL
                 value: INFO
-              - name: NCCL_DEBUG
-                value: "TRACE"
-              - name: NVSHMEM_DEBUG
-                value: INFO
+              #- name: NCCL_DEBUG
+              #  value: "TRACE"
+              #- name: NVSHMEM_DEBUG
+              #  value: INFO
 
               # KV_TRANSFER_CONFIG and VLLM_NIXL_SIDE_CHANNEL_HOST are
               # added by overlays (pd vs decode-bench use different connectors)

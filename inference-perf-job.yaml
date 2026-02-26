@@ -7,7 +7,7 @@ data:
     server:
       type: vllm
       model_name: nvidia/DeepSeek-R1-NVFP4
-      base_url: http://wide-ep-gb200-inference-gateway-istio.vllm.svc.cluster.local
+      base_url: http://${DEPLOY_NAME}-inference-gateway-istio.vllm.svc.cluster.local
       ignore_eos: true
 
     api:
@@ -18,7 +18,7 @@ data:
       pretrained_model_name_or_path: nvidia/DeepSeek-R1-NVFP4
 
     data:
-      type: random
+      type: synthetic
       input_distribution:
         min: ${INPUT_MIN}
         max: ${INPUT_MAX}

@@ -31,8 +31,8 @@ spec:
             resourceClaimTemplateName: llm-d-dev-claim
         containers:
           - name: vllm
-            #image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
-            image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
+            image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
+            #image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
             securityContext:
               capabilities:
                 add:
@@ -63,11 +63,26 @@ spec:
                 uv pip uninstall pplx-kernels
 
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
+                DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
+
+                # Build DP flags only when there are multiple DP ranks
+                DP_FLAGS=""
+                if [ $DP_SIZE -gt 1 ]; then
+                  DP_FLAGS="--data-parallel-size $DP_SIZE \
+                    --data-parallel-size-local 1 \
+                    --data-parallel-address ${LWS_LEADER_ADDRESS} \
+                    --data-parallel-rpc-port 5555"
+                fi
 
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
                   GPU_START=$((R * TP_SIZE))
                   GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
+
+                  RANK_FLAGS=""
+                  if [ $DP_SIZE -gt 1 ]; then
+                    RANK_FLAGS="--data-parallel-rank $((START_RANK + R))"
+                  fi
 
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
@@ -77,11 +92,7 @@ spec:
                     --tensor-parallel-size $TP_SIZE \
                     --disable-uvicorn-access-log \
                     --enable-expert-parallel \
-                    --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
-                    --data-parallel-rank $((START_RANK + R)) \
-                    --data-parallel-size-local 1 \
-                    --data-parallel-address ${LWS_LEADER_ADDRESS} \
-                    --data-parallel-rpc-port 5555 \
+                    $DP_FLAGS $RANK_FLAGS \
                     --trust-remote-code \
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
                     --async-scheduling \

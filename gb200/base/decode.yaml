@@ -96,8 +96,8 @@ spec:
               allowPrivilegeEscalation: false
         containers:
           - name: vllm
-            #image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
-            image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
+            image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
+            #image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
             securityContext:
               capabilities:
                 add:

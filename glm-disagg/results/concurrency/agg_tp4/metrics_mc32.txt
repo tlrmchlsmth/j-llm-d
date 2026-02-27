@@ -1,0 +1,3 @@
+PROMETHEUS_METRICS: concurrency=32
+  request_queue_time:   avg = 0.969783 s  (sum_delta=203.6543, count_delta=210)
+  request_prefill_time: avg = 1.945901 s  (sum_delta=408.6393, count_delta=210)

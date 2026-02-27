@@ -1,14 +1,14 @@
 set dotenv-load
 set dotenv-path := "../.env"
 
-NAMESPACE := "tms"
+NAMESPACE := "raj-network-debug"
 KN := "kubectl -n " + NAMESPACE
-MODEL := "zai-org/GLM-4.7-FP8"
+MODEL := "RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic"
 
 default:
   just --list
 
-# Deploy the aggregated stack (1x TP=8, no P/D)
+# Deploy the aggregated stack (1x TP=4, no P/D)
 deploy:
   MODEL="{{MODEL}}" helmfile apply -n {{NAMESPACE}}
   {{KN}} apply -f httproute.yaml

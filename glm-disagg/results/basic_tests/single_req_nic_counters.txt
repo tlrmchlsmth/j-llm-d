@@ -1,0 +1,940 @@
+
+==============================================
+Discovering GLM-Disagg Pods in namespace: raj-network-debug
+==============================================
+
+Discovered Decode Pods:
+  - ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g
+
+Discovered Prefill Pods:
+  - ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc
+
+==============================================
+Initializing NIC Counter Utils
+==============================================
+Pods namespace: raj-network-debug
+Networking debug pods namespace: raj-network-debug
+
+Discovering nodes for pods...
+  ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g -> 10.0.73.254 -> networking-debug-pod-10.0.73.254
+  ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc -> 10.0.66.42 -> networking-debug-pod-10.0.66.42
+
+Verifying networking-debug-pods in namespace raj-network-debug...
+  Found: networking-debug-pod-10.0.73.254
+  Found: networking-debug-pod-10.0.66.42
+
+Pod name column width: 58
+Initialization complete.
+
+==============================================
+Collecting NIC Counters BEFORE Test
+==============================================
+  Collecting from networking-debug-pod-10.0.73.254 (for ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g)...
+  Collecting from networking-debug-pod-10.0.66.42 (for ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc)...
+
+==============================================================================
+Packet Counters (BEFORE) for: ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g (Node: 10.0.73.254)
+==============================================================================
+
+RX Packets:
+NIC      rx_prio0_packets     rx_prio1_packets     rx_prio5_packets     rx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    1638931120           78733                0                    1639138829        
+rdma1    113180651            78962                0                    113259661         
+rdma2    184258365            78854                0                    184337270         
+rdma3    113149578            78961                0                    113228587         
+rdma4    39214757             78812                0                    39293620          
+rdma5    39131012             78813                0                    39209876          
+rdma6    39146192             78873                0                    39225115          
+rdma7    39136696             78791                0                    39215538          
+eth0     624855590            0                    0                    624855590         
+
+TX Packets:
+NIC      tx_prio0_packets     tx_prio1_packets     tx_prio5_packets     tx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    715435948            1445                 0                    719207901         
+rdma1    161204584            1212                 0                    161205798         
+rdma2    252287655            1319                 0                    252288976         
+rdma3    161202502            1210                 0                    161203712         
+rdma4    36233077             1360                 0                    36234437          
+rdma5    36233078             1357                 0                    36234435          
+rdma6    36233077             1295                 0                    36234372          
+rdma7    36233077             1375                 0                    36234452          
+eth0     111646128            0                    0                    111646130         
+
+RX Discards:
+NIC      rx_prio0_buf_discard     rx_prio1_buf_discard     rx_prio5_buf_discard    
+-------- ------------------------ ------------------------ ------------------------
+rdma0    0                        0                        0                       
+rdma1    0                        0                        0                       
+rdma2    0                        0                        0                       
+rdma3    0                        0                        0                       
+rdma4    0                        0                        0                       
+rdma5    0                        0                        0                       
+rdma6    0                        0                        0                       
+rdma7    0                        0                        0                       
+eth0     0                        0                        0                       
+
+RX Bytes:
+NIC      rx_prio0_bytes       rx_prio1_bytes       rx_prio5_bytes      
+-------- -------------------- -------------------- --------------------
+rdma0    6603310225587        6732562              0                   
+rdma1    260756755909         6753820              0                   
+rdma2    266167637156         6744676              0                   
+rdma3    260629925342         6753954              0                   
+rdma4    161176895074         6739480              0                   
+rdma5    160828457723         6739598              0                   
+rdma6    160890849276         6745058              0                   
+rdma7    160848988884         6737722              0                   
+eth0     886978595965         0                    0                   
+
+TX Bytes:
+NIC      tx_prio0_bytes       tx_prio1_bytes       tx_prio5_bytes      
+-------- -------------------- -------------------- --------------------
+rdma0    1431233090357        122778               0                   
+rdma1    429103681055         101224               0                   
+rdma2    808170226389         110294               0                   
+rdma3    429103518849         100868               0                   
+rdma4    2827109727           115416               0                   
+rdma5    2827109761           115150               0                   
+rdma6    2827109727           109542               0                   
+rdma7    2827109727           116730               0                   
+eth0     595713260778         0                    0                   
+
+==============================================================================
+Packet Counters (BEFORE) for: ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc (Node: 10.0.66.42)
+==============================================================================
+
+RX Packets:
+NIC      rx_prio0_packets     rx_prio1_packets     rx_prio5_packets     rx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    1181020010           81563                0                    1181208822        
+rdma1    729528230            81537                0                    729609818         
+rdma2    808866007            81783                0                    808947841         
+rdma3    814629318            81578                0                    814710944         
+rdma4    7017029              81558                0                    7098636           
+rdma5    7084355              81583                0                    7165989           
+rdma6    7079458              81615                0                    7161124           
+rdma7    7086410              81535                0                    7167995           
+eth0     263516457            0                    0                    263516458         
+
+TX Packets:
+NIC      tx_prio0_packets     tx_prio1_packets     tx_prio5_packets     tx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    1741788809           1897                 0                    1745430812        
+rdma1    1423134979           1685                 0                    1423136681        
+rdma2    1735426360           1506                 0                    1735427888        
+rdma3    1593312897           1644                 0                    1593314553        
+rdma4    40423                1669                 0                    42104             
+rdma5    40413                1639                 0                    42064             
+rdma6    40458                1599                 0                    42069             
+rdma7    40434                1687                 0                    42133             
+eth0     104979375            0                    0                    104979383         
+
+RX Discards:
+NIC      rx_prio0_buf_discard     rx_prio1_buf_discard     rx_prio5_buf_discard    
+-------- ------------------------ ------------------------ ------------------------
+rdma0    0                        0                        0                       
+rdma1    0                        0                        0                       
+rdma2    0                        0                        0                       
+rdma3    0                        0                        0                       
+rdma4    0                        0                        0                       
+rdma5    0                        0                        0                       
+rdma6    0                        0                        0                       
+rdma7    0                        0                        0                       
+eth0     0                        0                        0                       
+
+RX Bytes:
+NIC      rx_prio0_bytes       rx_prio1_bytes       rx_prio5_bytes      
+-------- -------------------- -------------------- --------------------
+rdma0    2046761069957        6974222              0                   
+rdma1    172977987709         6969222              0                   
+rdma2    184322231474         6990982              0                   
+rdma3    179613077543         6972616              0                   
+rdma4    27081568484          6970544              0                   
+rdma5    27357831699          6972698              0                   
+rdma6    27336889022          6975598              0                   
+rdma7    27367171165          6968634              0                   
+eth0     349509069651         0                    0                   
+
+TX Bytes:
+NIC      tx_prio0_bytes       tx_prio1_bytes       tx_prio5_bytes      
+-------- -------------------- -------------------- --------------------
+rdma0    6794092528868        164818               0                   
+rdma1    5833423495528        144466               0                   
+rdma2    7132510434482        128448               0                   
+rdma3    6541626811940        141072               0                   
+rdma4    3691966              143654               0                   
+rdma5    3691310              140990               0                   
+rdma6    3694282              137330               0                   
+rdma7    3692698              145138               0                   
+eth0     655752482707         0                    0                   
+
+==============================================================================
+PFC Counters (BEFORE) for: ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g (Node: 10.0.73.254) - Priorities 0 and 5
+==============================================================================
+
+Pause Counts:
+NIC      tx_prio0_pause     rx_prio0_pause     tx_prio5_pause     rx_prio5_pause    
+-------- ------------------ ------------------ ------------------ ------------------
+rdma0    3770471            128906             3770471            0                 
+rdma1    2                  0                  2                  0                 
+rdma2    0                  2                  0                  0                 
+rdma3    0                  0                  0                  0                 
+rdma4    0                  0                  0                  0                 
+rdma5    0                  0                  0                  0                 
+rdma6    0                  0                  0                  0                 
+rdma7    0                  0                  0                  0                 
+eth0     0                  0                  0                  0                 
+
+Pause Durations:
+NIC      tx_prio0_pause_duration    rx_prio0_pause_duration    tx_prio5_pause_duration    rx_prio5_pause_duration   
+-------- -------------------------- -------------------------- -------------------------- --------------------------
+rdma0    208534352                  426821                     208534352                  0                         
+rdma1    1                          0                          1                          0                         
+rdma2    0                          6                          0                          0                         
+rdma3    0                          0                          0                          0                         
+rdma4    0                          0                          0                          0                         
+rdma5    0                          0                          0                          0                         
+rdma6    0                          0                          0                          0                         
+rdma7    0                          0                          0                          0                         
+eth0     0                          0                          0                          0                         
+
+==============================================================================
+PFC Counters (BEFORE) for: ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc (Node: 10.0.66.42) - Priorities 0 and 5
+==============================================================================
+
+Pause Counts:
+NIC      tx_prio0_pause     rx_prio0_pause     tx_prio5_pause     rx_prio5_pause    
+-------- ------------------ ------------------ ------------------ ------------------
+rdma0    3640085            107160             3640085            0                 
+rdma1    17                 0                  17                 0                 
+rdma2    22                 0                  22                 0                 
+rdma3    12                 0                  12                 0                 
+rdma4    12                 0                  12                 0                 
+rdma5    12                 0                  12                 0                 
+rdma6    12                 0                  12                 0                 
+rdma7    12                 0                  12                 0                 
+eth0     0                  0                  0                  0                 
+
+Pause Durations:
+NIC      tx_prio0_pause_duration    rx_prio0_pause_duration    tx_prio5_pause_duration    rx_prio5_pause_duration   
+-------- -------------------------- -------------------------- -------------------------- --------------------------
+rdma0    200398510                  174588                     200398510                  0                         
+rdma1    631                        0                          631                        0                         
+rdma2    744                        0                          744                        0                         
+rdma3    418                        0                          418                        0                         
+rdma4    423                        0                          423                        0                         
+rdma5    421                        0                          421                        0                         
+rdma6    415                        0                          415                        0                         
+rdma7    418                        0                          418                        0                         
+eth0     0                          0                          0                          0                         
+
+==============================================================================
+ECN Counters (BEFORE) for: ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g (Node: 10.0.73.254)
+==============================================================================
+NIC      np_ecn_marked_roce_packets   np_cnp_sent        rp_cnp_handled    
+-------- ---------------------------- ------------------ ------------------
+rdma0    49                           37                 70                
+rdma1    0                            0                  48                
+rdma2    0                            2                  49                
+rdma3    0                            0                  48                
+rdma4    0                            0                  51                
+rdma5    0                            0                  51                
+rdma6    0                            0                  50                
+rdma7    0                            0                  51                
+eth0     0                            0                  0                 
+
+==============================================================================
+ECN Counters (BEFORE) for: ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc (Node: 10.0.66.42)
+==============================================================================
+NIC      np_ecn_marked_roce_packets   np_cnp_sent        rp_cnp_handled    
+-------- ---------------------------- ------------------ ------------------
+rdma0    26                           21                 89                
+rdma1    0                            0                  51                
+rdma2    0                            0                  51                
+rdma3    0                            0                  48                
+rdma4    0                            0                  49                
+rdma5    0                            0                  51                
+rdma6    0                            0                  51                
+rdma7    0                            0                  50                
+eth0     0                            0                  0                 
+
+==============================================
+Running Sweep via Poker Pod (timeout: 900s)
+==============================================
+
+Running: single 4096-ISL prompt via poker pod
+
+Gateway: http://infra-glm-disagg-inference-gateway-istio.raj-network-debug.svc.cluster.local
+Model:   RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic
+
+Sending single request: ISL=4096 OSL=256
+INFO 02-25 23:18:16 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 02-25 23:18:16 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 02-25 23:18:16 [interface.py:222] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 02-25 23:18:18 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f8a6d9f2ca0>, seed=18231813, num_prompts=1, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=256, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai', base_url='http://infra-glm-disagg-inference-gateway-istio.raj-network-debug.svc.cluster.local', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=1, model='RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic', input_len=None, output_len=None, tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=1.0, burstiness=1.0, trust_remote_code=False, disable_tqdm=False, num_warmups=0, profile=False, save_result=False, save_detailed=False, append_result=False, metadata=None, result_dir=None, result_filename=None, ignore_eos=True, percentile_metrics=None, metric_percentiles='99', goodput=None, request_id_prefix='bench-107cd304-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 02-25 23:18:20 [datasets.py:612] Sampling input_len from [4095, 4095] and output_len from [256, 256]
+  0%|          | 0/1 [00:00<?, ?it/s]WARNING: vllm bench serve no longer sets temperature==0 (greedy) in requests by default. The default will be determined on the server side and can be model/API specific. For the old behavior, include --temperature=0.
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: 1.0
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+100%|██████████| 1/1 [00:04<00:00,  4.93s/it]100%|██████████| 1/1 [00:04<00:00,  4.93s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     1         
+Failed requests:                         0         
+Maximum request concurrency:             1         
+Request rate configured (RPS):           1.00      
+Benchmark duration (s):                  4.93      
+Total input tokens:                      4095      
+Total generated tokens:                  256       
+Request throughput (req/s):              0.20      
+Output token throughput (tok/s):         51.92     
+Peak output token throughput (tok/s):    74.00     
+Peak concurrent requests:                1.00      
+Total token throughput (tok/s):          882.43    
+---------------Time to First Token----------------
+Mean TTFT (ms):                          500.14    
+Median TTFT (ms):                        500.14    
+P99 TTFT (ms):                           500.14    
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          13.45     
+Median TPOT (ms):                        13.45     
+P99 TPOT (ms):                           13.45     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           13.45     
+Median ITL (ms):                         13.49     
+P99 ITL (ms):                            17.58     
+==================================================
+
+==============================================
+Sweep Completed (exit 0)
+==============================================
+
+
+==============================================
+Collecting NIC Counters AFTER Test
+==============================================
+  Collecting from networking-debug-pod-10.0.73.254 (for ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g)...
+  Collecting from networking-debug-pod-10.0.66.42 (for ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc)...
+
+==============================================================================
+Packet Counters (AFTER) for: ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g (Node: 10.0.73.254)
+==============================================================================
+
+RX Packets:
+NIC      rx_prio0_packets     rx_prio1_packets     rx_prio5_packets     rx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    1639013122           78738                0                    1639220836        
+rdma1    113262585            78968                0                    113341601         
+rdma2    184340299            78859                0                    184419209         
+rdma3    113231512            78966                0                    113310526         
+rdma4    39214771             78817                0                    39293639          
+rdma5    39131026             78818                0                    39209895          
+rdma6    39146206             78878                0                    39225134          
+rdma7    39136710             78796                0                    39215557          
+eth0     624858784            0                    0                    624858784         
+
+TX Packets:
+NIC      tx_prio0_packets     tx_prio1_packets     tx_prio5_packets     tx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    715476952            1446                 0                    719248906         
+rdma1    161245544            1212                 0                    161246758         
+rdma2    252328615            1320                 0                    252329937         
+rdma3    161243462            1211                 0                    161244673         
+rdma4    36233077             1360                 0                    36234437          
+rdma5    36233078             1357                 0                    36234435          
+rdma6    36233077             1295                 0                    36234372          
+rdma7    36233077             1375                 0                    36234452          
+eth0     111654052            0                    0                    111654054         
+
+RX Discards:
+NIC      rx_prio0_buf_discard     rx_prio1_buf_discard     rx_prio5_buf_discard    
+-------- ------------------------ ------------------------ ------------------------
+rdma0    0                        0                        0                       
+rdma1    0                        0                        0                       
+rdma2    0                        0                        0                       
+rdma3    0                        0                        0                       
+rdma4    0                        0                        0                       
+rdma5    0                        0                        0                       
+rdma6    0                        0                        0                       
+rdma7    0                        0                        0                       
+eth0     0                        0                        0                       
+
+RX Bytes:
+NIC      rx_prio0_bytes       rx_prio1_bytes       rx_prio5_bytes      
+-------- -------------------- -------------------- --------------------
+rdma0    6603651184965        6732932              0                   
+rdma1    261097708671         6754264              0                   
+rdma2    266508589918         6745046              0                   
+rdma3    260970878104         6754324              0                   
+rdma4    161176896796         6739850              0                   
+rdma5    160828459445         6739968              0                   
+rdma6    160890850998         6745428              0                   
+rdma7    160848990606         6738092              0                   
+eth0     886979504494         0                    0                   
+
+TX Bytes:
+NIC      tx_prio0_bytes       tx_prio1_bytes       tx_prio5_bytes      
+-------- -------------------- -------------------- --------------------
+rdma0    1431236290509        122852               0                   
+rdma1    429106875935         101224               0                   
+rdma2    808173421269         110368               0                   
+rdma3    429106713729         100942               0                   
+rdma4    2827109727           115416               0                   
+rdma5    2827109761           115150               0                   
+rdma6    2827109727           109542               0                   
+rdma7    2827109727           116730               0                   
+eth0     595760812671         0                    0                   
+
+==============================================================================
+Packet Counters (AFTER) for: ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc (Node: 10.0.66.42)
+==============================================================================
+
+RX Packets:
+NIC      rx_prio0_packets     rx_prio1_packets     rx_prio5_packets     rx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    1181061052           81568                0                    1181249869        
+rdma1    729569203            81541                0                    729650795         
+rdma2    808906981            81787                0                    808988819         
+rdma3    814670292            81582                0                    814751922         
+rdma4    7017043              81563                0                    7098655           
+rdma5    7084369              81588                0                    7166008           
+rdma6    7079472              81620                0                    7161143           
+rdma7    7086423              81540                0                    7168013           
+eth0     263518990            0                    0                    263518990         
+
+TX Packets:
+NIC      tx_prio0_packets     tx_prio1_packets     tx_prio5_packets     tx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    1741870845           1897                 0                    1745512848        
+rdma1    1423216899           1686                 0                    1423218602        
+rdma2    1735508280           1507                 0                    1735509809        
+rdma3    1593394817           1645                 0                    1593396474        
+rdma4    40423                1669                 0                    42104             
+rdma5    40413                1639                 0                    42064             
+rdma6    40458                1599                 0                    42069             
+rdma7    40434                1687                 0                    42133             
+eth0     104985946            0                    0                    104985946         
+
+RX Discards:
+NIC      rx_prio0_buf_discard     rx_prio1_buf_discard     rx_prio5_buf_discard    
+-------- ------------------------ ------------------------ ------------------------
+rdma0    0                        0                        0                       
+rdma1    0                        0                        0                       
+rdma2    0                        0                        0                       
+rdma3    0                        0                        0                       
+rdma4    0                        0                        0                       
+rdma5    0                        0                        0                       
+rdma6    0                        0                        0                       
+rdma7    0                        0                        0                       
+eth0     0                        0                        0                       
+
+RX Bytes:
+NIC      rx_prio0_bytes       rx_prio1_bytes       rx_prio5_bytes      
+-------- -------------------- -------------------- --------------------
+rdma0    2046764273975        6974592              0                   
+rdma1    172981184188         6969518              0                   
+rdma2    184325428076         6991278              0                   
+rdma3    179616274145         6972912              0                   
+rdma4    27081570206          6970914              0                   
+rdma5    27357833421          6973068              0                   
+rdma6    27336890744          6975968              0                   
+rdma7    27367172764          6969004              0                   
+eth0     349509895000         0                    0                   
+
+TX Bytes:
+NIC      tx_prio0_bytes       tx_prio1_bytes       tx_prio5_bytes      
+-------- -------------------- -------------------- --------------------
+rdma0    6794433491628        164818               0                   
+rdma1    5833764446568        144540               0                   
+rdma2    7132851385522        128522               0                   
+rdma3    6541967762980        141146               0                   
+rdma4    3691966              143654               0                   
+rdma5    3691310              140990               0                   
+rdma6    3694282              137330               0                   
+rdma7    3692698              145138               0                   
+eth0     655800151177         0                    0                   
+
+==============================================================================
+PFC Counters (AFTER) for: ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g (Node: 10.0.73.254) - Priorities 0 and 5
+==============================================================================
+
+Pause Counts:
+NIC      tx_prio0_pause     rx_prio0_pause     tx_prio5_pause     rx_prio5_pause    
+-------- ------------------ ------------------ ------------------ ------------------
+rdma0    3770471            128906             3770471            0                 
+rdma1    2                  0                  2                  0                 
+rdma2    0                  2                  0                  0                 
+rdma3    0                  0                  0                  0                 
+rdma4    0                  0                  0                  0                 
+rdma5    0                  0                  0                  0                 
+rdma6    0                  0                  0                  0                 
+rdma7    0                  0                  0                  0                 
+eth0     0                  0                  0                  0                 
+
+Pause Durations:
+NIC      tx_prio0_pause_duration    rx_prio0_pause_duration    tx_prio5_pause_duration    rx_prio5_pause_duration   
+-------- -------------------------- -------------------------- -------------------------- --------------------------
+rdma0    208534352                  426821                     208534352                  0                         
+rdma1    1                          0                          1                          0                         
+rdma2    0                          6                          0                          0                         
+rdma3    0                          0                          0                          0                         
+rdma4    0                          0                          0                          0                         
+rdma5    0                          0                          0                          0                         
+rdma6    0                          0                          0                          0                         
+rdma7    0                          0                          0                          0                         
+eth0     0                          0                          0                          0                         
+
+==============================================================================
+PFC Counters (AFTER) for: ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc (Node: 10.0.66.42) - Priorities 0 and 5
+==============================================================================
+
+Pause Counts:
+NIC      tx_prio0_pause     rx_prio0_pause     tx_prio5_pause     rx_prio5_pause    
+-------- ------------------ ------------------ ------------------ ------------------
+rdma0    3640085            107160             3640085            0                 
+rdma1    17                 0                  17                 0                 
+rdma2    22                 0                  22                 0                 
+rdma3    12                 0                  12                 0                 
+rdma4    12                 0                  12                 0                 
+rdma5    12                 0                  12                 0                 
+rdma6    12                 0                  12                 0                 
+rdma7    12                 0                  12                 0                 
+eth0     0                  0                  0                  0                 
+
+Pause Durations:
+NIC      tx_prio0_pause_duration    rx_prio0_pause_duration    tx_prio5_pause_duration    rx_prio5_pause_duration   
+-------- -------------------------- -------------------------- -------------------------- --------------------------
+rdma0    200398510                  174588                     200398510                  0                         
+rdma1    631                        0                          631                        0                         
+rdma2    744                        0                          744                        0                         
+rdma3    418                        0                          418                        0                         
+rdma4    423                        0                          423                        0                         
+rdma5    421                        0                          421                        0                         
+rdma6    415                        0                          415                        0                         
+rdma7    418                        0                          418                        0                         
+eth0     0                          0                          0                          0                         
+
+==============================================================================
+ECN Counters (AFTER) for: ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g (Node: 10.0.73.254)
+==============================================================================
+NIC      np_ecn_marked_roce_packets   np_cnp_sent        rp_cnp_handled    
+-------- ---------------------------- ------------------ ------------------
+rdma0    49                           37                 70                
+rdma1    0                            0                  48                
+rdma2    0                            2                  49                
+rdma3    0                            0                  48                
+rdma4    0                            0                  51                
+rdma5    0                            0                  51                
+rdma6    0                            0                  50                
+rdma7    0                            0                  51                
+eth0     0                            0                  0                 
+
+==============================================================================
+ECN Counters (AFTER) for: ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc (Node: 10.0.66.42)
+==============================================================================
+NIC      np_ecn_marked_roce_packets   np_cnp_sent        rp_cnp_handled    
+-------- ---------------------------- ------------------ ------------------
+rdma0    26                           21                 89                
+rdma1    0                            0                  51                
+rdma2    0                            0                  51                
+rdma3    0                            0                  48                
+rdma4    0                            0                  49                
+rdma5    0                            0                  51                
+rdma6    0                            0                  51                
+rdma7    0                            0                  50                
+eth0     0                            0                  0                 
+
+==============================================
+NIC Counter DIFFERENCES (After - Before)
+==============================================
+
+==============================================================================
+Packet Counters DIFF for: ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g (Node: 10.0.73.254)
+==============================================================================
+
+RX Packets:
+NIC      rx_prio0_packets     rx_prio1_packets     rx_prio5_packets     rx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    82002                5                    0                    82007             
+rdma1    81934                6                    0                    81940             
+rdma2    81934                5                    0                    81939             
+rdma3    81934                5                    0                    81939             
+rdma4    14                   5                    0                    19                
+rdma5    14                   5                    0                    19                
+rdma6    14                   5                    0                    19                
+rdma7    14                   5                    0                    19                
+eth0     3194                 0                    0                    3194              
+
+TX Packets:
+NIC      tx_prio0_packets     tx_prio1_packets     tx_prio5_packets     tx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    41004                1                    0                    41005             
+rdma1    40960                0                    0                    40960             
+rdma2    40960                1                    0                    40961             
+rdma3    40960                1                    0                    40961             
+rdma4    0                    0                    0                    0                 
+rdma5    0                    0                    0                    0                 
+rdma6    0                    0                    0                    0                 
+rdma7    0                    0                    0                    0                 
+eth0     7924                 0                    0                    7924              
+
+RX Discards:
+NIC      rx_prio0_buf_discard     rx_prio1_buf_discard     rx_prio5_buf_discard    
+-------- ------------------------ ------------------------ ------------------------
+rdma0    0                        0                        0                       
+rdma1    0                        0                        0                       
+rdma2    0                        0                        0                       
+rdma3    0                        0                        0                       
+rdma4    0                        0                        0                       
+rdma5    0                        0                        0                       
+rdma6    0                        0                        0                       
+rdma7    0                        0                        0                       
+eth0     0                        0                        0                       
+
+RX Bytes:
+NIC      rx_prio0_bytes     rx_prio1_bytes     rx_prio5_bytes    
+-------- ------------------ ------------------ ------------------
+rdma0    340.95 MB          370 B              0 B               
+rdma1    340.95 MB          444 B              0 B               
+rdma2    340.95 MB          370 B              0 B               
+rdma3    340.95 MB          370 B              0 B               
+rdma4    1.72 KB            370 B              0 B               
+rdma5    1.72 KB            370 B              0 B               
+rdma6    1.72 KB            370 B              0 B               
+rdma7    1.72 KB            370 B              0 B               
+eth0     908.52 KB          0 B                0 B               
+
+TX Bytes:
+NIC      tx_prio0_bytes     tx_prio1_bytes     tx_prio5_bytes    
+-------- ------------------ ------------------ ------------------
+rdma0    3.20 MB            74 B               0 B               
+rdma1    3.19 MB            0 B                0 B               
+rdma2    3.19 MB            74 B               0 B               
+rdma3    3.19 MB            74 B               0 B               
+rdma4    0 B                0 B                0 B               
+rdma5    0 B                0 B                0 B               
+rdma6    0 B                0 B                0 B               
+rdma7    0 B                0 B                0 B               
+eth0     47.55 MB           0 B                0 B               
+
+==============================================================================
+Packet Counters DIFF for: ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc (Node: 10.0.66.42)
+==============================================================================
+
+RX Packets:
+NIC      rx_prio0_packets     rx_prio1_packets     rx_prio5_packets     rx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    41042                5                    0                    41047             
+rdma1    40973                4                    0                    40977             
+rdma2    40974                4                    0                    40978             
+rdma3    40974                4                    0                    40978             
+rdma4    14                   5                    0                    19                
+rdma5    14                   5                    0                    19                
+rdma6    14                   5                    0                    19                
+rdma7    13                   5                    0                    18                
+eth0     2533                 0                    0                    2532              
+
+TX Packets:
+NIC      tx_prio0_packets     tx_prio1_packets     tx_prio5_packets     tx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    82036                0                    0                    82036             
+rdma1    81920                1                    0                    81921             
+rdma2    81920                1                    0                    81921             
+rdma3    81920                1                    0                    81921             
+rdma4    0                    0                    0                    0                 
+rdma5    0                    0                    0                    0                 
+rdma6    0                    0                    0                    0                 
+rdma7    0                    0                    0                    0                 
+eth0     6571                 0                    0                    6563              
+
+RX Discards:
+NIC      rx_prio0_buf_discard     rx_prio1_buf_discard     rx_prio5_buf_discard    
+-------- ------------------------ ------------------------ ------------------------
+rdma0    0                        0                        0                       
+rdma1    0                        0                        0                       
+rdma2    0                        0                        0                       
+rdma3    0                        0                        0                       
+rdma4    0                        0                        0                       
+rdma5    0                        0                        0                       
+rdma6    0                        0                        0                       
+rdma7    0                        0                        0                       
+eth0     0                        0                        0                       
+
+RX Bytes:
+NIC      rx_prio0_bytes     rx_prio1_bytes     rx_prio5_bytes    
+-------- ------------------ ------------------ ------------------
+rdma0    3.20 MB            370 B              0 B               
+rdma1    3.19 MB            296 B              0 B               
+rdma2    3.19 MB            296 B              0 B               
+rdma3    3.19 MB            296 B              0 B               
+rdma4    1.72 KB            370 B              0 B               
+rdma5    1.72 KB            370 B              0 B               
+rdma6    1.72 KB            370 B              0 B               
+rdma7    1.59 KB            370 B              0 B               
+eth0     825.34 KB          0 B                0 B               
+
+TX Bytes:
+NIC      tx_prio0_bytes     tx_prio1_bytes     tx_prio5_bytes    
+-------- ------------------ ------------------ ------------------
+rdma0    340.96 MB          0 B                0 B               
+rdma1    340.95 MB          74 B               0 B               
+rdma2    340.95 MB          74 B               0 B               
+rdma3    340.95 MB          74 B               0 B               
+rdma4    0 B                0 B                0 B               
+rdma5    0 B                0 B                0 B               
+rdma6    0 B                0 B                0 B               
+rdma7    0 B                0 B                0 B               
+eth0     47.66 MB           0 B                0 B               
+
+==============================================================================
+PFC Counters DIFF for: ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g (Node: 10.0.73.254) - Priorities 0 and 5
+==============================================================================
+
+Pause Counts:
+NIC      tx_prio0_pause     rx_prio0_pause     tx_prio5_pause     rx_prio5_pause    
+-------- ------------------ ------------------ ------------------ ------------------
+rdma0    0                  0                  0                  0                 
+rdma1    0                  0                  0                  0                 
+rdma2    0                  0                  0                  0                 
+rdma3    0                  0                  0                  0                 
+rdma4    0                  0                  0                  0                 
+rdma5    0                  0                  0                  0                 
+rdma6    0                  0                  0                  0                 
+rdma7    0                  0                  0                  0                 
+eth0     0                  0                  0                  0                 
+
+Pause Durations:
+NIC      tx_prio0_pause_duration    rx_prio0_pause_duration    tx_prio5_pause_duration    rx_prio5_pause_duration   
+-------- -------------------------- -------------------------- -------------------------- --------------------------
+rdma0    0                          0                          0                          0                         
+rdma1    0                          0                          0                          0                         
+rdma2    0                          0                          0                          0                         
+rdma3    0                          0                          0                          0                         
+rdma4    0                          0                          0                          0                         
+rdma5    0                          0                          0                          0                         
+rdma6    0                          0                          0                          0                         
+rdma7    0                          0                          0                          0                         
+eth0     0                          0                          0                          0                         
+
+==============================================================================
+PFC Counters DIFF for: ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc (Node: 10.0.66.42) - Priorities 0 and 5
+==============================================================================
+
+Pause Counts:
+NIC      tx_prio0_pause     rx_prio0_pause     tx_prio5_pause     rx_prio5_pause    
+-------- ------------------ ------------------ ------------------ ------------------
+rdma0    0                  0                  0                  0                 
+rdma1    0                  0                  0                  0                 
+rdma2    0                  0                  0                  0                 
+rdma3    0                  0                  0                  0                 
+rdma4    0                  0                  0                  0                 
+rdma5    0                  0                  0                  0                 
+rdma6    0                  0                  0                  0                 
+rdma7    0                  0                  0                  0                 
+eth0     0                  0                  0                  0                 
+
+Pause Durations:
+NIC      tx_prio0_pause_duration    rx_prio0_pause_duration    tx_prio5_pause_duration    rx_prio5_pause_duration   
+-------- -------------------------- -------------------------- -------------------------- --------------------------
+rdma0    0                          0                          0                          0                         
+rdma1    0                          0                          0                          0                         
+rdma2    0                          0                          0                          0                         
+rdma3    0                          0                          0                          0                         
+rdma4    0                          0                          0                          0                         
+rdma5    0                          0                          0                          0                         
+rdma6    0                          0                          0                          0                         
+rdma7    0                          0                          0                          0                         
+eth0     0                          0                          0                          0                         
+
+==============================================================================
+ECN Counters DIFF for: ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g (Node: 10.0.73.254)
+==============================================================================
+NIC      np_ecn_marked_roce_packets   np_cnp_sent        rp_cnp_handled    
+-------- ---------------------------- ------------------ ------------------
+rdma0    0                            0                  0                 
+rdma1    0                            0                  0                 
+rdma2    0                            0                  0                 
+rdma3    0                            0                  0                 
+rdma4    0                            0                  0                 
+rdma5    0                            0                  0                 
+rdma6    0                            0                  0                 
+rdma7    0                            0                  0                 
+eth0     0                            0                  0                 
+
+==============================================================================
+ECN Counters DIFF for: ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc (Node: 10.0.66.42)
+==============================================================================
+NIC      np_ecn_marked_roce_packets   np_cnp_sent        rp_cnp_handled    
+-------- ---------------------------- ------------------ ------------------
+rdma0    0                            0                  0                 
+rdma1    0                            0                  0                 
+rdma2    0                            0                  0                 
+rdma3    0                            0                  0                 
+rdma4    0                            0                  0                 
+rdma5    0                            0                  0                 
+rdma6    0                            0                  0                 
+rdma7    0                            0                  0                 
+eth0     0                            0                  0                 
+
+==============================================================================
+SUMMARY: Packet Counters - BACKEND NICs (rdma0-rdma7)
+==============================================================================
+
+RX Packets:
+POD                                                        rx_prio0_packets     rx_prio1_packets     rx_prio5_packets     rx_packets_phy    
+---------------------------------------------------------- -------------------- -------------------- -------------------- ------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   327860               41                   0                    327901            
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   164018               37                   0                    164055            
+---------------------------------------------------------- -------------------- -------------------- -------------------- ------------------
+TOTAL                                                      491878               78                   0                    491956            
+
+TX Packets:
+POD                                                        tx_prio0_packets     tx_prio1_packets     tx_prio5_packets     tx_packets_phy    
+---------------------------------------------------------- -------------------- -------------------- -------------------- ------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   163884               3                    0                    163887            
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   327796               3                    0                    327799            
+---------------------------------------------------------- -------------------- -------------------- -------------------- ------------------
+TOTAL                                                      491680               6                    0                    491686            
+
+RX Discards:
+POD                                                        rx_prio0_buf_discard     rx_prio1_buf_discard     rx_prio5_buf_discard    
+---------------------------------------------------------- ------------------------ ------------------------ ------------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   0                        0                        0                       
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   0                        0                        0                       
+---------------------------------------------------------- ------------------------ ------------------------ ------------------------
+TOTAL                                                      0                        0                        0                       
+
+==============================================================================
+SUMMARY: Packet Counters - FRONTEND NIC (eth0)
+==============================================================================
+
+RX Packets:
+POD                                                        rx_prio0_packets     rx_prio1_packets     rx_prio5_packets     rx_packets_phy    
+---------------------------------------------------------- -------------------- -------------------- -------------------- ------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   3194                 0                    0                    3194              
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   2533                 0                    0                    2532              
+---------------------------------------------------------- -------------------- -------------------- -------------------- ------------------
+TOTAL                                                      5727                 0                    0                    5726              
+
+TX Packets:
+POD                                                        tx_prio0_packets     tx_prio1_packets     tx_prio5_packets     tx_packets_phy    
+---------------------------------------------------------- -------------------- -------------------- -------------------- ------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   7924                 0                    0                    7924              
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   6571                 0                    0                    6563              
+---------------------------------------------------------- -------------------- -------------------- -------------------- ------------------
+TOTAL                                                      14495                0                    0                    14487             
+
+RX Discards:
+POD                                                        rx_prio0_buf_discard     rx_prio1_buf_discard     rx_prio5_buf_discard    
+---------------------------------------------------------- ------------------------ ------------------------ ------------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   0                        0                        0                       
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   0                        0                        0                       
+---------------------------------------------------------- ------------------------ ------------------------ ------------------------
+TOTAL                                                      0                        0                        0                       
+
+==============================================================================
+SUMMARY: Byte Counters - BACKEND NICs (rdma0-rdma7)
+==============================================================================
+
+RX Bytes:
+POD                                                        rx_prio0_bytes     rx_prio1_bytes     rx_prio5_bytes    
+---------------------------------------------------------- ------------------ ------------------ ------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   1.36 GB            3.03 KB            0 B               
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   12.80 MB           2.73 KB            0 B               
+---------------------------------------------------------- ------------------ ------------------ ------------------
+TOTAL                                                      1.37 GB            5.77 KB            0 B               
+
+TX Bytes:
+POD                                                        tx_prio0_bytes     tx_prio1_bytes     tx_prio5_bytes    
+---------------------------------------------------------- ------------------ ------------------ ------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   12.78 MB           222 B              0 B               
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   1.36 GB            222 B              0 B               
+---------------------------------------------------------- ------------------ ------------------ ------------------
+TOTAL                                                      1.37 GB            444 B              0 B               
+
+==============================================================================
+SUMMARY: Byte Counters - FRONTEND NIC (eth0)
+==============================================================================
+
+RX Bytes:
+POD                                                        rx_prio0_bytes     rx_prio1_bytes     rx_prio5_bytes    
+---------------------------------------------------------- ------------------ ------------------ ------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   908.52 KB          0 B                0 B               
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   825.34 KB          0 B                0 B               
+---------------------------------------------------------- ------------------ ------------------ ------------------
+TOTAL                                                      1.73 MB            0 B                0 B               
+
+TX Bytes:
+POD                                                        tx_prio0_bytes     tx_prio1_bytes     tx_prio5_bytes    
+---------------------------------------------------------- ------------------ ------------------ ------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   47.55 MB           0 B                0 B               
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   47.66 MB           0 B                0 B               
+---------------------------------------------------------- ------------------ ------------------ ------------------
+TOTAL                                                      95.22 MB           0 B                0 B               
+
+==============================================================================
+SUMMARY: PFC Counters - BACKEND NICs (rdma0-rdma7) - Priorities 0 and 5
+==============================================================================
+
+Pause Counts:
+POD                                                        tx_prio0_pause     rx_prio0_pause     tx_prio5_pause     rx_prio5_pause    
+---------------------------------------------------------- ------------------ ------------------ ------------------ ------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   0                  0                  0                  0                 
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   0                  0                  0                  0                 
+---------------------------------------------------------- ------------------ ------------------ ------------------ ------------------
+TOTAL                                                      0                  0                  0                  0                 
+
+Pause Durations:
+POD                                                        tx_prio0_pause_duration    rx_prio0_pause_duration    tx_prio5_pause_duration    rx_prio5_pause_duration   
+---------------------------------------------------------- -------------------------- -------------------------- -------------------------- --------------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   0                          0                          0                          0                         
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   0                          0                          0                          0                         
+---------------------------------------------------------- -------------------------- -------------------------- -------------------------- --------------------------
+TOTAL                                                      0                          0                          0                          0                         
+
+==============================================================================
+SUMMARY: PFC Counters - FRONTEND NIC (eth0) - Priorities 0 and 5
+==============================================================================
+
+Pause Counts:
+POD                                                        tx_prio0_pause     rx_prio0_pause     tx_prio5_pause     rx_prio5_pause    
+---------------------------------------------------------- ------------------ ------------------ ------------------ ------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   0                  0                  0                  0                 
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   0                  0                  0                  0                 
+---------------------------------------------------------- ------------------ ------------------ ------------------ ------------------
+TOTAL                                                      0                  0                  0                  0                 
+
+Pause Durations:
+POD                                                        tx_prio0_pause_duration    rx_prio0_pause_duration    tx_prio5_pause_duration    rx_prio5_pause_duration   
+---------------------------------------------------------- -------------------------- -------------------------- -------------------------- --------------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   0                          0                          0                          0                         
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   0                          0                          0                          0                         
+---------------------------------------------------------- -------------------------- -------------------------- -------------------------- --------------------------
+TOTAL                                                      0                          0                          0                          0                         
+
+==============================================================================
+SUMMARY: ECN Counters - BACKEND NICs (rdma0-rdma7)
+==============================================================================
+POD                                                        np_ecn_marked_roce_packets   np_cnp_sent        rp_cnp_handled    
+---------------------------------------------------------- ---------------------------- ------------------ ------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   0                            0                  0                 
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   0                            0                  0                 
+---------------------------------------------------------- ---------------------------- ------------------ ------------------
+TOTAL                                                      0                            0                  0                 
+
+==============================================================================
+SUMMARY: ECN Counters - FRONTEND NIC (eth0)
+==============================================================================
+POD                                                        np_ecn_marked_roce_packets   np_cnp_sent        rp_cnp_handled    
+---------------------------------------------------------- ---------------------------- ------------------ ------------------
+ms-glm-disagg-llm-d-modelservice-decode-668957bdbf-6bf9g   0                            0                  0                 
+ms-glm-disagg-llm-d-modelservice-prefill-98c457f87-fc9zc   0                            0                  0                 
+---------------------------------------------------------- ---------------------------- ------------------ ------------------
+TOTAL                                                      0                            0                  0                 

@@ -1,0 +1,158 @@
+
+==============================================
+Discovering model server pods in namespace: raj-network-debug
+==============================================
+  Detected:     glm-disagg
+  Decode pod:   ms-glm-disagg-llm-d-modelservice-decode-69b7d6b664-5xcvp
+  Decode log:   results/2ptp1_1dtp2/decode_mc16.log
+  Prefill pod:  ms-glm-disagg-llm-d-modelservice-prefill-54577d8455-g87w6
+  Prefill log:  results/2ptp1_1dtp2/prefill_mc16.log
+  Prefill IPs:  10.244.3.178 10.244.2.65  (metrics port: 8000)
+
+Starting decode pod log capture to results/2ptp1_1dtp2/decode_mc16.log ...
+Starting prefill pod log capture to results/2ptp1_1dtp2/prefill_mc16.log ...
+
+==============================================
+Running Concurrency Sweep (timeout: 900s)
+  Target: glm-disagg | Max Concurrency: 16
+==============================================
+SWEEP_START
+CONFIG: target=glm-disagg model=RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic isl=4096 osl=256 gpu_count=4
+TARGET_DURATION: 120s  MIN_PROMPTS: 200
+CONCURRENCY_LEVELS: 16
+
+CALIBRATION: concurrency=16 num_prompts=20
+vllm bench serve --base-url $(just _url glm-disagg) --model $(just _model glm-disagg) --dataset-name random --random-input-len 4096 --random-output-len 256 --max-concurrency 16 --request-rate 4096 --seed $(date +%M%H%M%S) --num-prompts 20 --ignore-eos
+#!/usr/bin/env bash
+URL=$(just _url glm-disagg)
+RESP=$(curl -s "$URL/v1/models")
+MODEL=$(echo "$RESP" | jq -r '.data[0].id' 2>/dev/null)
+if [[ -z "$MODEL" || "$MODEL" == "null" ]]; then
+  echo "ERROR: Could not detect model from glm-disagg. Response: $RESP" >&2
+  exit 1
+fi
+echo "$MODEL"
+INFO 02-27 00:45:03 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 02-27 00:45:03 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 02-27 00:45:03 [interface.py:222] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 02-27 00:45:05 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7fc86699eca0>, seed=45004500, num_prompts=20, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=256, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai', base_url='http://infra-glm-disagg-inference-gateway-istio.raj-network-debug.svc.cluster.local', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=16, model='RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic', input_len=None, output_len=None, tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=4096.0, burstiness=1.0, trust_remote_code=False, disable_tqdm=False, num_warmups=0, profile=False, save_result=False, save_detailed=False, append_result=False, metadata=None, result_dir=None, result_filename=None, ignore_eos=True, percentile_metrics=None, metric_percentiles='99', goodput=None, request_id_prefix='bench-441ea592-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 02-27 00:45:07 [datasets.py:612] Sampling input_len from [4095, 4095] and output_len from [256, 256]
+  0%|          | 0/20 [00:00<?, ?it/s]WARNING: vllm bench serve no longer sets temperature==0 (greedy) in requests by default. The default will be determined on the server side and can be model/API specific. For the old behavior, include --temperature=0.
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: 4096.0
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 16
+  5%|▌         | 1/20 [00:06<01:58,  6.24s/it] 10%|█         | 2/20 [00:07<00:58,  3.27s/it] 20%|██        | 4/20 [00:08<00:24,  1.55s/it] 30%|███       | 6/20 [00:09<00:14,  1.05s/it] 40%|████      | 8/20 [00:10<00:09,  1.20it/s] 50%|█████     | 10/20 [00:11<00:06,  1.47it/s] 60%|██████    | 12/20 [00:12<00:04,  1.65it/s] 70%|███████   | 14/20 [00:13<00:03,  1.88it/s] 85%|████████▌ | 17/20 [00:13<00:01,  2.41it/s] 90%|█████████ | 18/20 [00:14<00:00,  2.42it/s] 95%|█████████▌| 19/20 [00:14<00:00,  2.53it/s]100%|██████████| 20/20 [00:15<00:00,  2.18it/s]100%|██████████| 20/20 [00:15<00:00,  1.32it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     20        
+Failed requests:                         0         
+Maximum request concurrency:             16        
+Request rate configured (RPS):           4096.00   
+Benchmark duration (s):                  15.18     
+Total input tokens:                      81900     
+Total generated tokens:                  5120      
+Request throughput (req/s):              1.32      
+Output token throughput (tok/s):         337.31    
+Peak output token throughput (tok/s):    581.00    
+Peak concurrent requests:                18.00     
+Total token throughput (tok/s):          5733.00   
+---------------Time to First Token----------------
+Mean TTFT (ms):                          3912.45   
+Median TTFT (ms):                        3694.37   
+P99 TTFT (ms):                           7894.46   
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          22.38     
+Median TPOT (ms):                        22.69     
+P99 TPOT (ms):                           23.13     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           22.38     
+Median ITL (ms):                         22.66     
+P99 ITL (ms):                            27.49     
+==================================================
+COMPUTED_NUM_PROMPTS: 200 (throughput=5733.00 tok/s, timeout=300s)
+
+==============================================
+Snapshotting Prometheus metrics (pre-benchmark)
+==============================================
+  queue_time:   sum=40.375618  count=1061
+  prefill_time: sum=1165.851817  count=1061
+
+BENCH_RUN: concurrency=16 num_prompts=200 timeout=300s
+vllm bench serve --base-url $(just _url glm-disagg) --model $(just _model glm-disagg) --dataset-name random --random-input-len 4096 --random-output-len 256 --max-concurrency 16 --request-rate 4096 --seed $(date +%M%H%M%S) --num-prompts 200 --ignore-eos
+#!/usr/bin/env bash
+URL=$(just _url glm-disagg)
+RESP=$(curl -s "$URL/v1/models")
+MODEL=$(echo "$RESP" | jq -r '.data[0].id' 2>/dev/null)
+if [[ -z "$MODEL" || "$MODEL" == "null" ]]; then
+  echo "ERROR: Could not detect model from glm-disagg. Response: $RESP" >&2
+  exit 1
+fi
+echo "$MODEL"
+INFO 02-27 00:45:28 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 02-27 00:45:28 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 02-27 00:45:28 [interface.py:222] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 02-27 00:45:30 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7fed6d312ca0>, seed=45004525, num_prompts=200, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=256, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai', base_url='http://infra-glm-disagg-inference-gateway-istio.raj-network-debug.svc.cluster.local', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=16, model='RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic', input_len=None, output_len=None, tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=4096.0, burstiness=1.0, trust_remote_code=False, disable_tqdm=False, num_warmups=0, profile=False, save_result=False, save_detailed=False, append_result=False, metadata=None, result_dir=None, result_filename=None, ignore_eos=True, percentile_metrics=None, metric_percentiles='99', goodput=None, request_id_prefix='bench-b310f94c-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 02-27 00:45:32 [datasets.py:612] Sampling input_len from [4095, 4095] and output_len from [256, 256]
+  0%|          | 0/200 [00:00<?, ?it/s]WARNING: vllm bench serve no longer sets temperature==0 (greedy) in requests by default. The default will be determined on the server side and can be model/API specific. For the old behavior, include --temperature=0.
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: 4096.0
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 16
+  0%|          | 1/200 [00:06<20:43,  6.25s/it]  1%|          | 2/200 [00:07<10:49,  3.28s/it]  2%|▏         | 4/200 [00:08<05:04,  1.55s/it]  3%|▎         | 6/200 [00:09<03:23,  1.05s/it]  4%|▍         | 8/200 [00:10<02:39,  1.20it/s]  5%|▌         | 10/200 [00:11<02:09,  1.46it/s]  6%|▌         | 12/200 [00:12<01:54,  1.64it/s]  7%|▋         | 14/200 [00:13<01:40,  1.85it/s]  8%|▊         | 17/200 [00:14<01:22,  2.22it/s]  9%|▉         | 18/200 [00:15<01:49,  1.66it/s] 10%|▉         | 19/200 [00:15<01:41,  1.78it/s] 10%|█         | 21/200 [00:16<01:21,  2.20it/s] 11%|█         | 22/200 [00:17<01:44,  1.70it/s] 12%|█▏        | 23/200 [00:18<01:45,  1.67it/s] 12%|█▎        | 25/200 [00:18<01:13,  2.39it/s] 13%|█▎        | 26/200 [00:19<01:53,  1.54it/s] 14%|█▍        | 28/200 [00:20<01:15,  2.27it/s] 14%|█▍        | 29/200 [00:21<01:34,  1.81it/s] 15%|█▌        | 30/200 [00:21<01:35,  1.78it/s] 16%|█▌        | 32/200 [00:22<01:23,  2.01it/s] 16%|█▋        | 33/200 [00:23<01:38,  1.70it/s] 18%|█▊        | 36/200 [00:25<01:37,  1.69it/s] 20%|█▉        | 39/200 [00:26<01:16,  2.11it/s] 20%|██        | 40/200 [00:26<01:26,  1.84it/s] 21%|██        | 42/200 [00:27<01:21,  1.94it/s] 22%|██▏       | 44/200 [00:28<01:14,  2.09it/s] 22%|██▎       | 45/200 [00:29<01:27,  1.78it/s] 24%|██▎       | 47/200 [00:29<00:59,  2.58it/s] 24%|██▍       | 48/200 [00:30<01:13,  2.07it/s] 24%|██▍       | 49/200 [00:31<01:22,  1.82it/s] 26%|██▌       | 51/200 [00:32<01:16,  1.94it/s] 26%|██▋       | 53/200 [00:33<01:11,  2.04it/s] 28%|██▊       | 55/200 [00:33<01:08,  2.13it/s] 28%|██▊       | 57/200 [00:34<01:07,  2.13it/s] 30%|██▉       | 59/200 [00:35<01:04,  2.17it/s] 30%|███       | 61/200 [00:36<01:03,  2.21it/s] 32%|███▏      | 63/200 [00:37<01:01,  2.23it/s] 32%|███▎      | 65/200 [00:39<01:17,  1.75it/s] 34%|███▍      | 68/200 [00:40<01:00,  2.17it/s] 34%|███▍      | 69/200 [00:41<01:09,  1.87it/s] 36%|███▌      | 71/200 [00:41<01:04,  2.00it/s] 36%|███▌      | 72/200 [00:42<01:13,  1.74it/s] 37%|███▋      | 74/200 [00:43<01:07,  1.86it/s] 38%|███▊      | 77/200 [00:45<01:08,  1.80it/s] 40%|███▉      | 79/200 [00:46<01:01,  1.98it/s] 40%|████      | 80/200 [00:47<01:11,  1.67it/s] 41%|████      | 82/200 [00:48<01:01,  1.92it/s] 42%|████▏     | 84/200 [00:48<00:57,  2.02it/s] 42%|████▎     | 85/200 [00:49<00:50,  2.28it/s] 44%|████▎     | 87/200 [00:49<00:46,  2.45it/s] 44%|████▍     | 88/200 [00:50<00:57,  1.94it/s] 44%|████▍     | 89/200 [00:50<00:47,  2.34it/s] 46%|████▌     | 91/200 [00:52<01:02,  1.74it/s] 46%|████▌     | 92/200 [00:52<00:51,  2.08it/s] 47%|████▋     | 94/200 [00:54<01:05,  1.62it/s] 48%|████▊     | 95/200 [00:54<00:53,  1.96it/s] 48%|████▊     | 97/200 [00:55<00:47,  2.17it/s] 49%|████▉     | 98/200 [00:56<00:59,  1.72it/s] 50%|█████     | 100/200 [00:56<00:50,  1.98it/s] 51%|█████     | 102/200 [00:57<00:34,  2.85it/s] 52%|█████▏    | 103/200 [00:57<00:41,  2.34it/s] 52%|█████▏    | 104/200 [00:58<00:51,  1.88it/s] 52%|█████▎    | 105/200 [00:58<00:41,  2.29it/s] 54%|█████▎    | 107/200 [01:00<00:57,  1.63it/s] 55%|█████▍    | 109/200 [01:01<00:45,  1.99it/s] 55%|█████▌    | 110/200 [01:01<00:41,  2.19it/s] 56%|█████▌    | 111/200 [01:03<01:02,  1.43it/s] 56%|█████▋    | 113/200 [01:03<00:39,  2.22it/s] 57%|█████▋    | 114/200 [01:03<00:44,  1.95it/s] 57%|█████▊    | 115/200 [01:04<00:36,  2.33it/s] 58%|█████▊    | 116/200 [01:04<00:46,  1.82it/s] 58%|█████▊    | 117/200 [01:05<00:49,  1.67it/s] 60%|█████▉    | 119/200 [01:06<00:42,  1.89it/s] 60%|██████    | 120/200 [01:06<00:35,  2.24it/s] 61%|██████    | 122/200 [01:07<00:33,  2.31it/s] 62%|██████▏   | 124/200 [01:08<00:32,  2.31it/s] 62%|██████▎   | 125/200 [01:09<00:39,  1.92it/s] 63%|██████▎   | 126/200 [01:09<00:40,  1.82it/s] 64%|██████▎   | 127/200 [01:10<00:34,  2.10it/s] 64%|██████▍   | 128/200 [01:10<00:37,  1.92it/s] 64%|██████▍   | 129/200 [01:11<00:31,  2.26it/s] 65%|██████▌   | 130/200 [01:12<00:53,  1.32it/s] 66%|██████▌   | 131/200 [01:12<00:41,  1.66it/s] 66%|██████▋   | 133/200 [01:13<00:34,  1.92it/s] 68%|██████▊   | 135/200 [01:15<00:43,  1.48it/s] 70%|██████▉   | 139/200 [01:16<00:26,  2.29it/s] 70%|███████   | 140/200 [01:17<00:30,  1.97it/s] 71%|███████   | 142/200 [01:18<00:28,  2.02it/s] 72%|███████▎  | 145/200 [01:19<00:22,  2.45it/s] 73%|███████▎  | 146/200 [01:20<00:32,  1.66it/s] 74%|███████▎  | 147/200 [01:20<00:27,  1.92it/s] 74%|███████▍  | 149/200 [01:21<00:23,  2.16it/s] 75%|███████▌  | 150/200 [01:21<00:20,  2.48it/s] 76%|███████▌  | 151/200 [01:22<00:23,  2.05it/s] 76%|███████▋  | 153/200 [01:23<00:22,  2.12it/s] 78%|███████▊  | 155/200 [01:24<00:20,  2.18it/s] 78%|███████▊  | 156/200 [01:25<00:24,  1.76it/s] 80%|███████▉  | 159/200 [01:26<00:23,  1.75it/s] 80%|████████  | 161/200 [01:27<00:19,  2.00it/s] 81%|████████  | 162/200 [01:27<00:16,  2.24it/s] 82%|████████▏ | 163/200 [01:29<00:25,  1.46it/s] 82%|████████▎ | 165/200 [01:29<00:16,  2.15it/s] 84%|████████▎ | 167/200 [01:30<00:14,  2.25it/s] 84%|████████▍ | 168/200 [01:31<00:17,  1.87it/s] 86%|████████▌ | 171/200 [01:32<00:12,  2.34it/s] 86%|████████▋ | 173/200 [01:34<00:15,  1.78it/s] 88%|████████▊ | 176/200 [01:34<00:10,  2.19it/s] 88%|████████▊ | 177/200 [01:35<00:12,  1.86it/s] 90%|████████▉ | 179/200 [01:36<00:09,  2.14it/s] 90%|█████████ | 180/200 [01:37<00:11,  1.82it/s] 90%|█████████ | 181/200 [01:37<00:09,  2.04it/s] 92%|█████████▏| 183/200 [01:38<00:07,  2.26it/s] 92%|█████████▏| 184/200 [01:39<00:08,  1.84it/s] 92%|█████████▎| 185/200 [01:39<00:06,  2.20it/s] 94%|█████████▎| 187/200 [01:40<00:05,  2.39it/s] 94%|█████████▍| 188/200 [01:40<00:04,  2.77it/s] 94%|█████████▍| 189/200 [01:41<00:04,  2.23it/s] 95%|█████████▌| 190/200 [01:41<00:05,  1.79it/s] 96%|█████████▌| 191/200 [01:42<00:04,  2.20it/s] 96%|█████████▋| 193/200 [01:42<00:02,  2.43it/s] 97%|█████████▋| 194/200 [01:42<00:02,  2.94it/s] 98%|█████████▊| 195/200 [01:43<00:02,  2.20it/s] 98%|█████████▊| 196/200 [01:44<00:01,  2.20it/s] 98%|█████████▊| 197/200 [01:44<00:01,  2.37it/s] 99%|█████████▉| 198/200 [01:44<00:00,  2.38it/s]100%|█████████▉| 199/200 [01:45<00:00,  1.97it/s]100%|██████████| 200/200 [01:45<00:00,  2.55it/s]100%|██████████| 200/200 [01:45<00:00,  1.89it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     200       
+Failed requests:                         0         
+Maximum request concurrency:             16        
+Request rate configured (RPS):           4096.00   
+Benchmark duration (s):                  105.80    
+Total input tokens:                      819000    
+Total generated tokens:                  51200     
+Request throughput (req/s):              1.89      
+Output token throughput (tok/s):         483.95    
+Peak output token throughput (tok/s):    579.00    
+Peak concurrent requests:                20.00     
+Total token throughput (tok/s):          8225.22   
+---------------Time to First Token----------------
+Mean TTFT (ms):                          2312.68   
+Median TTFT (ms):                        2097.78   
+P99 TTFT (ms):                           7157.01   
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          23.12     
+Median TPOT (ms):                        23.17     
+P99 TPOT (ms):                           23.56     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           23.12     
+Median ITL (ms):                         23.18     
+P99 ITL (ms):                            30.21     
+==================================================
+BENCH_RUN_END: concurrency=16
+
+==============================================
+Sweep Completed (exit 0)
+==============================================
+SWEEP_END
+
+==============================================
+Snapshotting Prometheus metrics (post-benchmark)
+==============================================
+  queue_time:   sum=59.275797  count=1261
+  prefill_time: sum=1499.172918  count=1261
+
+==============================================
+Prometheus Metrics Summary (concurrency=16)
+==============================================
+PROMETHEUS_METRICS: concurrency=16
+  request_queue_time:   avg = 0.094501 s  (sum_delta=18.9002, count_delta=200)
+  request_prefill_time: avg = 1.666606 s  (sum_delta=333.3211, count_delta=200)
+
+Stopping log captures...
+Decode log:  results/2ptp1_1dtp2/decode_mc16.log (28 lines, 12K)
+Prefill log: results/2ptp1_1dtp2/prefill_mc16.log (127 lines, 24K)

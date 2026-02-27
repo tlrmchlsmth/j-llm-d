@@ -1,0 +1,10 @@
+Decode pod (5xcvp, node 10.0.65.77) — 2 GPUs, 2 SR-IOV VFs:
+GPU	GPU PCI	HCA	HCA PCI	Interface
+GPU 0	0000:11:00.0	mlx5_10	0000:0c:00.1	net2
+GPU 1	0000:2f:00.0	mlx5_13	0000:58:00.1	net1
+Prefill pod 1 (g87w6, node 10.0.66.42) — 1 GPU, 1 SR-IOV VF:
+GPU	GPU PCI	HCA	HCA PCI	Interface
+GPU 0	0000:11:00.0	mlx5_10	0000:0c:00.1	net1
+Prefill pod 2 (rgsx5, node 10.0.65.77) — 1 GPU, 1 SR-IOV VF:
+GPU	GPU PCI	HCA	HCA PCI	Interface
+GPU 0	0000:46:00.0	mlx5_12	0000:41:00.1	net1

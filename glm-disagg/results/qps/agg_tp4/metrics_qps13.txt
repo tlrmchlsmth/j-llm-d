@@ -1,0 +1,6 @@
+  Pod 10.244.2.78:
+    request_queue_time:   avg = 66.694116 s  (count=390)
+    request_prefill_time: avg = 2.119383 s  (count=390)
+  System total (1 pods):
+    request_queue_time:   avg = 66.694116 s  (count=390)
+    request_prefill_time: avg = 2.119383 s  (count=390)

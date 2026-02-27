@@ -1,0 +1,126 @@
+
+==============================================
+Discovering model server pods in namespace: raj-network-debug
+==============================================
+  Detected:     glm-disagg
+  Decode pod:   ms-glm-disagg-llm-d-modelservice-decode-8599766875-765qr
+  Decode log:   results/qps/2ptp1_1dtp2//decode_qps11.log
+  Prefill pod:  ms-glm-disagg-llm-d-modelservice-prefill-8d997bcdf-8p7tw
+  Prefill log:  results/qps/2ptp1_1dtp2//prefill_qps11.log
+  Metrics from: prefill pods  IPs: 10.244.2.87 10.244.4.184  (port: 8000)
+  NIXL from:    decode pods  IPs: 10.244.5.245  (port: 8200)
+
+Starting decode pod log capture to results/qps/2ptp1_1dtp2//decode_qps11.log ...
+Starting prefill pod log capture to results/qps/2ptp1_1dtp2//prefill_qps11.log ...
+
+==============================================
+Snapshotting Prometheus metrics (pre-benchmark)
+==============================================
+  10.244.2.87: queue(sum=23360.734215, count=901) prefill(sum=2861.001369, count=901)
+  10.244.4.184: queue(sum=24626.623880, count=933) prefill(sum=2970.356085, count=933)
+  NIXL (decode pods):
+  10.244.5.245: xfer(sum=314.358833, count=3668) post(sum=5.389961, count=3668) bytes(sum=2460216197120, count=3668) desc(sum=150159680, count=3668)
+
+==============================================
+Running QPS Sweep via Poker Pod (timeout: 900s)
+  Target: glm-disagg | QPS: 11
+==============================================
+
+Running: just TARGET_DURATION=30 MIN_PROMPTS=120 sweep-qps glm-disagg 4096 256 11
+
+#!/usr/bin/env bash
+URL=$(just _url glm-disagg)
+RESP=$(curl -s "$URL/v1/models")
+MODEL=$(echo "$RESP" | jq -r '.data[0].id' 2>/dev/null)
+if [[ -z "$MODEL" || "$MODEL" == "null" ]]; then
+  echo "ERROR: Could not detect model from glm-disagg. Response: $RESP" >&2
+  exit 1
+fi
+echo "$MODEL"
+SWEEP_QPS_START
+CONFIG: target=glm-disagg model=RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic isl=4096 osl=256 gpu_count=4
+TARGET_DURATION: 30s  MIN_PROMPTS: 120
+REQUEST_RATE: 11 req/s (Poisson)  NUM_PROMPTS: 330
+
+BENCH_RUN: request_rate=11 num_prompts=330
+INFO 02-27 17:39:40 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 02-27 17:39:40 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 02-27 17:39:41 [interface.py:222] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 02-27 17:39:43 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f4758c26d40>, seed=39173937, num_prompts=330, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=256, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai', base_url='http://infra-glm-disagg-inference-gateway-istio.raj-network-debug.svc.cluster.local', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=None, model='RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic', input_len=None, output_len=None, tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=11.0, burstiness=1.0, trust_remote_code=False, disable_tqdm=False, num_warmups=0, profile=False, save_result=False, save_detailed=False, append_result=False, metadata=None, result_dir=None, result_filename=None, ignore_eos=True, percentile_metrics=None, metric_percentiles='99', goodput=None, request_id_prefix='bench-b41829dc-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 02-27 17:39:45 [datasets.py:612] Sampling input_len from [4095, 4095] and output_len from [256, 256]
+  0%|          | 0/330 [00:00<?, ?it/s]WARNING: vllm bench serve no longer sets temperature==0 (greedy) in requests by default. The default will be determined on the server side and can be model/API specific. For the old behavior, include --temperature=0.
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: 11.0
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: None
+  0%|          | 1/330 [00:06<34:44,  6.34s/it]  1%|          | 2/330 [00:06<14:59,  2.74s/it]  1%|          | 3/330 [00:07<10:55,  2.01s/it]  1%|          | 4/330 [00:08<08:23,  1.55s/it]  2%|▏         | 6/330 [00:09<05:39,  1.05s/it]  2%|▏         | 8/330 [00:10<04:05,  1.31it/s]  3%|▎         | 10/330 [00:11<03:28,  1.54it/s]  3%|▎         | 11/330 [00:11<02:55,  1.81it/s]  4%|▍         | 13/330 [00:13<03:25,  1.54it/s]  5%|▍         | 15/330 [00:13<02:23,  2.20it/s]  5%|▌         | 17/330 [00:15<02:58,  1.76it/s]  6%|▌         | 19/330 [00:15<02:09,  2.41it/s]  6%|▋         | 21/330 [00:16<02:44,  1.87it/s]  7%|▋         | 23/330 [00:17<02:03,  2.49it/s]  8%|▊         | 25/330 [00:18<02:38,  1.92it/s]  8%|▊         | 27/330 [00:18<01:58,  2.56it/s]  9%|▉         | 29/330 [00:20<02:33,  1.96it/s]  9%|▉         | 31/330 [00:20<01:56,  2.57it/s] 10%|█         | 33/330 [00:22<02:30,  1.97it/s] 11%|█         | 35/330 [00:22<01:53,  2.59it/s] 11%|█         | 37/330 [00:23<02:26,  2.00it/s] 12%|█▏        | 39/330 [00:24<01:52,  2.59it/s] 12%|█▏        | 41/330 [00:25<02:24,  2.00it/s] 13%|█▎        | 43/330 [00:25<01:51,  2.57it/s] 14%|█▎        | 45/330 [00:27<02:22,  2.00it/s] 14%|█▍        | 47/330 [00:27<01:49,  2.57it/s] 15%|█▍        | 49/330 [00:29<02:20,  2.00it/s] 15%|█▌        | 51/330 [00:29<01:49,  2.55it/s] 16%|█▌        | 53/330 [00:30<02:17,  2.01it/s] 17%|█▋        | 55/330 [00:31<01:47,  2.56it/s] 17%|█▋        | 57/330 [00:32<02:15,  2.01it/s] 18%|█▊        | 59/330 [00:33<01:46,  2.53it/s] 18%|█▊        | 61/330 [00:34<02:13,  2.02it/s] 19%|█▉        | 63/330 [00:34<01:45,  2.54it/s] 20%|█▉        | 65/330 [00:36<02:10,  2.03it/s] 20%|██        | 67/330 [00:36<01:44,  2.51it/s] 21%|██        | 69/330 [00:38<02:09,  2.02it/s] 22%|██▏       | 71/330 [00:38<01:43,  2.50it/s] 22%|██▏       | 73/330 [00:39<02:03,  2.09it/s] 23%|██▎       | 75/330 [00:40<01:42,  2.48it/s] 23%|██▎       | 77/330 [00:41<02:04,  2.03it/s] 24%|██▍       | 79/330 [00:41<01:40,  2.49it/s] 25%|██▍       | 81/330 [00:43<02:02,  2.04it/s] 25%|██▌       | 83/330 [00:43<01:39,  2.47it/s] 26%|██▌       | 85/330 [00:45<01:59,  2.06it/s] 26%|██▋       | 87/330 [00:45<01:38,  2.47it/s] 27%|██▋       | 89/330 [00:46<01:57,  2.06it/s] 28%|██▊       | 91/330 [00:47<01:35,  2.50it/s] 28%|██▊       | 93/330 [00:48<01:55,  2.05it/s] 29%|██▉       | 95/330 [00:49<01:34,  2.49it/s] 29%|██▉       | 97/330 [00:50<01:53,  2.05it/s] 30%|███       | 99/330 [00:50<01:32,  2.49it/s] 31%|███       | 101/330 [00:52<01:51,  2.05it/s] 31%|███       | 103/330 [00:52<01:30,  2.51it/s] 32%|███▏      | 105/330 [00:54<01:49,  2.06it/s] 32%|███▏      | 107/330 [00:54<01:28,  2.52it/s] 33%|███▎      | 109/330 [00:55<01:47,  2.05it/s] 34%|███▎      | 111/330 [00:56<01:27,  2.51it/s] 34%|███▍      | 113/330 [00:57<01:46,  2.04it/s] 35%|███▍      | 115/330 [00:57<01:25,  2.53it/s] 35%|███▌      | 117/330 [00:59<01:44,  2.04it/s] 36%|███▌      | 119/330 [00:59<01:23,  2.54it/s] 37%|███▋      | 121/330 [01:01<01:43,  2.03it/s] 37%|███▋      | 123/330 [01:01<01:21,  2.55it/s] 38%|███▊      | 125/330 [01:02<01:40,  2.04it/s] 38%|███▊      | 127/330 [01:03<01:19,  2.54it/s] 39%|███▉      | 129/330 [01:04<01:38,  2.03it/s] 40%|███▉      | 131/330 [01:05<01:17,  2.56it/s] 40%|████      | 133/330 [01:06<01:38,  2.01it/s] 41%|████      | 135/330 [01:06<01:16,  2.56it/s] 42%|████▏     | 137/330 [01:08<01:35,  2.03it/s] 42%|████▏     | 139/330 [01:08<01:13,  2.60it/s] 43%|████▎     | 141/330 [01:10<01:33,  2.02it/s] 43%|████▎     | 143/330 [01:10<01:12,  2.59it/s] 44%|████▍     | 145/330 [01:11<01:32,  2.00it/s] 45%|████▍     | 147/330 [01:12<01:09,  2.62it/s] 45%|████▌     | 149/330 [01:13<01:30,  1.99it/s] 46%|████▌     | 151/330 [01:13<01:07,  2.64it/s] 46%|████▋     | 153/330 [01:15<01:28,  1.99it/s] 47%|████▋     | 155/330 [01:15<01:06,  2.63it/s] 48%|████▊     | 157/330 [01:17<01:27,  1.97it/s] 48%|████▊     | 159/330 [01:17<01:04,  2.63it/s] 49%|████▉     | 161/330 [01:18<01:25,  1.97it/s] 49%|████▉     | 163/330 [01:19<01:02,  2.66it/s] 50%|█████     | 165/330 [01:20<01:24,  1.96it/s] 51%|█████     | 167/330 [01:20<01:01,  2.67it/s] 51%|█████     | 169/330 [01:22<01:22,  1.96it/s] 52%|█████▏    | 171/330 [01:22<00:59,  2.67it/s] 52%|█████▏    | 173/330 [01:24<01:20,  1.95it/s] 53%|█████▎    | 176/330 [01:24<00:50,  3.02it/s] 54%|█████▍    | 178/330 [01:26<01:11,  2.12it/s] 55%|█████▍    | 181/330 [01:27<01:15,  1.96it/s] 56%|█████▌    | 184/330 [01:27<00:50,  2.87it/s] 56%|█████▋    | 186/330 [01:29<01:08,  2.11it/s] 57%|█████▋    | 189/330 [01:31<01:12,  1.95it/s] 58%|█████▊    | 193/330 [01:33<01:06,  2.07it/s] 60%|█████▉    | 197/330 [01:34<01:02,  2.12it/s] 61%|██████    | 201/330 [01:36<00:59,  2.17it/s] 62%|██████▏   | 205/330 [01:38<00:56,  2.20it/s] 63%|██████▎   | 209/330 [01:40<00:54,  2.21it/s] 65%|██████▍   | 213/330 [01:42<00:52,  2.23it/s] 66%|██████▌   | 217/330 [01:43<00:50,  2.24it/s] 67%|██████▋   | 221/330 [01:45<00:48,  2.23it/s] 68%|██████▊   | 225/330 [01:47<00:46,  2.24it/s] 69%|██████▉   | 229/330 [01:49<00:45,  2.23it/s] 71%|███████   | 233/330 [01:51<00:43,  2.23it/s] 72%|███████▏  | 237/330 [01:52<00:41,  2.22it/s] 73%|███████▎  | 241/330 [01:54<00:39,  2.23it/s] 74%|███████▍  | 245/330 [01:56<00:38,  2.24it/s] 75%|███████▌  | 249/330 [01:58<00:36,  2.23it/s] 77%|███████▋  | 253/330 [01:59<00:34,  2.24it/s] 78%|███████▊  | 257/330 [02:01<00:32,  2.25it/s] 79%|███████▉  | 260/330 [02:01<00:24,  2.89it/s] 79%|███████▉  | 261/330 [02:03<00:33,  2.06it/s] 80%|████████  | 264/330 [02:03<00:22,  2.88it/s] 81%|████████  | 266/330 [02:05<00:29,  2.15it/s] 82%|████████▏ | 269/330 [02:07<00:30,  1.98it/s] 82%|████████▏ | 272/330 [02:07<00:20,  2.79it/s] 83%|████████▎ | 274/330 [02:08<00:26,  2.12it/s] 84%|████████▎ | 276/330 [02:09<00:19,  2.72it/s] 84%|████████▍ | 278/330 [02:10<00:25,  2.03it/s] 85%|████████▍ | 280/330 [02:10<00:18,  2.67it/s] 85%|████████▌ | 282/330 [02:12<00:24,  1.98it/s] 86%|████████▌ | 284/330 [02:12<00:17,  2.65it/s] 87%|████████▋ | 286/330 [02:14<00:22,  1.97it/s] 87%|████████▋ | 287/330 [02:14<00:18,  2.27it/s] 88%|████████▊ | 289/330 [02:16<00:23,  1.77it/s] 88%|████████▊ | 291/330 [02:16<00:16,  2.44it/s] 89%|████████▉ | 293/330 [02:17<00:19,  1.87it/s] 89%|████████▉ | 295/330 [02:18<00:13,  2.51it/s] 90%|█████████ | 297/330 [02:19<00:17,  1.91it/s] 91%|█████████ | 299/330 [02:19<00:12,  2.55it/s] 91%|█████████ | 301/330 [02:21<00:14,  1.93it/s] 92%|█████████▏| 303/330 [02:21<00:10,  2.57it/s] 92%|█████████▏| 305/330 [02:23<00:12,  1.96it/s] 93%|█████████▎| 307/330 [02:23<00:09,  2.55it/s] 94%|█████████▎| 309/330 [02:25<00:10,  1.96it/s] 94%|█████████▍| 311/330 [02:25<00:07,  2.55it/s] 95%|█████████▍| 313/330 [02:26<00:08,  1.96it/s] 95%|█████████▌| 315/330 [02:27<00:05,  2.55it/s] 96%|█████████▌| 317/330 [02:28<00:06,  1.98it/s] 97%|█████████▋| 319/330 [02:28<00:04,  2.58it/s] 97%|█████████▋| 321/330 [02:30<00:04,  2.00it/s] 98%|█████████▊| 323/330 [02:30<00:02,  2.62it/s] 98%|█████████▊| 325/330 [02:31<00:01,  2.60it/s] 99%|█████████▉| 326/330 [02:31<00:01,  2.39it/s] 99%|█████████▉| 328/330 [02:33<00:01,  1.89it/s]100%|██████████| 330/330 [02:34<00:00,  2.13it/s]100%|██████████| 330/330 [02:34<00:00,  2.14it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     330       
+Failed requests:                         0         
+Request rate configured (RPS):           11.00     
+Benchmark duration (s):                  154.11    
+Total input tokens:                      1351350   
+Total generated tokens:                  84480     
+Request throughput (req/s):              2.14      
+Output token throughput (tok/s):         548.19    
+Peak output token throughput (tok/s):    632.00    
+Peak concurrent requests:                282.00    
+Total token throughput (tok/s):          9317.03   
+---------------Time to First Token----------------
+Mean TTFT (ms):                          59813.20  
+Median TTFT (ms):                        59001.33  
+P99 TTFT (ms):                           118465.47 
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          23.51     
+Median TPOT (ms):                        23.62     
+P99 TPOT (ms):                           23.80     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           23.51     
+Median ITL (ms):                         23.49     
+P99 ITL (ms):                            29.91     
+==================================================
+BENCH_RUN_END: request_rate=11
+
+SWEEP_QPS_END
+
+==============================================
+Sweep Completed (exit 0)
+==============================================
+
+==============================================
+Snapshotting Prometheus metrics (post-benchmark)
+==============================================
+  10.244.2.87: queue(sum=32647.212541, count=1068) prefill(sum=3445.795622, count=1068)
+  10.244.4.184: queue(sum=33561.611202, count=1096) prefill(sum=3542.846415, count=1096)
+  NIXL (decode pods):
+  10.244.5.245: xfer(sum=372.441475, count=4328) post(sum=6.708982, count=4328) bytes(sum=2901797765120, count=4328) desc(sum=177111680, count=4328)
+
+==============================================
+Prometheus Metrics Summary (qps=11)
+==============================================
+Prefill Pod Metrics:
+  Pod 10.244.2.87:
+    request_queue_time:   avg = 55.607655 s  (count=167)
+    request_prefill_time: avg = 3.501762 s  (count=167)
+  Pod 10.244.4.184:
+    request_queue_time:   avg = 54.815873 s  (count=163)
+    request_prefill_time: avg = 3.512211 s  (count=163)
+  System total (2 prefill pods):
+    request_queue_time:   avg = 55.216563 s  (count=330)
+    request_prefill_time: avg = 3.506923 s  (count=330)
+
+NIXL KV Transfer Metrics (decode pods):
+  Decode 10.244.5.245:
+    total_transfers:    660
+    avg_xfer_time:      88.004 ms
+    avg_post_time:      1.999 ms
+    avg_mb_per_xfer:    669.1 MB
+    avg_descriptors:    40836
+
+Stopping log captures...
+Decode log:  results/qps/2ptp1_1dtp2//decode_qps11.log (33 lines, 12K)
+Prefill log: results/qps/2ptp1_1dtp2//prefill_qps11.log (183 lines, 32K)

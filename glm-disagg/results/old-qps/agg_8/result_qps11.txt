@@ -1,0 +1,82 @@
+
+==============================================
+Discovering model server pods in namespace: raj-network-debug
+==============================================
+  Detected:     glm-agg
+  Decode pod:   ms-glm-agg-llm-d-modelservice-decode-84fffddc5b-kwtgb
+  Decode log:   results/agg_8//decode_qps11.log
+
+Starting decode pod log capture to results/agg_8//decode_qps11.log ...
+
+==============================================
+Running QPS Sweep via Poker Pod (timeout: 900s)
+  Target: glm-agg | QPS: 11
+==============================================
+
+Running: just TARGET_DURATION=30 MIN_PROMPTS=120 sweep-qps glm-agg 4096 256 11
+
+#!/usr/bin/env bash
+URL=$(just _url glm-agg)
+RESP=$(curl -s "$URL/v1/models")
+MODEL=$(echo "$RESP" | jq -r '.data[0].id' 2>/dev/null)
+if [[ -z "$MODEL" || "$MODEL" == "null" ]]; then
+  echo "ERROR: Could not detect model from glm-agg. Response: $RESP" >&2
+  exit 1
+fi
+echo "$MODEL"
+SWEEP_QPS_START
+CONFIG: target=glm-agg model=RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic isl=4096 osl=256 gpu_count=8
+TARGET_DURATION: 30s  MIN_PROMPTS: 120
+REQUEST_RATE: 11 req/s (Poisson)  NUM_PROMPTS: 330
+
+BENCH_RUN: request_rate=11 num_prompts=330
+INFO 02-26 16:20:24 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 02-26 16:20:24 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 02-26 16:20:24 [interface.py:222] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 02-26 16:20:26 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7fdfc60a2d40>, seed=20162021, num_prompts=330, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=256, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai', base_url='http://infra-glm-agg-inference-gateway-istio.raj-network-debug.svc.cluster.local', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=None, model='RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic', input_len=None, output_len=None, tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=11.0, burstiness=1.0, trust_remote_code=False, disable_tqdm=False, num_warmups=0, profile=False, save_result=False, save_detailed=False, append_result=False, metadata=None, result_dir=None, result_filename=None, ignore_eos=True, percentile_metrics=None, metric_percentiles='99', goodput=None, request_id_prefix='bench-2351125e-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 02-26 16:20:28 [datasets.py:612] Sampling input_len from [4095, 4095] and output_len from [256, 256]
+  0%|          | 0/330 [00:00<?, ?it/s]WARNING: vllm bench serve no longer sets temperature==0 (greedy) in requests by default. The default will be determined on the server side and can be model/API specific. For the old behavior, include --temperature=0.
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: 11.0
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: None
+  0%|          | 1/330 [01:22<7:32:02, 82.44s/it]  1%|          | 2/330 [01:22<3:05:58, 34.02s/it]  1%|          | 4/330 [01:22<1:09:10, 12.73s/it]  2%|▏         | 7/330 [01:22<29:22,  5.46s/it]    3%|▎         | 11/330 [01:22<13:57,  2.63s/it]  5%|▍         | 15/330 [01:23<07:58,  1.52s/it]  6%|▌         | 19/330 [01:23<04:56,  1.05it/s]  7%|▋         | 23/330 [01:23<03:13,  1.59it/s]  8%|▊         | 27/330 [01:23<02:10,  2.33it/s]  9%|▉         | 31/330 [01:23<01:29,  3.32it/s] 11%|█         | 35/330 [01:23<01:03,  4.64it/s] 12%|█▏        | 39/330 [01:23<00:45,  6.33it/s] 13%|█▎        | 43/330 [01:23<00:34,  8.42it/s] 14%|█▍        | 47/330 [01:24<00:25, 10.93it/s] 15%|█▌        | 51/330 [01:24<00:20, 13.73it/s] 17%|█▋        | 55/330 [01:24<00:16, 16.78it/s] 18%|█▊        | 60/330 [01:24<00:12, 21.28it/s] 19%|█▉        | 64/330 [01:24<00:11, 23.81it/s] 21%|██        | 68/330 [01:24<00:10, 26.19it/s] 22%|██▏       | 72/330 [01:24<00:09, 28.14it/s] 23%|██▎       | 76/330 [01:24<00:08, 29.76it/s] 24%|██▍       | 80/330 [01:24<00:07, 31.38it/s] 25%|██▌       | 84/330 [01:25<00:07, 32.46it/s] 27%|██▋       | 88/330 [01:25<00:07, 33.41it/s] 28%|██▊       | 92/330 [01:25<00:07, 33.66it/s] 29%|██▉       | 96/330 [01:25<00:06, 34.48it/s] 30%|███       | 100/330 [01:25<00:06, 34.76it/s] 32%|███▏      | 104/330 [01:25<00:06, 34.94it/s] 33%|███▎      | 108/330 [01:25<00:06, 35.35it/s] 34%|███▍      | 112/330 [01:25<00:06, 35.74it/s] 35%|███▌      | 116/330 [01:26<00:05, 35.96it/s] 36%|███▋      | 120/330 [01:26<00:05, 36.14it/s] 38%|███▊      | 124/330 [01:26<00:05, 36.37it/s] 39%|███▉      | 128/330 [01:26<00:05, 36.82it/s] 40%|████      | 132/330 [01:26<00:05, 37.40it/s] 41%|████      | 136/330 [01:26<00:05, 37.97it/s] 43%|████▎     | 141/330 [01:26<00:05, 36.56it/s] 45%|████▍     | 147/330 [01:26<00:04, 38.33it/s] 46%|████▋     | 153/330 [01:26<00:04, 39.41it/s] 48%|████▊     | 159/330 [01:27<00:04, 40.33it/s] 50%|█████     | 165/330 [01:27<00:04, 41.21it/s] 52%|█████▏    | 171/330 [01:27<00:03, 41.55it/s] 54%|█████▎    | 177/330 [01:27<00:03, 42.31it/s] 55%|█████▌    | 182/330 [01:27<00:03, 40.62it/s] 57%|█████▋    | 188/330 [01:27<00:03, 41.56it/s] 59%|█████▉    | 195/330 [01:27<00:03, 44.71it/s] 61%|██████    | 201/330 [01:28<00:02, 44.65it/s] 63%|██████▎   | 209/330 [01:28<00:02, 50.55it/s] 66%|██████▌   | 217/330 [01:28<00:02, 55.26it/s] 68%|██████▊   | 224/330 [01:28<00:01, 56.76it/s] 70%|███████   | 232/330 [01:28<00:01, 61.09it/s] 73%|███████▎  | 241/330 [01:28<00:01, 67.37it/s] 75%|███████▌  | 249/330 [01:28<00:01, 70.61it/s] 78%|███████▊  | 259/330 [01:28<00:00, 74.26it/s] 82%|████████▏ | 269/330 [01:28<00:00, 79.28it/s] 85%|████████▌ | 282/330 [01:29<00:00, 88.50it/s] 89%|████████▉ | 293/330 [01:29<00:00, 91.91it/s] 93%|█████████▎| 307/330 [01:29<00:00, 101.32it/s] 98%|█████████▊| 322/330 [01:29<00:00, 111.12it/s]100%|██████████| 330/330 [01:29<00:00,  3.69it/s] 
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     330       
+Failed requests:                         0         
+Request rate configured (RPS):           11.00     
+Benchmark duration (s):                  89.47     
+Total input tokens:                      1351350   
+Total generated tokens:                  84480     
+Request throughput (req/s):              3.69      
+Output token throughput (tok/s):         944.23    
+Peak output token throughput (tok/s):    5280.00   
+Peak concurrent requests:                330.00    
+Total token throughput (tok/s):          16048.22  
+---------------Time to First Token----------------
+Mean TTFT (ms):                          23778.49  
+Median TTFT (ms):                        24915.35  
+P99 TTFT (ms):                           46409.81  
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          188.72    
+Median TPOT (ms):                        189.52    
+P99 TPOT (ms):                           319.01    
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           188.72    
+Median ITL (ms):                         65.34     
+P99 ITL (ms):                            481.21    
+==================================================
+BENCH_RUN_END: request_rate=11
+
+SWEEP_QPS_END
+
+==============================================
+Sweep Completed (exit 0)
+==============================================
+
+Stopping log captures...
+Decode log:  results/agg_8//decode_qps11.log (10 lines, 4.0K)

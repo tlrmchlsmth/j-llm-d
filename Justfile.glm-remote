@@ -168,6 +168,43 @@ sweep TARGET ISL OSL +CONCURRENCIES:
   echo ""
   echo "SWEEP_END"
 
+# Sweep with fixed request rate (Poisson arrivals): just sweep-qps <target> <isl> <osl> <qps>
+# Example: just sweep-qps glm-disagg 4096 256 8
+sweep-qps TARGET ISL OSL QPS:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  URL=$(just _url {{TARGET}})
+  MODEL=$(just _model {{TARGET}})
+  GPU_COUNT=$(just _gpu_count {{TARGET}})
+  TARGET_DURATION={{TARGET_DURATION}}
+  MIN_PROMPTS={{MIN_PROMPTS}}
+  QPS={{QPS}}
+
+  NP=$(python3 -c "import math; print(max($MIN_PROMPTS, math.ceil($QPS * $TARGET_DURATION)))")
+
+  echo "SWEEP_QPS_START"
+  echo "CONFIG: target={{TARGET}} model=$MODEL isl={{ISL}} osl={{OSL}} gpu_count=$GPU_COUNT"
+  echo "TARGET_DURATION: ${TARGET_DURATION}s  MIN_PROMPTS: ${MIN_PROMPTS}"
+  echo "REQUEST_RATE: $QPS req/s (Poisson)  NUM_PROMPTS: $NP"
+  echo ""
+
+  echo "BENCH_RUN: request_rate=$QPS num_prompts=$NP"
+  vllm bench serve \
+    --base-url "$URL" \
+    --model "$MODEL" \
+    --dataset-name random \
+    --random-input-len {{ISL}} \
+    --random-output-len {{OSL}} \
+    --request-rate $QPS \
+    --num-prompts $NP \
+    --ignore-eos \
+    --seed $(date +%M%H%M%S)
+  echo "BENCH_RUN_END: request_rate=$QPS"
+
+  echo ""
+  echo "SWEEP_QPS_END"
+
 # Sweep all discovered targets: just sweep-all <isl> <osl> <concurrency levels...>
 # Example: just sweep-all 4096 512 1 4 8 16 32 64
 sweep-all ISL OSL +CONCURRENCIES:

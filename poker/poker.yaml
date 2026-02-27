@@ -48,6 +48,11 @@ spec:
     - name: poker
       image: quay.io/tms/poker:0.0.13
       imagePullPolicy: Always
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          uv pip install vllm
+          exec sleep infinity
       stdin: true
       tty: true
 

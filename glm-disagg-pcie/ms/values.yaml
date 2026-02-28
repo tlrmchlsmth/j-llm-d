@@ -44,12 +44,12 @@ decode:
       portName: "vllm"
       path: "/metrics"
       interval: "30s"
-  # initContainers:
-  #   - name: qos-downgrade
-  #     image: "quay.io/tms/poker:0.0.13" # dummy
-  #     imagePullPolicy: IfNotPresent
-  #     command: ["/bin/bash", "-c", "exit 0"]
-  #     resources: {}
+  initContainers:
+    - name: qos-downgrade
+      image: "quay.io/tms/poker:0.0.13"
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-c", "exit 0"]
+      resources: {}
   containers:
     - name: "vllm"
       image: ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.7-debug
@@ -98,9 +98,11 @@ decode:
           protocol: TCP
       resources:
         limits:
+          amd.com/gpu: "8"
           memory: 400Gi
           cpu: "32"
         requests:
+          amd.com/gpu: "8"
           memory: 400Gi
           cpu: "32"
       mountModelVolume: false
@@ -151,9 +153,9 @@ decode:
 
 prefill:
   parallelism:
-    tensor: 1
+    tensor: 2
   create: true
-  replicas: 2
+  replicas: 1
   # podAnnotations and nvidia.com/sriov-rdma-vf injected by helmfile (PREFILL_TP)
   extraConfig:
     hostNetwork: false  # Use SR-IOV NICs instead of hostNetwork
@@ -172,12 +174,12 @@ prefill:
       portName: "vllm"
       path: "/metrics"
       interval: "30s"
-  # initContainers:
-  #   - name: qos-downgrade
-  #     image: "quay.io/tms/poker:0.0.13" # dummy
-  #     imagePullPolicy: IfNotPresent
-  #     command: ["/bin/bash", "-c", "exit 0"]
-  #     resources: {}
+  initContainers:
+    - name: qos-downgrade
+      image: "quay.io/tms/poker:0.0.13"
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-c", "exit 0"]
+      resources: {}
   containers:
     - name: "vllm"
       image: ghcr.io/vcave/llm-d/llm-d-rocm:v0.4.7-debug
@@ -226,9 +228,11 @@ prefill:
           protocol: TCP
       resources:
         limits:
+          amd.com/gpu: "8"
           memory: 400Gi
           cpu: "32"
         requests:
+          amd.com/gpu: "8"
           memory: 400Gi
           cpu: "32"
       mountModelVolume: false

@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # Concurrency Sweep with vLLM Log Collection (auto-detects agg vs disagg)
-# Usage: ./sweep_concurrency_with_kv_transfer_logs.sh <max_concurrency> <output_dir>
+# Usage: ./sweep_concurrency_with_kv_transfer_logs.sh <max_concurrency> <output_dir> [ISL] [OSL]
 # Example: ./sweep_concurrency_with_kv_transfer_logs.sh 32 results/1p1d_16
+#          ./sweep_concurrency_with_kv_transfer_logs.sh 1 results/isl_sweep 2048 256
 #
 # Writes to <output_dir>/:
 #   result_mc<N>.txt   - benchmark output (also printed to terminal)
@@ -178,8 +179,8 @@ trap cleanup EXIT
 
 sleep 2
 
-ISL=4096
-OSL=256
+ISL="${3:-4096}"
+OSL="${4:-256}"
 TARGET_DURATION=120
 MIN_PROMPTS=200
 

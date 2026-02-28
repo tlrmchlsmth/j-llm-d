@@ -4,13 +4,13 @@ set dotenv-path := "../.env"
 NAMESPACE := "raj-network-debug"
 KN := "kubectl -n " + NAMESPACE
 MODEL := "RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic"
-DECODE_TP := "2"
-PREFILL_TP := "1"
+DECODE_TP := "8"
+PREFILL_TP := "8"
 
 default:
   just --list
 
-# Deploy the disaggregated stack (2x TP=1 prefill + 1x TP=2 decode)
+# Deploy the disaggregated stack (1x TP=2 prefill + 1x TP=2 decode, requesting 8 GPUs + 8 NICs per pod)
 deploy:
   DECODE_TP="{{DECODE_TP}}" PREFILL_TP="{{PREFILL_TP}}" python3 scripts/gen-nic-values.py
   DECODE_TP="{{DECODE_TP}}" PREFILL_TP="{{PREFILL_TP}}" MODEL="{{MODEL}}" helmfile apply -n {{NAMESPACE}}

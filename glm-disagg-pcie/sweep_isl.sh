@@ -24,7 +24,10 @@ fi
 
 BASE_OUT_DIR="$1"
 SCENARIO="${2:-1}"
-RAILS=1
+case "$SCENARIO" in
+    *r2) RAILS=2 ;;
+    *)   RAILS=1 ;;
+esac
 MC=1
 OSL=256
 

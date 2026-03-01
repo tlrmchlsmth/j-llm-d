@@ -1,6 +1,8 @@
-Scenario 1: mlx5_10, mlx5_11 (rdma0, rdma1)
-Scenario 2: mlx5_12, mlx5_13 (rdma2, rdma3)
-Scenario 3: mlx5_16, mlx5_17 (rdma6, rdma7)
+Scenario 1:   mlx5_10, mlx5_11 (rdma0, rdma1)  UCX_MAX_RMA_RAILS=1
+Scenario 2:   mlx5_12, mlx5_13 (rdma2, rdma3)  UCX_MAX_RMA_RAILS=1
+Scenario 3:   mlx5_16, mlx5_17 (rdma6, rdma7)  UCX_MAX_RMA_RAILS=1
+Scenario 2r2: mlx5_12, mlx5_13 (rdma2, rdma3)  UCX_MAX_RMA_RAILS=2
+Scenario 3r2: mlx5_16, mlx5_17 (rdma6, rdma7)  UCX_MAX_RMA_RAILS=2
 
 
 

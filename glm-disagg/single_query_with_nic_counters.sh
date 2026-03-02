@@ -1,8 +1,10 @@
 #!/bin/bash
 
-# GLM-Disagg Sweep with NIC Counter Tracking
-# Usage: NET_DEBUG_NS=<debug-ns> ./sweep_with_nic_counters.sh <max_concurrent>
-# Example: NET_DEBUG_NS=kube-system ./sweep_with_nic_counters.sh 32
+# GLM-Disagg Benchmark with NIC Counter Tracking
+# Usage: NET_DEBUG_NS=<debug-ns> ./single_query_with_nic_counters.sh <max_concurrent> [num_prompts] [ISL] [OSL]
+# Example: NET_DEBUG_NS=raj-network-debug ./single_query_with_nic_counters.sh 1
+#          NET_DEBUG_NS=raj-network-debug ./single_query_with_nic_counters.sh 3 100
+#          NET_DEBUG_NS=raj-network-debug ./single_query_with_nic_counters.sh 3 100 4096 256
 #
 # Automatically discovers ms-glm-disagg-llm-d-modelservice-{decode,prefill} pods.
 # Tracks RX counters for priorities 0, 1, and 5, plus ECN and PFC pause counters.
@@ -14,12 +16,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/nic_counter_utils.sh"
 
 if [ $# -lt 1 ]; then
-    echo "Usage: NET_DEBUG_NS=<debug-ns> $0 <max_concurrent>"
-    echo "Example: NET_DEBUG_NS=kube-system $0 32"
+    echo "Usage: NET_DEBUG_NS=<debug-ns> $0 <max_concurrent> [num_prompts] [ISL] [OSL]"
+    echo "Example: NET_DEBUG_NS=raj-network-debug $0 3 100"
     exit 1
 fi
 
 MC="$1"
+NUM_PROMPTS="${2:-1}"
+ISL="${3:-4096}"
+OSL="${4:-256}"
 NAMESPACE="raj-network-debug"
 
 echo ""
@@ -91,7 +96,7 @@ echo "=============================================="
 echo "Running Sweep via Poker Pod (timeout: ${BENCHMARK_TIMEOUT_SEC}s)"
 echo "=============================================="
 echo ""
-echo "Running: single 4096-ISL prompt via poker pod"
+echo "Running: ${NUM_PROMPTS} prompts, MC=${MC}, ISL=${ISL}, OSL=${OSL} via poker pod"
 echo ""
 
 GATEWAY_URL="http://infra-${TARGET}-inference-gateway-istio.${NAMESPACE}.svc.cluster.local"
@@ -103,16 +108,16 @@ echo "Gateway: $GATEWAY_URL"
 echo "Model:   $MODEL"
 
 echo ""
-echo "Sending single request: ISL=4096 OSL=256"
+echo "Sending '"$NUM_PROMPTS"' prompts: ISL='"$ISL"' OSL='"$OSL"' MC='"$MC"'"
 vllm bench serve \
     --base-url "$GATEWAY_URL" \
     --model "$MODEL" \
     --dataset-name random \
-    --random-input-len 4096 \
-    --random-output-len 256 \
-    --num-prompts 1 \
-    --max-concurrency 1 \
-    --request-rate 1 \
+    --random-input-len '"$ISL"' \
+    --random-output-len '"$OSL"' \
+    --num-prompts '"$NUM_PROMPTS"' \
+    --max-concurrency '"$MC"' \
+    --request-rate inf \
     --ignore-eos \
     --seed $(date +%M%H%M%S)
 ' 2>&1

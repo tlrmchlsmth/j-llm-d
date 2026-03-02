@@ -160,7 +160,7 @@ def write_csvs(output_dir, prefix, scenarios, all_data):
 
 if __name__ == "__main__":
     base = Path(__file__).parent.parent.parent / "results"
-    output = Path(__file__).parent / "isl8192_mc_sweep"
+    output = Path(__file__).parent / "isl8192_rails2_mc_sweep"
 
     scenarios = ["1", "2r2", "3r2"]
     all_data = {}
@@ -172,5 +172,5 @@ if __name__ == "__main__":
         else:
             print(f"Scenario {s}: no data found")
 
-    write_csvs(str(output), "isl8192_mc_sweep", scenarios, all_data)
+    write_csvs(str(output), "isl8192_rails2_mc_sweep", scenarios, all_data)
     print("\nDone.")

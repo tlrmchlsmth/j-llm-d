@@ -30,6 +30,9 @@ spec:
           - name: lustre
             persistentVolumeClaim:
               claimName: lustre-pvc-vllm
+          - name: jit-build-scripts
+            configMap:
+              name: jit-build-scripts
         resourceClaims:
           - name: compute-domain-channel
             resourceClaimTemplateName: llm-d-dev-claim
@@ -104,7 +107,7 @@ spec:
               runAsNonRoot: true
         containers:
           - name: vllm
-            image: quay.io/rh-ee-ecrncevi/llm-dev-cuda13:v0.5.0-arm64-upstream-824f9e8f3c7f0a688b6093d0c85ed6b39ba314e1
+            image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
             securityContext:
               capabilities:
                 add:
@@ -137,19 +140,61 @@ spec:
 
                 # Cherry-pick NVFP4 EPLB contiguity fix
                 cd /opt/vllm-source
-                git remote add elvircrn https://github.com/elvircrn/vllm.git 2>/dev/null || true
+                git remote add elvircrn https://github.com/elvircrn/vllm.git
                 git fetch elvircrn fix-eplb-nvfp4-contiguous
                 git fetch elvircrn mla-fused-concat-quant
-                git cherry-pick --no-commit 00a944ef8e
+                git fetch elvircrn gb200_fused_op
+                git fetch elvircrn gb200_working_fused_rope
+                git fetch elvircrn gb200_working
+                # git cherry-pick --no-commit 00a944ef8e
 
                 # MLA torch.concat optimization
-                git cherry-pick --no-commit e93799b752
+                # git cherry-pick --no-commit e93799b752
+                
+                
+                git cherry-pick --no-commit fce7c1a0ad <- fused op PR
+                git cherry-pick --no-commit e962d2d9448598f56deff2f406eb48a53bdf7956
+                git cherry-pick --no-commit f78b63d71a09fb13e895db68402017c5764ff30e
+                
+                
+                # Q_b proj PR
+                git cherry-pick --no-commit 24ae04cb7a
+
+                # Yank ropequant from FlashInfer into vLLM tree
+                git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
+                git cherry-pick --no-commit 782ef44e4a1512297f05314eb85f18c1573307f2
+                echo "=== JIT-compiling mla_rope_quant at $(date) ==="
+                python tools/jit_mla_rope_quant.py
+                sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py
+                sed -i 's/torch\.ops\._C\.mla_rope_quantize_fp8/mla_rope_quant_ext.mla_rope_quantize_fp8/g' vllm/_custom_ops.py
+                export PYTHONPATH=/tmp/jit_build/mla_rope_quant:${PYTHONPATH:-}
+                echo "=== JIT build complete at $(date) ==="
+
+                PROFILER_ARGS=""
+                NSYS_PREFIX=""
+                NVTX_TRACING_ARG=""
+                if [ "${ENABLE_PROFILING:-0}" = "1" ]; then
+                  echo "Profiling enabled, installing profiling tools..."
+                  uv pip install nvtx
+                  mkdir -p /trace
+                  apt-get update && apt-get install -y --no-install-recommends nsight-systems-cli 2>/dev/null || \
+                  uv pip install nvidia-nsight-systems 2>/dev/null || \
+                  (echo "ERROR: Could not install nsys. Add nsight-systems to your container image." && exit 1)
+
+                  if [ "${PROFILER_TYPE:-nsys}" = "nsys" ]; then
+                    NSYS_PREFIX="nsys profile --cuda-graph-trace=graph --trace=cuda,nvtx --delay=${PROFILER_DELAY_SECS:-120} --duration=${PROFILER_DURATION_SECS:-10} -o /trace/decode_rank_${START_RANK}"
+                    NVTX_TRACING_ARG="--enable-layerwise-nvtx-tracing"
+                  else
+                    PROFILER_ARGS="--profiler-config {\"profiler\":\"torch\",\"max_iterations\":${PROFILER_MAX_ITERS:-32},\"torch_profiler_dir\":\"/trace\"}"
+                  fi
+                fi
 
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
-                  CUDA_VISIBLE_DEVICES=$R vllm serve \
+                  CUDA_VISIBLE_DEVICES=$R $NSYS_PREFIX vllm serve $PROFILER_ARGS \
                     nvidia/DeepSeek-R1-0528-FP4-v2 \
+                    --host :: \
                     --port $((8200 + R)) \
                     --disable-uvicorn-access-log \
                     --enable-expert-parallel \
@@ -167,8 +212,9 @@ spec:
                                            }}' \
                     --async-scheduling \
                     --all2all-backend "deepep_low_latency" \
-                    --gpu-memory-utilization 0.85 \
-                    --max-num-batched-tokens $VLLM_MOE_DP_CHUNK_SIZE \
+                    --max-num-seqs $VLLM_MOE_DP_CHUNK_SIZE \
+                    --max-cudagraph-capture-size 32768 \
+                    --max-num-batched-tokens 32768 \
                     --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
                     --enable-force-include-usage &
                 done
@@ -225,12 +271,15 @@ spec:
               - name: NVSHMEM_QP_DEPTH
                 value: "2048"
               - name: VLLM_MOE_DP_CHUNK_SIZE
-                value: "768"
+                value: "1024"
 
               # DeepEP configuration
               - name: VLLM_DEEPEP_LOW_LATENCY_ALLOW_NVLINK
                 value: "1"
               - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
+                value: "1"
+
+              - name: VLLM_MLA_FP8_PROJ
                 value: "1"
 
               # Common vLLM settings
@@ -282,6 +331,22 @@ spec:
               - name: VLLM_MLA_FUSED_CONCAT_QUANT
                 value: "1"
 
+              # Profiling (set ENABLE_PROFILING=1 to enable)
+              - name: ENABLE_PROFILING
+                value: "1"
+              - name: PROFILER_TYPE
+                value: "cuda"  # "nsys" or "cuda"
+              # nsys profiling options
+              - name: PROFILER_DELAY_SECS
+                value: "540"  # Wait 9 min after vllm starts
+              - name: PROFILER_DURATION_SECS
+                value: "10"   # Profile for 10 seconds
+              # cuda profiling options
+              - name: PROFILER_MAX_ITERS
+                value: "4"   # Profile N iterations
+              - name: VLLM_NVTX_SCOPES_FOR_PROFILING
+                value: "0"    # Disabled - requires nvtx module
+
             ports:
               - containerPort: 8200
                 name: vllm-rank0
@@ -316,6 +381,10 @@ spec:
             volumeMounts:
               - mountPath: /dev/shm
                 name: dshm
-              - name: lustre
-                mountPath: /mnt/lustre/vllm-vlm-elvircrn
+              - mountPath: /mnt/lustre/vllm-vlm-elvircrn
+                name: lustre
+              - name: jit-build-scripts
+                mountPath: /opt/vllm-source/tools/jit_mla_rope_quant.py
+                subPath: jit_mla_rope_quant.py
+                readOnly: true
             workingDir: /code

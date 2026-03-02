@@ -4,3 +4,12 @@ kind: Kustomization
 resources:
   - decode-bench.yaml
   - serviceAccount.yaml
+  - gateway.yaml
+  - httproute.yaml
+
+configMapGenerator:
+  - name: jit-build-scripts
+    options:
+      disableNameSuffixHash: true
+    files:
+      - jit_mla_rope_quant.py

@@ -4,5 +4,6 @@ resources:
   - decode.yaml
   - prefill.yaml
   - serviceAccount.yaml
+  - jit-build-scripts.yaml
 configurations:
   - kustomize-config.yaml

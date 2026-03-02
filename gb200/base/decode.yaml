@@ -9,7 +9,7 @@ metadata:
 spec:
   replicas: 1
   leaderWorkerTemplate:
-    size: 12
+    size: 4
     workerTemplate:
       metadata:
         labels:
@@ -26,6 +26,9 @@ spec:
           - name: lustre
             persistentVolumeClaim:
               claimName: lustre-pvc-vllm
+          - name: jit-build-scripts
+            configMap:
+              name: jit-build-scripts
         resourceClaims:
           - name: compute-domain-channel
             resourceClaimTemplateName: llm-d-dev-claim
@@ -96,8 +99,8 @@ spec:
               allowPrivilegeEscalation: false
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
-            #image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
+            #image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
+            image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
             securityContext:
               capabilities:
                 add:
@@ -126,6 +129,32 @@ spec:
                 fi
 
                 uv pip uninstall pplx-kernels
+
+                # Cherry-pick NVFP4 EPLB contiguity fix (https://github.com/vllm-project/vllm/pull/34646)
+                cd /opt/vllm-source
+                git remote add elvircrn https://github.com/elvircrn/vllm.git 2>/dev/null || true
+                git fetch elvircrn fix-eplb-nvfp4-contiguous
+                git fetch elvircrn mla-fused-concat-quant
+                git fetch elvircrn gb200_fused_op
+                git fetch elvircrn gb200_working_fused_rope
+                git fetch elvircrn gb200_working
+                # git cherry-pick --no-commit 00a944ef8e
+
+                # Q_b proj PR
+                git cherry-pick --no-commit 24ae04cb7a
+
+                # Yank ropequant from FlashInfer into vLLM tree
+                git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
+                git cherry-pick --no-commit 782ef44e4a1512297f05314eb85f18c1573307f2
+                # git cherry-pick --no-commit 17ca636713
+
+                # JIT-compile the new CUDA kernel
+                echo "=== JIT-compiling mla_rope_quant at $(date) ==="
+                python tools/jit_mla_rope_quant.py
+                sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py
+                sed -i 's/torch\.ops\._C\.mla_rope_quantize_fp8/mla_rope_quant_ext.mla_rope_quantize_fp8/g' vllm/_custom_ops.py
+                export PYTHONPATH=/tmp/jit_build/mla_rope_quant:${PYTHONPATH:-}
+                echo "=== JIT build complete at $(date) ==="
 
                 # Derive batch-size-dependent env vars from MAX_TOKENS
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
@@ -156,17 +185,10 @@ spec:
                     --async-scheduling \
                     --kv-cache-dtype fp8 \
                     --all2all-backend "deepep_low_latency" \
-                    --gpu-memory-utilization 0.75 \
-                    --max-num-batched-tokens $MAX_TOKENS \
+                    --max-num-batched-tokens 32768 \
                     --max-num-seqs $MAX_TOKENS \
                     --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
-                    --max-cudagraph-capture-size 768 \
-                    --enable-eplb \
-                    --eplb-config '{"window_size":"100",
-                                    "step_interval":"1000",
-                                    "num_redundant_experts":"32",
-                                    "log_balancedness":"True",
-                                    "log_balancedness_interval":"100"}' \
+                    --max-cudagraph-capture-size 32768 \
                     --enable-force-include-usage &
                 done
 
@@ -247,9 +269,9 @@ spec:
               # UCX configuration for NIXL - use only working InfiniBand devices
               # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
               - name: UCX_NET_DEVICES
-              #  value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+                value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
               # Some ports are down on a couple of nodes.
-                value: "mlx5_0:1,mlx5_1:1"
+#                value: "mlx5_0:1,mlx5_1:1"
 
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S
@@ -299,6 +321,10 @@ spec:
             volumeMounts:
               - mountPath: /dev/shm
                 name: dshm
-              - mountPath: /mnt/lustre
+              - mountPath: /mnt/lustre/vllm-vlm-elvircrn
                 name: lustre
+              - name: jit-build-scripts
+                mountPath: /opt/vllm-source/tools/jit_mla_rope_quant.py
+                subPath: jit_mla_rope_quant.py
+                readOnly: true
             workingDir: /code

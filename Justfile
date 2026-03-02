@@ -53,10 +53,6 @@ default:
 @cks-nodes:
   kubectl get nodes -o=custom-columns="NAME:metadata.name,IP:status.addresses[?(@.type=='InternalIP')].address,TYPE:metadata.labels['node\.coreweave\.cloud\/type'],LINK:metadata.labels['ethernet\.coreweave\.cloud/speed'],READY:status.conditions[?(@.type=='Ready')].status,CORDON:spec.unschedulable,TAINT:spec.taints[?(@.key=='qos.coreweave.cloud/interruptable')].effect,RELIABILITY:metadata.labels['node\.coreweave\.cloud\/reliability'],LG:metadata.labels['ib\.coreweave\.cloud\/leafgroup'],VERSION:metadata.labels['node\.coreweave\.cloud\/version'],IB:metadata.labels['ib\.coreweave\.cloud\/speed'],STATE:metadata.labels['node\.coreweave\.cloud\/state'],RESERVED:metadata.labels['node\.coreweave\.cloud\/reserved']"
 
-# Check InfiniBand port health on all GPU (arm64) nodes
-check-ib:
-  ./scripts/check-ib.sh
-
 create-secrets:
   kubectl create secret generic hf-secret --from-literal=HF_TOKEN={{HF_TOKEN}} -n {{NAMESPACE}} \
   && kubectl create secret generic gh-token-secret --from-literal=GH_TOKEN={{GH_TOKEN}} -n {{NAMESPACE}}
@@ -65,6 +61,7 @@ start-poker:
   #!/usr/bin/env bash
   export POKER_IMAGE="{{env_var('POKER_IMAGE')}}"
   export POKER_TAG="{{env_var('POKER_TAG')}}"
+  export POKER_NAME="{{POKER_NAME}}"
 
   # Use nvidia kubeconfig if available, otherwise default
   if [[ -n "${NVIDIA_KUBECONFIG:-}" ]]; then
@@ -73,7 +70,7 @@ start-poker:
     KUBECTL_CMD="{{KN}}"
   fi
 
-  envsubst '${POKER_IMAGE} ${POKER_TAG}' < poker/poker.yaml | $KUBECTL_CMD apply -f -
+  envsubst '${POKER_IMAGE} ${POKER_TAG} ${POKER_NAME}' < poker/poker.yaml | $KUBECTL_CMD apply -f -
 
 # Fetch decode pod names and IPs and cache them
 get-decode-pods:
@@ -103,17 +100,18 @@ poke:
   cat llm-d/guides/wide-ep-lws/manifests/modelserver/gb200_dsv31_fp4/prefill.yaml 2>/dev/null > .tmp/prefill_config.yaml || echo "prefill config not found" > .tmp/prefill_config.yaml
 
   # Export variables for envsubst
+  # Use correct URL for prefill+decode deployment
   export BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
   export NAMESPACE="{{NAMESPACE}}"
   export GRAFANA_URL="http://grafana.vllm.svc.cluster.local"
 
   envsubst '${BASE_URL} ${NAMESPACE} ${GRAFANA_URL}' < Justfile.remote > .tmp/Justfile.remote.tmp
-  $KUBECTL_CMD cp .tmp/Justfile.remote.tmp poker:/app/Justfile
-  $KUBECTL_CMD cp annotate.sh poker:/app/annotate.sh
-  $KUBECTL_CMD cp .tmp/decode_config.yaml poker:/app/decode_config.yaml
-  $KUBECTL_CMD cp .tmp/prefill_config.yaml poker:/app/prefill_config.yaml
-  $KUBECTL_CMD exec -it poker -- chmod +x /app/annotate.sh
-  $KUBECTL_CMD exec -it poker -- /bin/zsh
+  $KUBECTL_CMD cp .tmp/Justfile.remote.tmp {{POKER_NAME}}:/app/Justfile
+  $KUBECTL_CMD cp annotate.sh {{POKER_NAME}}:/app/annotate.sh
+  $KUBECTL_CMD cp .tmp/decode_config.yaml {{POKER_NAME}}:/app/decode_config.yaml
+  $KUBECTL_CMD cp .tmp/prefill_config.yaml {{POKER_NAME}}:/app/prefill_config.yaml
+  $KUBECTL_CMD exec -it {{POKER_NAME}} -- chmod +x /app/annotate.sh
+  $KUBECTL_CMD exec -it {{POKER_NAME}} -- /bin/zsh
 
 
 # Wait for poker + model serving pods to be ready, then run `just eval` from poker
@@ -129,8 +127,8 @@ auto-eval:
   fi
 
   echo "Waiting for poker pod..."
-  until $KUBECTL_CMD get pod poker &>/dev/null; do sleep 5; done
-  $KUBECTL_CMD wait --for=condition=Ready pod/poker --timeout=300s
+  until $KUBECTL_CMD get pod {{POKER_NAME}} &>/dev/null; do sleep 5; done
+  $KUBECTL_CMD wait --for=condition=Ready pod/{{POKER_NAME}} --timeout=300s
   echo "Poker pod is ready."
 
   echo "Waiting for decode pods..."
@@ -153,14 +151,14 @@ auto-eval:
   export GRAFANA_URL="http://grafana.vllm.svc.cluster.local"
 
   envsubst '${BASE_URL} ${NAMESPACE} ${GRAFANA_URL}' < Justfile.remote > .tmp/Justfile.remote.tmp
-  $KUBECTL_CMD cp .tmp/Justfile.remote.tmp poker:/app/Justfile
-  $KUBECTL_CMD cp annotate.sh poker:/app/annotate.sh
-  $KUBECTL_CMD cp .tmp/decode_config.yaml poker:/app/decode_config.yaml
-  $KUBECTL_CMD cp .tmp/prefill_config.yaml poker:/app/prefill_config.yaml
-  $KUBECTL_CMD exec poker -- chmod +x /app/annotate.sh
+  $KUBECTL_CMD cp .tmp/Justfile.remote.tmp {{POKER_NAME}}:/app/Justfile
+  $KUBECTL_CMD cp annotate.sh {{POKER_NAME}}:/app/annotate.sh
+  $KUBECTL_CMD cp .tmp/decode_config.yaml {{POKER_NAME}}:/app/decode_config.yaml
+  $KUBECTL_CMD cp .tmp/prefill_config.yaml {{POKER_NAME}}:/app/prefill_config.yaml
+  $KUBECTL_CMD exec {{POKER_NAME}} -- chmod +x /app/annotate.sh
 
   echo "All pods ready. Running eval..."
-  $KUBECTL_CMD exec poker -- just eval
+  $KUBECTL_CMD exec {{POKER_NAME}} -- just eval
 
 parallel-guidellm RR CONCURRENT_PER_WORKER REQUESTS_PER_WORKER INPUT_LEN OUTPUT_LEN N_WORKERS:
   #!/usr/bin/env bash
@@ -178,7 +176,7 @@ parallel-guidellm RR CONCURRENT_PER_WORKER REQUESTS_PER_WORKER INPUT_LEN OUTPUT_
     RATE={{RR}} \
     INPUT_LEN={{INPUT_LEN}} \
     OUTPUT_LEN={{OUTPUT_LEN}} \
-    BASE_URL="http://wide-ep-llm-d-inference-gateway-istio.vllm.svc.cluster.local" \
+    BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local" \
     OUTPUT_PATH="parallel-guidellm-$(date +%Y%m%d-%H%M%S)" \
     POKER_IMAGE="{{env_var('POKER_IMAGE')}}" \
     POKER_TAG="{{env_var('POKER_TAG')}}" \
@@ -198,19 +196,18 @@ inference-perf NUM_REQUESTS='25000' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKER
   export CONCURRENCY=$((NUM_WORKERS * WORKER_MAX_CONCURRENCY))
   export WARMUP_CONCURRENCY={{WARMUP_CONCURRENCY}}
   export WARMUP_REQUESTS={{WARMUP_REQUESTS}}
-  export DEPLOY_NAME="{{DEPLOY_NAME}}"
   export INPUT_MEAN INPUT_MIN=$((INPUT_MEAN - INPUT_MEAN/5)) INPUT_MAX=$((INPUT_MEAN + INPUT_MEAN/5)) INPUT_STD=$((INPUT_MEAN/10))
   export OUTPUT_MEAN OUTPUT_MIN=$((OUTPUT_MEAN - OUTPUT_MEAN/5)) OUTPUT_MAX=$((OUTPUT_MEAN + OUTPUT_MEAN/5)) OUTPUT_STD=$((OUTPUT_MEAN/10))
-  {{KN}} delete job inference-perf --ignore-not-found=true
-  {{KN}} delete configmap inference-perf-config --ignore-not-found=true
-  envsubst '${DEPLOY_NAME} ${NUM_REQUESTS} ${NUM_WORKERS} ${WORKER_MAX_CONCURRENCY} ${CONCURRENCY} ${WARMUP_CONCURRENCY} ${WARMUP_REQUESTS} ${INPUT_MEAN} ${INPUT_MIN} ${INPUT_MAX} ${INPUT_STD} ${OUTPUT_MEAN} ${OUTPUT_MIN} ${OUTPUT_MAX} ${OUTPUT_STD}' \
-    < inference-perf-job.yaml | {{KN}} apply -f -
+  {{KN_FP4}} delete job inference-perf --ignore-not-found=true
+  {{KN_FP4}} delete configmap inference-perf-config --ignore-not-found=true
+  envsubst '${NUM_REQUESTS} ${NUM_WORKERS} ${WORKER_MAX_CONCURRENCY} ${CONCURRENCY} ${WARMUP_CONCURRENCY} ${WARMUP_REQUESTS} ${INPUT_MEAN} ${INPUT_MIN} ${INPUT_MAX} ${INPUT_STD} ${OUTPUT_MEAN} ${OUTPUT_MIN} ${OUTPUT_MAX} ${OUTPUT_STD}' \
+    < inference-perf-job.yaml | {{KN_FP4}} apply -f -
   echo "inference-perf job submitted (concurrent, workers=${NUM_WORKERS} concurrency=${CONCURRENCY} warmup=${WARMUP_CONCURRENCY}x${WARMUP_REQUESTS} requests=${NUM_REQUESTS} input=${INPUT_MEAN} output=${OUTPUT_MEAN})"
-  echo "  kubectl -n {{NAMESPACE}} logs -f job/inference-perf"
+  echo "  kubectl --kubeconfig $HOME/nvidia_kubeconfig.yaml -n {{NAMESPACE}} logs -f job/inference-perf"
 
 # Get inference-perf results
 inference-perf-logs:
-  {{KN}} logs -f job/inference-perf
+  {{KN_FP4}} logs -f job/inference-perf
 
 deploy_inferencepool ROUTING='load-aware':
   #!/usr/bin/env bash

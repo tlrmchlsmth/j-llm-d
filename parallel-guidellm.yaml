@@ -39,6 +39,17 @@ spec:
               #  --warmup-percent "0.20" \
               #  --cooldown-percent "0.20" \
 
+              # Wait for gateway to be ready
+              echo "Waiting for gateway..."
+              for i in $(seq 1 60); do
+                if curl -s --connect-timeout 5 -m 10 -o /dev/null -w '%{http_code}' "${BASE_URL}/v1/models" | grep -q 200; then
+                  echo "Gateway ready after $i attempts"
+                  break
+                fi
+                echo "  attempt $i: gateway not ready, retrying in 5s..."
+                sleep 5
+              done
+
               mkdir -p /guide-llm/${OUTPUT_PATH}
 
               # For experiment tracking

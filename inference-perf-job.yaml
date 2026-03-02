@@ -6,8 +6,8 @@ data:
   config.yml: |
     server:
       type: vllm
-      model_name: nvidia/DeepSeek-R1-NVFP4
-      base_url: http://${DEPLOY_NAME}-inference-gateway-istio.vllm.svc.cluster.local
+      model_name: nvidia/DeepSeek-R1-0528-FP4-v2
+      base_url: http://wide-ep-llm-d-inference-gateway-istio.vllm.svc.cluster.local
       ignore_eos: true
 
     api:
@@ -15,10 +15,10 @@ data:
       streaming: true
 
     tokenizer:
-      pretrained_model_name_or_path: nvidia/DeepSeek-R1-NVFP4
+      pretrained_model_name_or_path: nvidia/DeepSeek-R1-0528-FP4-v2
 
     data:
-      type: synthetic
+      type: random
       input_distribution:
         min: ${INPUT_MIN}
         max: ${INPUT_MAX}

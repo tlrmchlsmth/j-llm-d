@@ -1,0 +1,15 @@
+Prefill Pod Metrics:
+  Pod 10.244.1.131:
+    request_queue_time:   avg = 1.587401 s  (count=200)
+    request_prefill_time: avg = 3.625602 s  (count=200)
+  System total (1 prefill pods):
+    request_queue_time:   avg = 1.587401 s  (count=200)
+    request_prefill_time: avg = 3.625602 s  (count=200)
+
+NIXL KV Transfer Metrics (decode pods):
+  Decode 10.244.3.135:
+    total_transfers:    400
+    avg_xfer_time:      578.825 ms
+    avg_post_time:      0.885 ms
+    avg_mb_per_xfer:    667.7 MB
+    avg_descriptors:    40756

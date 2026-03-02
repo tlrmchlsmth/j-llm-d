@@ -183,6 +183,7 @@ ISL="${3:-4096}"
 OSL="${4:-256}"
 TARGET_DURATION="${TARGET_DURATION:-120}"
 MIN_PROMPTS="${MIN_PROMPTS:-200}"
+MAX_PROMPTS="${MAX_PROMPTS:-}"
 
 poker_exec() {
     kubectl exec -n "$NAMESPACE" poker -- /bin/zsh -c "cd /app && $1"
@@ -217,6 +218,9 @@ if [ -n "${THROUGHPUT:-}" ]; then
     NP=$(python3 -c "import math; r=float('$THROUGHPUT')/$TOKENS_PER_REQ; print(max($MIN_PROMPTS, math.ceil(r * $TARGET_DURATION)))")
 else
     NP=$MIN_PROMPTS
+fi
+if [ -n "${MAX_PROMPTS:-}" ]; then
+    [ "$NP" -gt "$MAX_PROMPTS" ] && NP=$MAX_PROMPTS
 fi
 # Compute a timeout with 50% buffer based on expected runtime
 if [ -n "${THROUGHPUT:-}" ]; then

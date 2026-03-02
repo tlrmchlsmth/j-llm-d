@@ -280,14 +280,13 @@ get_node_name() {
 _fetch_ethtool_stats() {
     local pod=$1
     local nic=$2
+    local outfile=$3
     local retry=0
-    local stats=""
     
     while [ $retry -lt $MAX_RETRIES ]; do
-        stats=$(kubectl exec -n "$NET_DEBUG_NS" "$pod" -- ethtool -S "$nic" 2>/dev/null)
+        kubectl exec -n "$NET_DEBUG_NS" "$pod" -- ethtool -S "$nic" 2>/dev/null > "$outfile"
         
-        if echo "$stats" | grep -q "rx_prio0_packets:"; then
-            echo "$stats"
+        if grep -q "rx_prio0_packets:" "$outfile"; then
             return 0
         fi
         
@@ -298,8 +297,8 @@ _fetch_ethtool_stats() {
         fi
     done
     
+    : > "$outfile"
     echo "  [ERROR] Failed to get stats for $nic on $pod after $MAX_RETRIES attempts" >&2
-    echo ""
     return 1
 }
 
@@ -312,12 +311,16 @@ _collect_nic_counters_for_pod() {
     local pod_idx=$2
     local prefix=$3
     
+    local _stats_file
+    _stats_file=$(mktemp /tmp/nic_stats.XXXXXX)
+    
     for nic_idx in $(seq 0 $((NICS_PER_POD - 1))); do
         local array_idx=$((pod_idx * NICS_PER_POD + nic_idx))
         local nic_name=$(get_nic_name $nic_idx)
-        local stats=$(_fetch_ethtool_stats "$debug_pod" "$nic_name")
+        _fetch_ethtool_stats "$debug_pod" "$nic_name" "$_stats_file"
+        local _fetch_rc=$?
         
-        if [ -z "$stats" ]; then
+        if [ $_fetch_rc -ne 0 ] || [ ! -s "$_stats_file" ]; then
             echo "  [ERROR] No stats retrieved for $nic_name on $debug_pod - using -1 marker"
             if [ "$prefix" == "before" ]; then
                 # RX packets
@@ -388,43 +391,43 @@ _collect_nic_counters_for_pod() {
         fi
         
         # Parse RX priority packet counters
-        local rx_prio0_packets=$(echo "$stats" | grep -E "^\s*rx_prio0_packets:" | awk '{print $2}')
-        local rx_prio1_packets=$(echo "$stats" | grep -E "^\s*rx_prio1_packets:" | awk '{print $2}')
-        local rx_prio5_packets=$(echo "$stats" | grep -E "^\s*rx_prio5_packets:" | awk '{print $2}')
-        local rx_packets_phy=$(echo "$stats" | grep -E "^\s*rx_packets_phy:" | awk '{print $2}')
+        local rx_prio0_packets=$(grep -E "^\s*rx_prio0_packets:" "$_stats_file" | awk '{print $2}')
+        local rx_prio1_packets=$(grep -E "^\s*rx_prio1_packets:" "$_stats_file" | awk '{print $2}')
+        local rx_prio5_packets=$(grep -E "^\s*rx_prio5_packets:" "$_stats_file" | awk '{print $2}')
+        local rx_packets_phy=$(grep -E "^\s*rx_packets_phy:" "$_stats_file" | awk '{print $2}')
         
         # Parse TX priority packet counters
-        local tx_prio0_packets=$(echo "$stats" | grep -E "^\s*tx_prio0_packets:" | awk '{print $2}')
-        local tx_prio1_packets=$(echo "$stats" | grep -E "^\s*tx_prio1_packets:" | awk '{print $2}')
-        local tx_prio5_packets=$(echo "$stats" | grep -E "^\s*tx_prio5_packets:" | awk '{print $2}')
-        local tx_packets_phy=$(echo "$stats" | grep -E "^\s*tx_packets_phy:" | awk '{print $2}')
+        local tx_prio0_packets=$(grep -E "^\s*tx_prio0_packets:" "$_stats_file" | awk '{print $2}')
+        local tx_prio1_packets=$(grep -E "^\s*tx_prio1_packets:" "$_stats_file" | awk '{print $2}')
+        local tx_prio5_packets=$(grep -E "^\s*tx_prio5_packets:" "$_stats_file" | awk '{print $2}')
+        local tx_packets_phy=$(grep -E "^\s*tx_packets_phy:" "$_stats_file" | awk '{print $2}')
         
         # Parse RX priority discard counters
-        local rx_prio0_buf_discard=$(echo "$stats" | grep -E "^\s*rx_prio0_buf_discard:" | awk '{print $2}')
-        local rx_prio1_buf_discard=$(echo "$stats" | grep -E "^\s*rx_prio1_buf_discard:" | awk '{print $2}')
-        local rx_prio5_buf_discard=$(echo "$stats" | grep -E "^\s*rx_prio5_buf_discard:" | awk '{print $2}')
+        local rx_prio0_buf_discard=$(grep -E "^\s*rx_prio0_buf_discard:" "$_stats_file" | awk '{print $2}')
+        local rx_prio1_buf_discard=$(grep -E "^\s*rx_prio1_buf_discard:" "$_stats_file" | awk '{print $2}')
+        local rx_prio5_buf_discard=$(grep -E "^\s*rx_prio5_buf_discard:" "$_stats_file" | awk '{print $2}')
         
         # Parse RX priority byte counters
-        local rx_prio0_bytes=$(echo "$stats" | grep -E "^\s*rx_prio0_bytes:" | awk '{print $2}')
-        local rx_prio1_bytes=$(echo "$stats" | grep -E "^\s*rx_prio1_bytes:" | awk '{print $2}')
-        local rx_prio5_bytes=$(echo "$stats" | grep -E "^\s*rx_prio5_bytes:" | awk '{print $2}')
+        local rx_prio0_bytes=$(grep -E "^\s*rx_prio0_bytes:" "$_stats_file" | awk '{print $2}')
+        local rx_prio1_bytes=$(grep -E "^\s*rx_prio1_bytes:" "$_stats_file" | awk '{print $2}')
+        local rx_prio5_bytes=$(grep -E "^\s*rx_prio5_bytes:" "$_stats_file" | awk '{print $2}')
         
         # Parse TX priority byte counters
-        local tx_prio0_bytes=$(echo "$stats" | grep -E "^\s*tx_prio0_bytes:" | awk '{print $2}')
-        local tx_prio1_bytes=$(echo "$stats" | grep -E "^\s*tx_prio1_bytes:" | awk '{print $2}')
-        local tx_prio5_bytes=$(echo "$stats" | grep -E "^\s*tx_prio5_bytes:" | awk '{print $2}')
+        local tx_prio0_bytes=$(grep -E "^\s*tx_prio0_bytes:" "$_stats_file" | awk '{print $2}')
+        local tx_prio1_bytes=$(grep -E "^\s*tx_prio1_bytes:" "$_stats_file" | awk '{print $2}')
+        local tx_prio5_bytes=$(grep -E "^\s*tx_prio5_bytes:" "$_stats_file" | awk '{print $2}')
         
         # Parse PFC pause counters
-        local tx_prio0_pause=$(echo "$stats" | grep -E "^\s*tx_prio0_pause:" | awk '{print $2}')
-        local rx_prio0_pause=$(echo "$stats" | grep -E "^\s*rx_prio0_pause:" | awk '{print $2}')
-        local tx_prio5_pause=$(echo "$stats" | grep -E "^\s*tx_prio5_pause:" | awk '{print $2}')
-        local rx_prio5_pause=$(echo "$stats" | grep -E "^\s*rx_prio5_pause:" | awk '{print $2}')
+        local tx_prio0_pause=$(grep -E "^\s*tx_prio0_pause:" "$_stats_file" | awk '{print $2}')
+        local rx_prio0_pause=$(grep -E "^\s*rx_prio0_pause:" "$_stats_file" | awk '{print $2}')
+        local tx_prio5_pause=$(grep -E "^\s*tx_prio5_pause:" "$_stats_file" | awk '{print $2}')
+        local rx_prio5_pause=$(grep -E "^\s*rx_prio5_pause:" "$_stats_file" | awk '{print $2}')
         
         # Parse PFC pause duration counters
-        local tx_prio0_pause_duration=$(echo "$stats" | grep -E "^\s*tx_prio0_pause_duration:" | awk '{print $2}')
-        local rx_prio0_pause_duration=$(echo "$stats" | grep -E "^\s*rx_prio0_pause_duration:" | awk '{print $2}')
-        local tx_prio5_pause_duration=$(echo "$stats" | grep -E "^\s*tx_prio5_pause_duration:" | awk '{print $2}')
-        local rx_prio5_pause_duration=$(echo "$stats" | grep -E "^\s*rx_prio5_pause_duration:" | awk '{print $2}')
+        local tx_prio0_pause_duration=$(grep -E "^\s*tx_prio0_pause_duration:" "$_stats_file" | awk '{print $2}')
+        local rx_prio0_pause_duration=$(grep -E "^\s*rx_prio0_pause_duration:" "$_stats_file" | awk '{print $2}')
+        local tx_prio5_pause_duration=$(grep -E "^\s*tx_prio5_pause_duration:" "$_stats_file" | awk '{print $2}')
+        local rx_prio5_pause_duration=$(grep -E "^\s*rx_prio5_pause_duration:" "$_stats_file" | awk '{print $2}')
         
         if [ "$prefix" == "before" ]; then
             # RX packets
@@ -492,6 +495,7 @@ _collect_nic_counters_for_pod() {
             after_rx_prio5_pause_duration[$array_idx]=${rx_prio5_pause_duration:-0}
         fi
     done
+    rm -f "$_stats_file"
 }
 
 # ============================================

@@ -3,12 +3,14 @@
 # Run MC sweeps across all PCIe topology scenarios.
 # Switches NIC scenario, waits for pods to be ready, then runs the MC sweep.
 #
-# Usage: ./run_all_mc_sweeps.sh [scenarios...]
-# Example: ./run_all_mc_sweeps.sh              # all 5 scenarios
-#          ./run_all_mc_sweeps.sh 1 3           # just scenarios 1 and 3
-#          ./run_all_mc_sweeps.sh 2r2 3r2       # just the 2-rail scenarios
+# Usage: ./run_all_mc_sweeps.sh [--isl ISL] [--mc MC_VALUES...] [--] [scenarios...]
+# Example: ./run_all_mc_sweeps.sh                          # all 5 scenarios, ISL=4096
+#          ./run_all_mc_sweeps.sh 1 3                      # just scenarios 1 and 3
+#          ./run_all_mc_sweeps.sh 2r2 3r2                  # just the 2-rail scenarios
+#          ./run_all_mc_sweeps.sh --isl 8192 --mc 1 2 3 4 6 8 -- 1 2r2 3r2
 #
-# Results land in: results/mc_sweep_scenario<S>/
+# Results land in: results/mc_sweep_scenario<S>/ (ISL=4096)
+#              or: results/isl<N>_mc_sweep_scenario<S>/ (other ISL)
 
 set -euo pipefail
 
@@ -17,23 +19,43 @@ SWITCH_SCRIPT="$SCRIPT_DIR/switch_scenario.sh"
 SWEEP_MC_SCRIPT="$SCRIPT_DIR/sweep_mc.sh"
 NAMESPACE="raj-network-debug"
 
-if [ $# -ge 1 ]; then
-    SCENARIOS=("$@")
-else
-    SCENARIOS=(1 2 3 2r2 3r2)
-fi
+ISL=4096
+MC_VALUES=()
+SCENARIOS=()
 
-MC_VALUES=(1 2 4 8 16)
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --isl) ISL="$2"; shift 2 ;;
+        --mc)  shift; while [ $# -gt 0 ] && [ "$1" != "--" ] && [[ ! "$1" =~ ^-- ]]; do
+                   MC_VALUES+=("$1"); shift
+               done ;;
+        --)    shift; break ;;
+        *)     break ;;
+    esac
+done
+
+while [ $# -gt 0 ]; do
+    SCENARIOS+=("$1"); shift
+done
+
+[ ${#SCENARIOS[@]} -eq 0 ] && SCENARIOS=(1 2 3 2r2 3r2)
+[ ${#MC_VALUES[@]} -eq 0 ] && MC_VALUES=(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 20 24 32)
+
 RESULTS_BASE="$SCRIPT_DIR/results"
+if [ "$ISL" = "4096" ]; then
+    RESULTS_PREFIX="mc_sweep"
+else
+    RESULTS_PREFIX="isl${ISL}_mc_sweep"
+fi
 
 echo "=============================================="
 echo "Multi-Scenario MC Sweep"
 echo "=============================================="
 echo "  Scenarios:  ${SCENARIOS[*]}"
 echo "  MC values:  ${MC_VALUES[*]}"
-echo "  ISL:        4096"
+echo "  ISL:        $ISL"
 echo "  OSL:        256"
-echo "  Results:    $RESULTS_BASE/mc_sweep_scenario<S>/"
+echo "  Results:    $RESULTS_BASE/${RESULTS_PREFIX}_scenario<S>/"
 echo "=============================================="
 echo ""
 
@@ -80,10 +102,10 @@ for SCENARIO in "${SCENARIOS[@]}"; do
     echo "  vLLM ready after ${WAITED}s."
 
     # --- Run MC sweep ---
-    OUT_DIR="${RESULTS_BASE}/mc_sweep_scenario${SCENARIO}"
+    OUT_DIR="${RESULTS_BASE}/${RESULTS_PREFIX}_scenario${SCENARIO}"
     echo ""
     echo "Starting MC sweep for scenario $SCENARIO -> $OUT_DIR"
-    "$SWEEP_MC_SCRIPT" "$OUT_DIR" "$SCENARIO" "${MC_VALUES[@]}"
+    "$SWEEP_MC_SCRIPT" "$OUT_DIR" "$SCENARIO" "$ISL" "${MC_VALUES[@]}"
 
     ELAPSED=$(( $(date +%s) - OVERALL_START ))
     echo ""
@@ -97,7 +119,7 @@ echo "# All MC Sweeps Complete (total: ${TOTAL_TIME}s)"
 echo "######################################################"
 echo "Results:"
 for SCENARIO in "${SCENARIOS[@]}"; do
-    DIR="${RESULTS_BASE}/mc_sweep_scenario${SCENARIO}"
+    DIR="${RESULTS_BASE}/${RESULTS_PREFIX}_scenario${SCENARIO}"
     if [ -d "$DIR" ]; then
         echo "  $DIR/"
         ls -d "$DIR"/scenario* 2>/dev/null | sed 's/^/    /'

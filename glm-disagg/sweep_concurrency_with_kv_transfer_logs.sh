@@ -181,8 +181,8 @@ sleep 2
 
 ISL="${3:-4096}"
 OSL="${4:-256}"
-TARGET_DURATION=120
-MIN_PROMPTS=200
+TARGET_DURATION="${TARGET_DURATION:-120}"
+MIN_PROMPTS="${MIN_PROMPTS:-200}"
 
 poker_exec() {
     kubectl exec -n "$NAMESPACE" poker -- /bin/zsh -c "cd /app && $1"

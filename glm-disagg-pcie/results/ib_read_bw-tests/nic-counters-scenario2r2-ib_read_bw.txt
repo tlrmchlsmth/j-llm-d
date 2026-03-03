@@ -1,0 +1,491 @@
+
+==============================================
+Parsing config: pcie-tree-2gpu-nic_pairs.json
+==============================================
+Namespace: raj-network-debug
+Pods found in config:
+  - test-nic-pcie-10.0.67.106
+  - test-nic-pcie-10.0.74.185
+
+==============================================
+Initializing NIC Counter Utils
+==============================================
+Pods namespace: raj-network-debug
+Networking debug pods namespace: raj-network-debug
+
+Discovering nodes for pods...
+  test-nic-pcie-10.0.67.106 -> 10.0.67.106 -> networking-debug-pod-10.0.67.106
+  test-nic-pcie-10.0.74.185 -> 10.0.74.185 -> networking-debug-pod-10.0.74.185
+
+Verifying networking-debug-pods in namespace raj-network-debug...
+  Found: networking-debug-pod-10.0.67.106
+  Found: networking-debug-pod-10.0.74.185
+
+Pod name column width: 27
+Initialization complete.
+
+==============================================
+Collecting NIC Counters BEFORE Test
+==============================================
+  Collecting from networking-debug-pod-10.0.67.106 (for test-nic-pcie-10.0.67.106)...
+  Collecting from networking-debug-pod-10.0.74.185 (for test-nic-pcie-10.0.74.185)...
+
+==============================================
+Running Multi-NIC Bandwidth Test
+==============================================
+
+
+╔════════════════════════════════════════════════════╗
+║    Multi-NIC IB READ Bandwidth Test              ║
+╚════════════════════════════════════════════════════╝
+
+Configuration:
+  Namespace:      raj-network-debug
+  RDMA Operation: RDMA READ (pull/NIXL-like)
+  Message Size:   2097152 bytes (2.0 MB)
+  Num QPs:        1
+  Duration:       30 seconds
+  Bi-directional: False
+  TOS:            41 (RDMA CM enabled)
+  Test Pairs:     2
+
+📡 Discovering network endpoints...
+
+  Pair 1: test-nic-pcie-10.0.74.185:mlx5_16:rocm:0 ← test-nic-pcie-10.0.67.106:mlx5_16:rocm:0 (port 18515)
+    ✓ src: net1 → 192.168.3.211, dst: net3 → 192.168.1.119 (src NUMA: 1, dst NUMA: 1)
+  Pair 2: test-nic-pcie-10.0.74.185:mlx5_17:rocm:1 ← test-nic-pcie-10.0.67.106:mlx5_17:rocm:1 (port 18516)
+    ✓ src: net2 → 192.168.3.212, dst: net4 → 192.168.1.120 (src NUMA: 1, dst NUMA: 1)
+
+🚀 Starting all ib_read_bw servers...
+
+  Pair 1: ✓ Server started on test-nic-pcie-10.0.67.106
+  Pair 2: ✓ Server started on test-nic-pcie-10.0.67.106
+
+  Waiting for servers to initialize...
+
+🔄 Starting all ib_read_bw clients...
+
+  Running tests for 30 seconds...
+
+  Pair 2: ✓ 254.88 Gbps avg
+  Pair 1: ✓ 253.86 Gbps avg
+
+  Total test time: 36.2 seconds
+
+📊 Test Results
+
+┏━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━┓
+┃ # ┃ Initiator (reads)                        ┃ Remote (data source)                     ┃ Avg BW (Gbps) ┃ Status ┃
+┡━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━┩
+│ 1 │ test-nic-pcie-10.0.74.185:mlx5_16:rocm:0 │ test-nic-pcie-10.0.67.106:mlx5_16:rocm:0 │        253.86 │   ✓    │
+│ 2 │ test-nic-pcie-10.0.74.185:mlx5_17:rocm:1 │ test-nic-pcie-10.0.67.106:mlx5_17:rocm:1 │        254.88 │   ✓    │
+└───┴──────────────────────────────────────────┴──────────────────────────────────────────┴───────────────┴────────┘
+
+📈 Summary
+--------------------------------------------------
+  Successful tests: 2/2
+
+  Aggregate Throughput:
+    Total Avg:  508.74 Gbps
+
+  Per-NIC Average:
+    Average:    254.37 Gbps
+
+==============================================
+Test Completed (exit code: 0, duration: 42s)
+==============================================
+
+
+==============================================
+Collecting NIC Counters AFTER Test
+==============================================
+  Collecting from networking-debug-pod-10.0.67.106 (for test-nic-pcie-10.0.67.106)...
+  Collecting from networking-debug-pod-10.0.74.185 (for test-nic-pcie-10.0.74.185)...
+
+==============================================
+NIC Counter DIFFERENCES (After - Before)
+==============================================
+
+==============================================================================
+Packet Counters DIFF for: test-nic-pcie-10.0.67.106 (Node: 10.0.67.106)
+==============================================================================
+
+RX Packets:
+NIC      rx_prio0_packets     rx_prio1_packets     rx_prio5_packets     rx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    28                   12                   0                    40                
+rdma1    28                   13                   0                    41                
+rdma2    27                   14                   0                    41                
+rdma3    27                   14                   0                    41                
+rdma4    28                   14                   0                    42                
+rdma5    27                   14                   0                    41                
+rdma6    454080               49                   0                    454129            
+rdma7    455908               49                   0                    455957            
+eth0     3727                 0                    0                    3727              
+
+TX Packets:
+NIC      tx_prio0_packets     tx_prio1_packets     tx_prio5_packets     tx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    0                    1                    0                    1                 
+rdma1    0                    1                    0                    1                 
+rdma2    0                    0                    0                    0                 
+rdma3    0                    0                    0                    0                 
+rdma4    0                    0                    0                    0                 
+rdma5    0                    0                    0                    0                 
+rdma6    232473602            34                   0                    232473636         
+rdma7    233409538            34                   0                    233409572         
+eth0     6954                 0                    0                    6954              
+
+RX Discards:
+NIC      rx_prio0_buf_discard     rx_prio1_buf_discard     rx_prio5_buf_discard    
+-------- ------------------------ ------------------------ ------------------------
+rdma0    0                        0                        0                       
+rdma1    0                        0                        0                       
+rdma2    0                        0                        0                       
+rdma3    0                        0                        0                       
+rdma4    0                        0                        0                       
+rdma5    0                        0                        0                       
+rdma6    0                        0                        0                       
+rdma7    0                        0                        0                       
+eth0     0                        0                        0                       
+
+RX Bytes:
+NIC      rx_prio0_bytes     rx_prio1_bytes     rx_prio5_bytes    
+-------- ------------------ ------------------ ------------------
+rdma0    3.44 KB            888 B              0 B               
+rdma1    3.44 KB            962 B              0 B               
+rdma2    3.32 KB            1.03 KB            0 B               
+rdma3    3.32 KB            1.03 KB            0 B               
+rdma4    3.44 KB            1.03 KB            0 B               
+rdma5    3.32 KB            1.03 KB            0 B               
+rdma6    35.42 MB           4.52 KB            0 B               
+rdma7    35.56 MB           4.52 KB            0 B               
+eth0     1.28 MB            0 B                0 B               
+
+TX Bytes:
+NIC      tx_prio0_bytes     tx_prio1_bytes     tx_prio5_bytes    
+-------- ------------------ ------------------ ------------------
+rdma0    0 B                74 B               0 B               
+rdma1    0 B                74 B               0 B               
+rdma2    0 B                0 B                0 B               
+rdma3    0 B                0 B                0 B               
+rdma4    0 B                0 B                0 B               
+rdma5    0 B                0 B                0 B               
+rdma6    966.62 GB          3.16 KB            0 B               
+rdma7    970.52 GB          3.16 KB            0 B               
+eth0     36.57 MB           0 B                0 B               
+
+==============================================================================
+Packet Counters DIFF for: test-nic-pcie-10.0.74.185 (Node: 10.0.74.185)
+==============================================================================
+
+RX Packets:
+NIC      rx_prio0_packets     rx_prio1_packets     rx_prio5_packets     rx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    27                   14                   0                    41                
+rdma1    28                   14                   0                    42                
+rdma2    27                   14                   0                    41                
+rdma3    28                   14                   0                    42                
+rdma4    27                   14                   0                    41                
+rdma5    28                   14                   0                    42                
+rdma6    232473629            48                   0                    232473677         
+rdma7    233409566            48                   0                    233409614         
+eth0     2622                 0                    0                    2622              
+
+TX Packets:
+NIC      tx_prio0_packets     tx_prio1_packets     tx_prio5_packets     tx_packets_phy    
+-------- -------------------- -------------------- -------------------- ------------------
+rdma0    0                    0                    0                    0                 
+rdma1    0                    0                    0                    0                 
+rdma2    0                    0                    0                    0                 
+rdma3    0                    0                    0                    0                 
+rdma4    0                    0                    0                    0                 
+rdma5    0                    0                    0                    0                 
+rdma6    454053               35                   0                    454094            
+rdma7    455881               35                   0                    455919            
+eth0     3645                 0                    0                    3645              
+
+RX Discards:
+NIC      rx_prio0_buf_discard     rx_prio1_buf_discard     rx_prio5_buf_discard    
+-------- ------------------------ ------------------------ ------------------------
+rdma0    0                        0                        0                       
+rdma1    0                        0                        0                       
+rdma2    0                        0                        0                       
+rdma3    0                        0                        0                       
+rdma4    0                        0                        0                       
+rdma5    0                        0                        0                       
+rdma6    0                        0                        0                       
+rdma7    0                        0                        0                       
+eth0     0                        0                        0                       
+
+RX Bytes:
+NIC      rx_prio0_bytes     rx_prio1_bytes     rx_prio5_bytes    
+-------- ------------------ ------------------ ------------------
+rdma0    3.32 KB            1.03 KB            0 B               
+rdma1    3.44 KB            1.03 KB            0 B               
+rdma2    3.32 KB            1.03 KB            0 B               
+rdma3    3.44 KB            1.03 KB            0 B               
+rdma4    3.32 KB            1.03 KB            0 B               
+rdma5    3.44 KB            1.03 KB            0 B               
+rdma6    966.62 GB          4.19 KB            0 B               
+rdma7    970.52 GB          4.19 KB            0 B               
+eth0     1.27 MB            0 B                0 B               
+
+TX Bytes:
+NIC      tx_prio0_bytes     tx_prio1_bytes     tx_prio5_bytes    
+-------- ------------------ ------------------ ------------------
+rdma0    0 B                0 B                0 B               
+rdma1    0 B                0 B                0 B               
+rdma2    0 B                0 B                0 B               
+rdma3    0 B                0 B                0 B               
+rdma4    0 B                0 B                0 B               
+rdma5    0 B                0 B                0 B               
+rdma6    35.41 MB           3.48 KB            0 B               
+rdma7    35.55 MB           3.48 KB            0 B               
+eth0     10.37 MB           0 B                0 B               
+
+==============================================================================
+PFC Counters DIFF for: test-nic-pcie-10.0.67.106 (Node: 10.0.67.106) - Priorities 0 and 5
+==============================================================================
+
+Pause Counts:
+NIC      tx_prio0_pause     rx_prio0_pause     tx_prio5_pause     rx_prio5_pause    
+-------- ------------------ ------------------ ------------------ ------------------
+rdma0    0                  0                  0                  0                 
+rdma1    0                  0                  0                  0                 
+rdma2    0                  0                  0                  0                 
+rdma3    0                  0                  0                  0                 
+rdma4    0                  0                  0                  0                 
+rdma5    0                  0                  0                  0                 
+rdma6    0                  0                  0                  0                 
+rdma7    0                  0                  0                  0                 
+eth0     0                  0                  0                  0                 
+
+Pause Durations:
+NIC      tx_prio0_pause_duration    rx_prio0_pause_duration    tx_prio5_pause_duration    rx_prio5_pause_duration   
+-------- -------------------------- -------------------------- -------------------------- --------------------------
+rdma0    0                          0                          0                          0                         
+rdma1    0                          0                          0                          0                         
+rdma2    0                          0                          0                          0                         
+rdma3    0                          0                          0                          0                         
+rdma4    0                          0                          0                          0                         
+rdma5    0                          0                          0                          0                         
+rdma6    0                          0                          0                          0                         
+rdma7    0                          0                          0                          0                         
+eth0     0                          0                          0                          0                         
+
+==============================================================================
+PFC Counters DIFF for: test-nic-pcie-10.0.74.185 (Node: 10.0.74.185) - Priorities 0 and 5
+==============================================================================
+
+Pause Counts:
+NIC      tx_prio0_pause     rx_prio0_pause     tx_prio5_pause     rx_prio5_pause    
+-------- ------------------ ------------------ ------------------ ------------------
+rdma0    0                  0                  0                  0                 
+rdma1    0                  0                  0                  0                 
+rdma2    0                  0                  0                  0                 
+rdma3    0                  0                  0                  0                 
+rdma4    0                  0                  0                  0                 
+rdma5    0                  0                  0                  0                 
+rdma6    6                  0                  6                  0                 
+rdma7    3                  0                  3                  0                 
+eth0     0                  0                  0                  0                 
+
+Pause Durations:
+NIC      tx_prio0_pause_duration    rx_prio0_pause_duration    tx_prio5_pause_duration    rx_prio5_pause_duration   
+-------- -------------------------- -------------------------- -------------------------- --------------------------
+rdma0    0                          0                          0                          0                         
+rdma1    0                          0                          0                          0                         
+rdma2    0                          0                          0                          0                         
+rdma3    0                          0                          0                          0                         
+rdma4    0                          0                          0                          0                         
+rdma5    0                          0                          0                          0                         
+rdma6    174                        0                          174                        0                         
+rdma7    87                         0                          87                         0                         
+eth0     0                          0                          0                          0                         
+
+==============================================================================
+ECN Counters DIFF for: test-nic-pcie-10.0.67.106 (Node: 10.0.67.106)
+==============================================================================
+NIC      np_ecn_marked_roce_packets   np_cnp_sent        rp_cnp_handled    
+-------- ---------------------------- ------------------ ------------------
+rdma0    0                            0                  0                 
+rdma1    0                            0                  0                 
+rdma2    0                            0                  0                 
+rdma3    0                            0                  0                 
+rdma4    0                            0                  0                 
+rdma5    0                            0                  0                 
+rdma6    0                            0                  0                 
+rdma7    0                            0                  0                 
+eth0     0                            0                  0                 
+
+==============================================================================
+ECN Counters DIFF for: test-nic-pcie-10.0.74.185 (Node: 10.0.74.185)
+==============================================================================
+NIC      np_ecn_marked_roce_packets   np_cnp_sent        rp_cnp_handled    
+-------- ---------------------------- ------------------ ------------------
+rdma0    0                            0                  0                 
+rdma1    0                            0                  0                 
+rdma2    0                            0                  0                 
+rdma3    0                            0                  0                 
+rdma4    0                            0                  0                 
+rdma5    0                            0                  0                 
+rdma6    0                            0                  0                 
+rdma7    0                            0                  0                 
+eth0     0                            0                  0                 
+
+==============================================================================
+SUMMARY: Packet Counters - BACKEND NICs (rdma0-rdma7)
+==============================================================================
+
+RX Packets:
+POD                         rx_prio0_packets     rx_prio1_packets     rx_prio5_packets     rx_packets_phy    
+--------------------------- -------------------- -------------------- -------------------- ------------------
+test-nic-pcie-10.0.67.106   910153               179                  0                    910332            
+test-nic-pcie-10.0.74.185   465883360            180                  0                    465883540         
+--------------------------- -------------------- -------------------- -------------------- ------------------
+TOTAL                       466793513            359                  0                    466793872         
+
+TX Packets:
+POD                         tx_prio0_packets     tx_prio1_packets     tx_prio5_packets     tx_packets_phy    
+--------------------------- -------------------- -------------------- -------------------- ------------------
+test-nic-pcie-10.0.67.106   465883140            70                   0                    465883210         
+test-nic-pcie-10.0.74.185   909934               70                   0                    910013            
+--------------------------- -------------------- -------------------- -------------------- ------------------
+TOTAL                       466793074            140                  0                    466793223         
+
+RX Discards:
+POD                         rx_prio0_buf_discard     rx_prio1_buf_discard     rx_prio5_buf_discard    
+--------------------------- ------------------------ ------------------------ ------------------------
+test-nic-pcie-10.0.67.106   0                        0                        0                       
+test-nic-pcie-10.0.74.185   0                        0                        0                       
+--------------------------- ------------------------ ------------------------ ------------------------
+TOTAL                       0                        0                        0                       
+
+==============================================================================
+SUMMARY: Packet Counters - FRONTEND NIC (eth0)
+==============================================================================
+
+RX Packets:
+POD                         rx_prio0_packets     rx_prio1_packets     rx_prio5_packets     rx_packets_phy    
+--------------------------- -------------------- -------------------- -------------------- ------------------
+test-nic-pcie-10.0.67.106   3727                 0                    0                    3727              
+test-nic-pcie-10.0.74.185   2622                 0                    0                    2622              
+--------------------------- -------------------- -------------------- -------------------- ------------------
+TOTAL                       6349                 0                    0                    6349              
+
+TX Packets:
+POD                         tx_prio0_packets     tx_prio1_packets     tx_prio5_packets     tx_packets_phy    
+--------------------------- -------------------- -------------------- -------------------- ------------------
+test-nic-pcie-10.0.67.106   6954                 0                    0                    6954              
+test-nic-pcie-10.0.74.185   3645                 0                    0                    3645              
+--------------------------- -------------------- -------------------- -------------------- ------------------
+TOTAL                       10599                0                    0                    10599             
+
+RX Discards:
+POD                         rx_prio0_buf_discard     rx_prio1_buf_discard     rx_prio5_buf_discard    
+--------------------------- ------------------------ ------------------------ ------------------------
+test-nic-pcie-10.0.67.106   0                        0                        0                       
+test-nic-pcie-10.0.74.185   0                        0                        0                       
+--------------------------- ------------------------ ------------------------ ------------------------
+TOTAL                       0                        0                        0                       
+
+==============================================================================
+SUMMARY: Byte Counters - BACKEND NICs (rdma0-rdma7)
+==============================================================================
+
+RX Bytes:
+POD                         rx_prio0_bytes     rx_prio1_bytes     rx_prio5_bytes    
+--------------------------- ------------------ ------------------ ------------------
+test-nic-pcie-10.0.67.106   71.00 MB           15.03 KB           0 B               
+test-nic-pcie-10.0.74.185   1.93 TB            14.60 KB           0 B               
+--------------------------- ------------------ ------------------ ------------------
+TOTAL                       1.93 TB            29.64 KB           0 B               
+
+TX Bytes:
+POD                         tx_prio0_bytes     tx_prio1_bytes     tx_prio5_bytes    
+--------------------------- ------------------ ------------------ ------------------
+test-nic-pcie-10.0.67.106   1.93 TB            6.46 KB            0 B               
+test-nic-pcie-10.0.74.185   70.97 MB           6.97 KB            0 B               
+--------------------------- ------------------ ------------------ ------------------
+TOTAL                       1.93 TB            13.44 KB           0 B               
+
+==============================================================================
+SUMMARY: Byte Counters - FRONTEND NIC (eth0)
+==============================================================================
+
+RX Bytes:
+POD                         rx_prio0_bytes     rx_prio1_bytes     rx_prio5_bytes    
+--------------------------- ------------------ ------------------ ------------------
+test-nic-pcie-10.0.67.106   1.28 MB            0 B                0 B               
+test-nic-pcie-10.0.74.185   1.27 MB            0 B                0 B               
+--------------------------- ------------------ ------------------ ------------------
+TOTAL                       2.55 MB            0 B                0 B               
+
+TX Bytes:
+POD                         tx_prio0_bytes     tx_prio1_bytes     tx_prio5_bytes    
+--------------------------- ------------------ ------------------ ------------------
+test-nic-pcie-10.0.67.106   36.57 MB           0 B                0 B               
+test-nic-pcie-10.0.74.185   10.37 MB           0 B                0 B               
+--------------------------- ------------------ ------------------ ------------------
+TOTAL                       46.95 MB           0 B                0 B               
+
+==============================================================================
+SUMMARY: PFC Counters - BACKEND NICs (rdma0-rdma7) - Priorities 0 and 5
+==============================================================================
+
+Pause Counts:
+POD                         tx_prio0_pause     rx_prio0_pause     tx_prio5_pause     rx_prio5_pause    
+--------------------------- ------------------ ------------------ ------------------ ------------------
+test-nic-pcie-10.0.67.106   0                  0                  0                  0                 
+test-nic-pcie-10.0.74.185   9                  0                  9                  0                 
+--------------------------- ------------------ ------------------ ------------------ ------------------
+TOTAL                       9                  0                  9                  0                 
+
+Pause Durations:
+POD                         tx_prio0_pause_duration    rx_prio0_pause_duration    tx_prio5_pause_duration    rx_prio5_pause_duration   
+--------------------------- -------------------------- -------------------------- -------------------------- --------------------------
+test-nic-pcie-10.0.67.106   0                          0                          0                          0                         
+test-nic-pcie-10.0.74.185   261                        0                          261                        0                         
+--------------------------- -------------------------- -------------------------- -------------------------- --------------------------
+TOTAL                       261                        0                          261                        0                         
+
+==============================================================================
+SUMMARY: PFC Counters - FRONTEND NIC (eth0) - Priorities 0 and 5
+==============================================================================
+
+Pause Counts:
+POD                         tx_prio0_pause     rx_prio0_pause     tx_prio5_pause     rx_prio5_pause    
+--------------------------- ------------------ ------------------ ------------------ ------------------
+test-nic-pcie-10.0.67.106   0                  0                  0                  0                 
+test-nic-pcie-10.0.74.185   0                  0                  0                  0                 
+--------------------------- ------------------ ------------------ ------------------ ------------------
+TOTAL                       0                  0                  0                  0                 
+
+Pause Durations:
+POD                         tx_prio0_pause_duration    rx_prio0_pause_duration    tx_prio5_pause_duration    rx_prio5_pause_duration   
+--------------------------- -------------------------- -------------------------- -------------------------- --------------------------
+test-nic-pcie-10.0.67.106   0                          0                          0                          0                         
+test-nic-pcie-10.0.74.185   0                          0                          0                          0                         
+--------------------------- -------------------------- -------------------------- -------------------------- --------------------------
+TOTAL                       0                          0                          0                          0                         
+
+==============================================================================
+SUMMARY: ECN Counters - BACKEND NICs (rdma0-rdma7)
+==============================================================================
+POD                         np_ecn_marked_roce_packets   np_cnp_sent        rp_cnp_handled    
+--------------------------- ---------------------------- ------------------ ------------------
+test-nic-pcie-10.0.67.106   0                            0                  0                 
+test-nic-pcie-10.0.74.185   0                            0                  0                 
+--------------------------- ---------------------------- ------------------ ------------------
+TOTAL                       0                            0                  0                 
+
+==============================================================================
+SUMMARY: ECN Counters - FRONTEND NIC (eth0)
+==============================================================================
+POD                         np_ecn_marked_roce_packets   np_cnp_sent        rp_cnp_handled    
+--------------------------- ---------------------------- ------------------ ------------------
+test-nic-pcie-10.0.67.106   0                            0                  0                 
+test-nic-pcie-10.0.74.185   0                            0                  0                 
+--------------------------- ---------------------------- ------------------ ------------------
+TOTAL                       0                            0                  0                 

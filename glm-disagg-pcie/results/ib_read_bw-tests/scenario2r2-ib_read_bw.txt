@@ -1,0 +1,56 @@
+
+╔════════════════════════════════════════════════════╗
+║    Multi-NIC IB READ Bandwidth Test              ║
+╚════════════════════════════════════════════════════╝
+
+Configuration:
+  Namespace:      raj-network-debug
+  RDMA Operation: RDMA READ (pull/NIXL-like)
+  Message Size:   2097152 bytes (2.0 MB)
+  Num QPs:        1
+  Duration:       30 seconds
+  Bi-directional: False
+  TOS:            41 (RDMA CM enabled)
+  Test Pairs:     2
+
+📡 Discovering network endpoints...
+
+  Pair 1: test-nic-pcie-10.0.74.185:mlx5_16:rocm:0 ← test-nic-pcie-10.0.67.106:mlx5_16:rocm:0 (port 18515)
+    ✓ src: net1 → 192.168.3.211, dst: net3 → 192.168.1.119 (src NUMA: 1, dst NUMA: 1)
+  Pair 2: test-nic-pcie-10.0.74.185:mlx5_17:rocm:1 ← test-nic-pcie-10.0.67.106:mlx5_17:rocm:1 (port 18516)
+    ✓ src: net2 → 192.168.3.212, dst: net4 → 192.168.1.120 (src NUMA: 1, dst NUMA: 1)
+
+🚀 Starting all ib_read_bw servers...
+
+  Pair 1: ✓ Server started on test-nic-pcie-10.0.67.106
+  Pair 2: ✓ Server started on test-nic-pcie-10.0.67.106
+
+  Waiting for servers to initialize...
+
+🔄 Starting all ib_read_bw clients...
+
+  Running tests for 30 seconds...
+
+  Pair 2: ✓ 254.11 Gbps avg
+  Pair 1: ✓ 249.77 Gbps avg
+
+  Total test time: 36.3 seconds
+
+📊 Test Results
+
+┏━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━┓
+┃ # ┃ Initiator (reads)                        ┃ Remote (data source)                     ┃ Avg BW (Gbps) ┃ Status ┃
+┡━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━┩
+│ 1 │ test-nic-pcie-10.0.74.185:mlx5_16:rocm:0 │ test-nic-pcie-10.0.67.106:mlx5_16:rocm:0 │        249.77 │   ✓    │
+│ 2 │ test-nic-pcie-10.0.74.185:mlx5_17:rocm:1 │ test-nic-pcie-10.0.67.106:mlx5_17:rocm:1 │        254.11 │   ✓    │
+└───┴──────────────────────────────────────────┴──────────────────────────────────────────┴───────────────┴────────┘
+
+📈 Summary
+--------------------------------------------------
+  Successful tests: 2/2
+
+  Aggregate Throughput:
+    Total Avg:  503.88 Gbps
+
+  Per-NIC Average:
+    Average:    251.94 Gbps

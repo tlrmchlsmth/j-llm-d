@@ -32,9 +32,33 @@ BINDING_SRC = textwrap.dedent("""\
         torch::Tensor&, torch::Tensor&,
         double, double, bool, bool);
 
+    void mla_rope_quantize_fp8_fused_cache(
+        torch::Tensor&, torch::Tensor&, torch::Tensor&, torch::Tensor&,
+        torch::Tensor&, torch::Tensor&, torch::Tensor&, torch::Tensor&,
+        torch::Tensor&, torch::Tensor&,
+        double, double, bool, bool);
+
+    void mla_fused_cache_rope(
+        torch::Tensor&, torch::Tensor&, torch::Tensor&,
+        torch::Tensor&, torch::Tensor&, torch::Tensor&, torch::Tensor&,
+        int64_t, int64_t,
+        double, double, bool);
+
+    void mla_fused_cache_nope(
+        torch::Tensor&, torch::Tensor&, torch::Tensor&,
+        torch::Tensor&, torch::Tensor&,
+        int64_t, double, double);
+
     PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         m.def("mla_rope_quantize_fp8", &mla_rope_quantize_fp8,
               "Fused RoPE + FP8 quantization for MLA decode");
+        m.def("mla_rope_quantize_fp8_fused_cache",
+              &mla_rope_quantize_fp8_fused_cache,
+              "Fused RoPE + FP8 quant + KV cache scatter-write");
+        m.def("mla_fused_cache_rope", &mla_fused_cache_rope,
+              "Split rope kernel for dual-stream overlap");
+        m.def("mla_fused_cache_nope", &mla_fused_cache_nope,
+              "Split nope kernel for dual-stream overlap");
     }
 """)
 

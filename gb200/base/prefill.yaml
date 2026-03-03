@@ -4,7 +4,7 @@ metadata:
   name: wide-ep-prefill
   labels:
     llm-d.ai/inferenceServing: "true"
-    llm-d.ai/model: DeepSeek-R1-NVFP4
+    llm-d.ai/model: DeepSeek-R1-0528-FP4-v2
     llm-d.ai/role: prefill
 spec:
   replicas: 1
@@ -14,7 +14,7 @@ spec:
       metadata:
         labels:
           llm-d.ai/inferenceServing: "true"
-          llm-d.ai/model: DeepSeek-R1-NVFP4
+          llm-d.ai/model: DeepSeek-R1-0528-FP4-v2
           llm-d.ai/role: prefill
       spec:
         serviceAccountName: wide-ep
@@ -86,7 +86,7 @@ spec:
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
                   CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
-                    nvidia/DeepSeek-R1-NVFP4 \
+                    nvidia/DeepSeek-R1-0528-FP4-v2 \
                     --port $((8000 + R)) \
                     --tensor-parallel-size $TP_SIZE \
                     --disable-uvicorn-access-log \

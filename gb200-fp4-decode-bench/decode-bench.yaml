@@ -152,17 +152,13 @@ spec:
                 # git cherry-pick --no-commit e93799b752
                 
                 
-                git cherry-pick --no-commit fce7c1a0ad <- fused op PR
-                git cherry-pick --no-commit e962d2d9448598f56deff2f406eb48a53bdf7956
-                git cherry-pick --no-commit f78b63d71a09fb13e895db68402017c5764ff30e
-                
-                
                 # Q_b proj PR
-                git cherry-pick --no-commit 24ae04cb7a
+                # git cherry-pick --no-commit 24ae04cb7a
 
                 # Yank ropequant from FlashInfer into vLLM tree
                 git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
                 git cherry-pick --no-commit 782ef44e4a1512297f05314eb85f18c1573307f2
+                git cherry-pick --no-commit 8af5bb313d8efed3d1fc0ff501ea723813313470
                 echo "=== JIT-compiling mla_rope_quant at $(date) ==="
                 python tools/jit_mla_rope_quant.py
                 sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py

@@ -4,7 +4,7 @@ metadata:
   name: wide-ep-decode
   labels:
     llm-d.ai/inferenceServing: "true"
-    llm-d.ai/model: DeepSeek-R1-NVFP4
+    llm-d.ai/model: DeepSeek-R1-0528-FP4-v2
     llm-d.ai/role: decode
 spec:
   replicas: 1
@@ -14,7 +14,7 @@ spec:
       metadata:
         labels:
           llm-d.ai/inferenceServing: "true"
-          llm-d.ai/model: DeepSeek-R1-NVFP4
+          llm-d.ai/model: DeepSeek-R1-0528-FP4-v2
           llm-d.ai/role: decode
       spec:
         serviceAccountName: wide-ep
@@ -141,20 +141,20 @@ spec:
                 # git cherry-pick --no-commit 00a944ef8e
 
                 # Q_b proj PR
-                git cherry-pick --no-commit 24ae04cb7a
+                # git cherry-pick --no-commit 24ae04cb7a
 
                 # Yank ropequant from FlashInfer into vLLM tree
-                git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
-                git cherry-pick --no-commit 782ef44e4a1512297f05314eb85f18c1573307f2
-                # git cherry-pick --no-commit 17ca636713
+                # git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
+                # git cherry-pick --no-commit 782ef44e4a1512297f05314eb85f18c1573307f2
+                # git cherry-pick --no-commit 7cf5ce6e1b
 
                 # JIT-compile the new CUDA kernel
-                echo "=== JIT-compiling mla_rope_quant at $(date) ==="
-                python tools/jit_mla_rope_quant.py
-                sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py
-                sed -i 's/torch\.ops\._C\.mla_rope_quantize_fp8/mla_rope_quant_ext.mla_rope_quantize_fp8/g' vllm/_custom_ops.py
-                export PYTHONPATH=/tmp/jit_build/mla_rope_quant:${PYTHONPATH:-}
-                echo "=== JIT build complete at $(date) ==="
+                # echo "=== JIT-compiling mla_rope_quant at $(date) ==="
+                # python tools/jit_mla_rope_quant.py
+                # sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py
+                # sed -i 's/torch\.ops\._C\.mla_rope_quantize_fp8/mla_rope_quant_ext.mla_rope_quantize_fp8/g' vllm/_custom_ops.py
+                # export PYTHONPATH=/tmp/jit_build/mla_rope_quant:${PYTHONPATH:-}
+                # echo "=== JIT build complete at $(date) ==="
 
                 # Derive batch-size-dependent env vars from MAX_TOKENS
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
@@ -163,46 +163,27 @@ spec:
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
 
-                for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
-                  GPU_START=$((R * TP_SIZE))
-                  GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
-
-                  VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
-                  FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
-                  CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
-                    nvidia/DeepSeek-R1-NVFP4 \
-                    --port $((8200 + R)) \
-                    --tensor-parallel-size $TP_SIZE \
-                    --disable-uvicorn-access-log \
-                    --enable-expert-parallel \
-                    --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
-                    --data-parallel-rank $((START_RANK + R)) \
-                    --data-parallel-size-local 1 \
-                    --data-parallel-address ${LWS_LEADER_ADDRESS} \
-                    --data-parallel-rpc-port 5555 \
-                    --trust-remote-code \
-                    --kv_transfer_config "$KV_TRANSFER_CONFIG" \
-                    --async-scheduling \
-                    --kv-cache-dtype fp8 \
-                    --all2all-backend "deepep_low_latency" \
-                    --max-num-batched-tokens 32768 \
-                    --max-num-seqs $MAX_TOKENS \
-                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
-                    --max-cudagraph-capture-size 32768 \
-                    --enable-force-include-usage &
-                done
-
-                    #--profiler-config '{"profiler": "torch",
-                    #                    "torch_profiler_dir": "/traces",
-                    #                    "ignore_frontend": "true",
-                    #                    "delay_iterations": 5,
-                    #                    "max_iterations": 3}' \
-
-
-                # If any process exits, kill all and restart pod
-                wait -n
-                kill $(jobs -p) 2>/dev/null
-                exit 1
+                exec vllm serve \
+                  nvidia/DeepSeek-R1-0528-FP4-v2 \
+                  --port 8200 \
+                  --disable-uvicorn-access-log \
+                  --enable-expert-parallel \
+                  --tensor-parallel-size $TP_SIZE \
+                  --data-parallel-hybrid-lb \
+                  --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
+                  --data-parallel-size-local $DP_SIZE_LOCAL \
+                  --data-parallel-start-rank $START_RANK \
+                  --data-parallel-address ${LWS_LEADER_ADDRESS} \
+                  --data-parallel-rpc-port 5555 \
+                  --async-scheduling \
+                  --all2all-backend deepep_low_latency \
+                  --trust-remote-code \
+                  --kv_transfer_config "$KV_TRANSFER_CONFIG" \
+                  --max-num-batched-tokens 32768 \
+                  --max-num-seqs $MAX_TOKENS \
+                  --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+                  --max-cudagraph-capture-size 32768 \
+                  --enable-force-include-usage
 
             env:
               # Set to a Lustre venv path to override baked-in vLLM (e.g. /mnt/lustre/tms/vllm-venv)
@@ -269,9 +250,7 @@ spec:
               # UCX configuration for NIXL - use only working InfiniBand devices
               # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
               - name: UCX_NET_DEVICES
-                value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
-              # Some ports are down on a couple of nodes.
-#                value: "mlx5_0:1,mlx5_1:1"
+                value: "mlx5_0:1,mlx5_1:1"
 
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S

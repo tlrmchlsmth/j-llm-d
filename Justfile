@@ -160,7 +160,7 @@ auto-eval:
   echo "All pods ready. Running eval..."
   $KUBECTL_CMD exec {{POKER_NAME}} -- just eval
 
-parallel-guidellm RR CONCURRENT_PER_WORKER REQUESTS_PER_WORKER INPUT_LEN OUTPUT_LEN N_WORKERS:
+parallel-guidellm RR CONCURRENT_PER_WORKER REQUESTS_PER_WORKER INPUT_LEN OUTPUT_LEN N_WORKERS DEPLOY=DEPLOY_NAME:
   #!/usr/bin/env bash
   set -euo pipefail
   if [[ -n "${NVIDIA_KUBECONFIG:-}" ]]; then
@@ -176,7 +176,7 @@ parallel-guidellm RR CONCURRENT_PER_WORKER REQUESTS_PER_WORKER INPUT_LEN OUTPUT_
     RATE={{RR}} \
     INPUT_LEN={{INPUT_LEN}} \
     OUTPUT_LEN={{OUTPUT_LEN}} \
-    BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local" \
+    BASE_URL="http://{{DEPLOY}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local" \
     OUTPUT_PATH="parallel-guidellm-$(date +%Y%m%d-%H%M%S)" \
     POKER_IMAGE="{{env_var('POKER_IMAGE')}}" \
     POKER_TAG="{{env_var('POKER_TAG')}}" \

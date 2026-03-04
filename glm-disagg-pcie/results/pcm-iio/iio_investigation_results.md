@@ -194,6 +194,217 @@ The IIO-mesh-IIO path degrades not because it runs out of buffer space, but beca
 In Scenario 1 (same PCIe tree), P2P traffic stays within the PCIe switch and never
 traverses the mesh, so these IIO overheads don't apply.
 
+## Experiment 3: Multi-Layer Monitoring (IIO + CHA Mesh)
+
+Captured IIO rate counters (Queues A, B) and CHA mesh TOR occupancy simultaneously
+during 2MB and 16KB ib_read_bw. 12 events total, some multiplexing on CHA and IIO5.
+
+### CHA Mesh TOR: P2P Traffic Bypasses CHA
+
+| CHA Event | 2MB (57s) | 16KB (57s) | Notes |
+|-----------|-----------|------------|-------|
+| TOR_INSERTS.LOC_IO | 1.20M | 0.72M | Background only (~1M vs IIO's 14B) |
+| TOR_OCCUPANCY.LOC_IO | 454.9M | 229.1M | Background only |
+| TOR_INSERTS.MMIO | 0 | 0 | Zero |
+| TOR_OCCUPANCY.MMIO | 3.3K / 6.1K | — | Negligible |
+| READ_NO_CREDITS (all MCs) | 0 | 0 | No memory stalls |
+
+**Critical finding: P2P non-coherent traffic between IIO stacks does NOT flow through
+the CHA TOR.** The mesh has a separate direct IIO-to-IIO forwarding path that bypasses
+the coherency/home agent. CHA TOR credits are NOT the bottleneck.
+
+### IIO Rate Counters: Full Pipeline View
+
+| Counter | Location | 2MB raw | 16KB raw | Ratio | Sampling |
+|---------|----------|---------|----------|-------|----------|
+| COMP_BUF_OCC (0xd5) | IIO5 GPU | 39.6T | 21.9T | 0.55x | ~80% |
+| COMP_BUF_INS (0xc2) | IIO5 GPU | 14.3B | 8.5B | 0.59x | ~78% |
+| OUTBOUND_CL_REQS (0xd0) | IIO5 GPU | 12.6B | 7.4B | 0.59x | ~81% |
+| OUTBOUND_TLP_REQS (0xd1) | IIO5 GPU | 17.3B | 10.2B | 0.59x | ~82% |
+| DATA_OF_CPU.CMPD (0x83) | IIO5 GPU | 21K | 22K | ~1x | ~79% |
+| **INBOUND_ARB_REQ (0x86)** | **IIO2 NIC** | **16.2B** | **10.7B** | **0.66x** | **100%** |
+| **LOC_P2P (0x8e)** | **IIO2 NIC** | **12.7B** | **8.8B** | **0.69x** | **100%** |
+
+IIO2 events at 100% sampling (no multiplexing) are the most reliable.
+
+### Analysis
+
+**GPU IIO5 rates all scale at ~0.59x** — exactly matching the throughput ratio
+(252→148 Gbps = 0.587x). The GPU IIO processes proportionally less data; no anomaly.
+
+**NIC IIO2 rates scale at 0.66-0.69x** — more requests per byte for 16KB:
+- ARB_REQ per Gbps: 64.3M (2MB) vs 72.3M (16KB) → **+12% overhead**
+- LOC_P2P per Gbps: 50.4M (2MB) vs 59.5M (16KB) → **+18% overhead**
+
+The NIC generates extra per-work-request transactions (doorbells, completions, QP updates)
+that scale with WR count, not data volume.
+
+**DATA_REQ_OF_CPU.CMPD ≈ 0** for both runs: this event tracks CPU-initiated I/O
+completions, not mesh-forwarded P2P completions.
+
+**OUTBOUND_TLP_REQS > OUTBOUND_CL_REQS by ~37%**: each CL request generates
+~1.37 TLP pipeline passes, possibly counting CplD forwarding to mesh as "outbound" TLPs.
+
+### What This Rules Out
+
+1. CHA TOR credit exhaustion — P2P traffic doesn't use CHA TOR
+2. Memory controller credit stalls — P2P doesn't touch DRAM
+3. CHA ingress queue congestion — not involved in P2P path
+4. Any coherency-related overhead — traffic is fully non-coherent
+
+### Remaining Bottleneck Location
+
+The bottleneck is in the **IIO-to-IIO non-coherent mesh transport layer**, which is
+architecturally separate from the CHA coherency fabric. No PMU events exist for this
+layer. The IIO COMP_BUF residence time (Experiment 1: 1,631 vs 2,477 cycles) remains
+the closest measurable proxy for the per-transaction overhead in this path.
+
+## Experiment 4: RDMA WRITE vs RDMA READ (Posted vs Non-Posted)
+
+This is the decisive experiment. RDMA READ uses non-posted PCIe transactions (MRd + CplD
+round-trip), while RDMA WRITE uses posted PCIe transactions (MWr, fire-and-forget). If the
+bottleneck is in the completion return path (CplD traversing the mesh), then writes should
+be immune to the small-message degradation.
+
+### Throughput Comparison
+
+| Test | 2MB (Gbps/NIC) | 16KB (Gbps/NIC) | Degradation |
+|------|----------------|-----------------|-------------|
+| **RDMA READ** | **254** | **148** | **42% drop** |
+| **RDMA WRITE** | **254** | **245** | **4% drop** |
+
+**16KB RDMA WRITE achieves 245 Gbps/NIC** — barely degraded from 2MB.
+**16KB RDMA READ drops to 148 Gbps/NIC** — 42% throughput loss.
+
+The ~4% write degradation is consistent with normal PCIe/network header overhead
+at smaller message sizes. The 42% read degradation is unique to the non-posted path.
+
+### IIO Counters: 4-Way Cross-Node Comparison at 16KB
+
+Monitored IIO counters on BOTH nodes during 16KB tests. node2 = 10.0.67.106,
+node7 = 10.0.74.185. Both nodes are identical Intel Xeon 8480+ with same IIO layout.
+
+| | Write Sender | Write Receiver | Read Requester | Read Responder |
+|--|-------------|---------------|---------------|---------------|
+| **Node** | node7 (10.0.74.185) | node2 (10.0.67.106) | node7 (10.0.74.185) | node2 (10.0.67.106) |
+| **NIC operation** | DMA Read from GPU | DMA Write to GPU | DMA Write to GPU | DMA Read from GPU |
+| **PCIe type** | **Non-posted** | Posted | Posted | **Non-posted** |
+| **Throughput** | **248 Gbps/NIC** | 248 Gbps/NIC | 147 Gbps/NIC | **147 Gbps/NIC** |
+| COMP_BUF_OCC (IIO5) | **41.2T** | 4.1M | 12.2B | **21.9T** (~80%) |
+| COMP_BUF_INS (IIO5) | **14.8B** | 6.5K | 32.7M | **8.5B** (~78%) |
+| LOC_P2P (IIO2) | **14.3B** | 2 | 0 | **8.8B** |
+| ARB_REQ (IIO2) | **18.2B** | 356K | 246K | **10.7B** |
+| OUTBOUND_CL (IIO5) | **14.8B** | 72K | 65.2M | **7.4B** (~81%) |
+| OUTBOUND_TLP (IIO5) | **20.5B** | 142K | 127.3M | **10.2B** (~82%) |
+| Avg cycles/entry | **2,787** | — | — | **2,477** |
+
+Notes: All node7 counters at 100% sampling. Node2 read-responder had multiplexing
+(percentages shown). Each perf stat ran 50s, workload active ~30s within window.
+
+### Pattern: Non-Posted Shows Massive Activity, Posted Shows Idle
+
+**Non-posted sides** (Write Sender + Read Responder): COMP_BUF_INS in billions,
+LOC_P2P in billions — the NIC's cross-IIO DMA reads generate massive non-posted
+transaction traffic through the completion buffer.
+
+**Posted sides** (Write Receiver + Read Requester): All counters at background
+noise levels — posted writes bypass the completion tracking infrastructure entirely.
+
+### Write Sender vs Read Responder: NIC Pipelining Effect
+
+Both sides perform the same operation (NIC DMA reads from GPU across IIO stacks),
+but throughput differs dramatically:
+
+| Metric | Write Sender | Read Responder | Ratio |
+|--------|-------------|---------------|-------|
+| Throughput | 248 Gbps | 147 Gbps | 1.69x |
+| Completions/sec (est.) | ~493M/s | ~287M/s | 1.72x |
+| Avg cycles/entry | 2,787 | 2,477 | 1.13x |
+
+The write sender processes **72% more completions per second** despite each completion
+spending **12% longer** in the buffer. This is a NIC pipelining advantage:
+
+- **Write sender**: The NIC has pre-posted WQEs in its send queue. It knows exactly
+  what data to fetch next and can issue DMA reads for many WQEs proactively, keeping
+  the completion pipeline deeply loaded.
+- **Read responder**: The NIC must react to incoming RDMA READ requests from the
+  network. Each request triggers a DMA read, but the NIC can only pipeline as deep
+  as its incoming request queue allows. The reactive processing adds latency.
+
+The 2,787 vs 2,477 cycle difference suggests the write sender loads the buffer
+more aggressively (higher avg occupancy / deeper pipeline), causing each individual
+entry to wait slightly longer due to queueing, but overall throughput is much higher.
+
+### Receiver-Side Counters for Writes
+
+IIO counters on the **write receiver** (node2, 10.0.67.106):
+
+| Counter | 2MB WRITE (50s) | 16KB WRITE (50s) |
+|---------|-----------------|------------------|
+| COMP_BUF_OCC (IIO5) | 3.8M | 4.1M |
+| COMP_BUF_INS (IIO5) | 6.2K | 6.5K |
+| LOC_P2P (IIO2) | 0 | 2 |
+| OUTBOUND_CL (IIO5) | 71K | 72K |
+
+All at idle/noise levels for both 2MB and 16KB, confirming posted writes take a
+completely different datapath that bypasses the tracked request/completion pipeline.
+
+### Conclusion
+
+This experiment proves that:
+
+1. **The non-posted completion path is the root cause** of the 42% read throughput
+   degradation — this path is used regardless of whether it's RDMA READ (responder
+   side) or RDMA WRITE (sender side)
+2. **The posted write path is immune** to the small-message penalty — receiver-side
+   counters show zero activity, and end-to-end write throughput barely degrades (4%)
+3. **NIC pipelining matters significantly**: The write sender achieves 69% higher
+   throughput than the read responder on the same non-posted path, because the NIC
+   can proactively pipeline DMA reads from pre-posted WQEs
+4. **RDMA WRITE is not a complete solution**: It moves the bottleneck from the
+   responder to the sender, but the sender still achieves much higher throughput
+   (248 vs 147 Gbps) due to NIC-level pipelining advantages
+
+```
+RDMA READ (16KB, cross-IIO):
+  Responder: NIC reads from GPU (non-posted, REACTIVE)     → 147 Gbps
+  Requester: NIC writes to GPU (posted, fast)               → (not limiting)
+
+RDMA WRITE (16KB, cross-IIO):
+  Sender:    NIC reads from GPU (non-posted, PROACTIVE)     → 248 Gbps
+  Receiver:  NIC writes to GPU (posted, fast)               → (not limiting)
+```
+
+Both paths involve non-posted DMA reads from GPU, but NIC pipelining control
+on the write-sender side yields 69% better throughput for the same operation.
+
+### Implications for NIXL
+
+NIXL uses RDMA READ (the decode server pulls KV cache from the prefill server).
+This places it squarely in the degraded non-posted path.
+
+**Note on RDMA WRITE alternative:** Switching to RDMA WRITE (prefill pushes to decode)
+does NOT eliminate the non-posted path. The sender's NIC must still DMA READ scattered
+KV blocks from the local GPU's memory — the same MRd + CplD round-trip through the
+IIO-mesh-IIO pipeline, just on the sender node instead of the responder.
+
+However, Experiment 4 shows the write-sender path achieves **69% higher throughput**
+(248 vs 147 Gbps) than the read-responder for the same underlying non-posted DMA read
+operation, due to NIC pipelining advantages when initiating from pre-posted WQEs.
+Whether this advantage holds with NIXL's 40K+ scattered addresses (vs. ib_write_bw's
+single contiguous buffer) is unknown and would need testing.
+
+Viable mitigations:
+
+1. **Increase VF MRRS**: Raise from 128 bytes to 4096 bytes to reduce transaction count
+   by 32x. Requires SR-IOV PF driver or firmware changes.
+2. **Keep GPU-NIC on same IIO stack**: Scenario 1 topology avoids mesh crossing entirely.
+   Only feasible when PCIe topology allows it.
+
+### Pending Experiments
+
+- **Option 1**: Run IIO counters on requester node (10.0.74.185) to verify bottleneck side
+
 ## Raw perf stat Events Used
 
 | Event | EventCode | UMask | Description |
@@ -201,8 +412,22 @@ traverses the mesh, so these IIO overheads don't apply.
 | COMP_BUF_OCCUPANCY.CMPD.ALL_PARTS | 0xd5 | 0xff | Cycle-weighted completion buffer occupancy |
 | COMP_BUF_INSERTS.CMPD.ALL_PARTS | 0xc2 | 0x04 | Completions with data inserted into buffer |
 | NUM_REQ_OF_CPU_BY_TGT.LOC_P2P | 0x8e | 0x20 | Local peer-to-peer request count |
+| OUTBOUND_CL_REQS_ISSUED.TO_IO | 0xd0 | 0x08 | 64B cacheline requests issued to device |
+| OUTBOUND_TLP_REQS_ISSUED.TO_IO | 0xd1 | 0x08 | TLP-level requests issued to device |
+| INBOUND_ARB_REQ.FINAL_RD_WR | 0x86 | 0x08 | Inbound pipeline arbitration requests (read/write) |
+| DATA_REQ_OF_CPU.CMPD.ALL_PARTS | 0x83 | 0x80 | CplD data from device (didn't capture P2P traffic) |
 
-Common perf stat options: `ch_mask=0xff, fc_mask=0x07` (all ports, all flow classes)
+CHA mesh events (UMaskExt encoded in umask bits 32-63 via `umask:config:8-15,32-63`):
+
+| Event | EventCode | perf umask | Description |
+|-------|-----------|------------|-------------|
+| TOR_OCCUPANCY.LOC_IO | 0x36 | 0xC000FF04 | Cycle-weighted mesh TOR occupancy for local I/O |
+| TOR_INSERTS.LOC_IO | 0x35 | 0xC000FF04 | Mesh TOR inserts for local I/O |
+| TOR_OCCUPANCY.MMIO | 0x36 | 0x4000 | Mesh TOR occupancy for MMIO transactions |
+| TOR_INSERTS.MMIO | 0x35 | 0x4000 | Mesh TOR inserts for MMIO |
+| READ_NO_CREDITS (all MCs) | 0x58 | 0x3f | Cycles with no credits to memory controller |
+
+Common IIO perf stat options: `ch_mask=0xff, fc_mask=0x07` (all ports, all flow classes)
 For thresh probing: append `thresh=N` to COMP_BUF_OCCUPANCY event spec.
 
 ## Files
@@ -211,5 +436,7 @@ For thresh probing: append `thresh=N` to COMP_BUF_OCCUPANCY event spec.
 - `pcm-iio_ib_read_bw_s2r2.txt` — pcm-iio during 2MB ib_read_bw (scenario 2r2 topology)
 - `../../ib_read_bw-tests/scenario2r2-ib_read_bw.txt` — 2MB ib_read_bw results
 - `../../ib_read_bw-tests/scenario2-ib_read_bw.txt` — 2MB ib_read_bw results (1 rail)
-- Test config (16KB): `/home/rajjoshi/workspace/networking-debug-container/inter_node_tests/multi_nic_ib_write_bw/pcie-tree-2gpu-nic_pairs-16KB.json`
-- Test config (2MB): `/home/rajjoshi/workspace/networking-debug-container/inter_node_tests/multi_nic_ib_write_bw/pcie-tree-2gpu-nic_pairs.json`
+- Test config (16KB read): `/home/rajjoshi/workspace/networking-debug-container/inter_node_tests/multi_nic_ib_write_bw/pcie-tree-2gpu-nic_pairs-16KB.json`
+- Test config (2MB read): `/home/rajjoshi/workspace/networking-debug-container/inter_node_tests/multi_nic_ib_write_bw/pcie-tree-2gpu-nic_pairs.json`
+- Test config (16KB write): `/home/rajjoshi/workspace/networking-debug-container/inter_node_tests/multi_nic_ib_write_bw/pcie-tree-2gpu-nic_pairs-16KB-write.json`
+- Test config (2MB write): `/home/rajjoshi/workspace/networking-debug-container/inter_node_tests/multi_nic_ib_write_bw/pcie-tree-2gpu-nic_pairs-2MB-write.json`

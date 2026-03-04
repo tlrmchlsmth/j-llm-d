@@ -1,0 +1,35 @@
+{
+    "namespace": "raj-network-debug",
+    "tos": 41,
+    "rdma_op": "write",
+    "msg_size": 2097152,
+    "num_qps": 1,
+    "duration": 30,
+    "bi_directional": false,
+    "use_hugepages": false,
+    "comment": "IIO stack discovery using scenario2-like cross-IIO GPU-NIC pairs. GPU 0 (Stack 2/PCIe0) with mlx5_3 (Stack 9/PCIe4), GPU 1 (Stack 6/PCIe2) with mlx5_4 (Stack 4/PCIe1). Traffic crosses IIO stacks via mesh fabric.",
+    "test_pairs": [
+        {
+            "comment": "GPU 0 (11:00.0, Stack 2/PCIe0) <--mesh--> mlx5_3 (41:00.0, Stack 9/PCIe4)",
+            "src_pod": "networking-debug-pod-10.0.66.42",
+            "src_hca": "mlx5_3",
+            "src_gpu": "0",
+            "src_gpu_type": "rocm",
+            "dst_pod": "networking-debug-pod-10.0.78.230",
+            "dst_hca": "mlx5_3",
+            "dst_gpu": "0",
+            "dst_gpu_type": "rocm"
+        },
+        {
+            "comment": "GPU 1 (2f:00.0, Stack 6/PCIe2) <--mesh--> mlx5_4 (58:00.0, Stack 4/PCIe1)",
+            "src_pod": "networking-debug-pod-10.0.66.42",
+            "src_hca": "mlx5_4",
+            "src_gpu": "1",
+            "src_gpu_type": "rocm",
+            "dst_pod": "networking-debug-pod-10.0.78.230",
+            "dst_hca": "mlx5_4",
+            "dst_gpu": "1",
+            "dst_gpu_type": "rocm"
+        }
+    ]
+}

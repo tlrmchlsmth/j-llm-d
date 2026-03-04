@@ -1,0 +1,22 @@
+
+ Performance counter stats for 'system wide':
+
+     2686725905038      uncore_iio_5/event=0xd5,umask=0xff,ch_mask=0xff,fc_mask=0x07/                                   
+        1026210529      uncore_iio_5/event=0xc2,umask=0x04,ch_mask=0xff,fc_mask=0x07/                                   
+        1649790824      uncore_iio_5/event=0xd0,umask=0x08,ch_mask=0xff,fc_mask=0x07/                                   
+        2056868417      uncore_iio_5/event=0x86,umask=0x08,ch_mask=0xff,fc_mask=0x07/                                   
+     2687696584462      uncore_iio_11/event=0xd5,umask=0xff,ch_mask=0xff,fc_mask=0x07/                                   
+        1026357864      uncore_iio_11/event=0xc2,umask=0x04,ch_mask=0xff,fc_mask=0x07/                                   
+        2273050026      uncore_iio_11/event=0xd0,umask=0x08,ch_mask=0xff,fc_mask=0x07/                                   
+        2054356901      uncore_iio_11/event=0x86,umask=0x08,ch_mask=0xff,fc_mask=0x07/                                   
+        2732430668      uncore_iio_2/event=0x86,umask=0x08,ch_mask=0xff,fc_mask=0x07/                                   
+         985661492      uncore_iio_2/event=0x8e,umask=0x20,ch_mask=0xff,fc_mask=0x07/                                   
+      159488872352      uncore_iio_2/event=0xd5,umask=0xff,ch_mask=0xff,fc_mask=0x07/                                   
+         439381973      uncore_iio_2/event=0xc2,umask=0x04,ch_mask=0xff,fc_mask=0x07/                                   
+        2676256475      uncore_iio_7/event=0x86,umask=0x08,ch_mask=0xff,fc_mask=0x07/                                   
+         985661492      uncore_iio_7/event=0x8e,umask=0x20,ch_mask=0xff,fc_mask=0x07/                                   
+      242264455288      uncore_iio_7/event=0xd5,umask=0xff,ch_mask=0xff,fc_mask=0x07/                                   
+         406692954      uncore_iio_7/event=0xc2,umask=0x04,ch_mask=0xff,fc_mask=0x07/                                   
+
+     360.001558128 seconds time elapsed
+

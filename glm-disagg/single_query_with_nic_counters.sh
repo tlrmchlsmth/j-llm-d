@@ -87,7 +87,7 @@ init_nic_counter_utils pod_names "$NAMESPACE" || exit 1
 
 # Collect and print BEFORE counters
 collect_all_counters pod_names "before"
-print_all_counters pod_names "before"
+# print_all_counters pod_names "before"
 
 # Run the sweep via the poker pod
 BENCHMARK_TIMEOUT_SEC=900
@@ -137,7 +137,7 @@ echo ""
 
 # Collect and print AFTER counters
 collect_all_counters pod_names "after"
-print_all_counters pod_names "after"
+# print_all_counters pod_names "after"
 
 # Print counter differences
 print_all_counter_diff pod_names

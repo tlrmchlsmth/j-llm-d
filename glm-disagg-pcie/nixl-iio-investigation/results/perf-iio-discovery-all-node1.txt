@@ -1,0 +1,16 @@
+
+ Performance counter stats for 'system wide':
+
+                 0      uncore_iio_0/event=0xc2,umask=0x04,ch_mask=0xFFF,fc_mask=0x07/                                   
+                 0      uncore_iio_1/event=0xc2,umask=0x04,ch_mask=0xFFF,fc_mask=0x07/                                   
+              5532      uncore_iio_2/event=0xc2,umask=0x04,ch_mask=0xFFF,fc_mask=0x07/                                   
+                 0      uncore_iio_3/event=0xc2,umask=0x04,ch_mask=0xFFF,fc_mask=0x07/                                   
+        8899713000      uncore_iio_5/event=0xc2,umask=0x04,ch_mask=0xFFF,fc_mask=0x07/                                   
+                 0      uncore_iio_6/event=0xc2,umask=0x04,ch_mask=0xFFF,fc_mask=0x07/                                   
+              5532      uncore_iio_7/event=0xc2,umask=0x04,ch_mask=0xFFF,fc_mask=0x07/                                   
+           1970595      uncore_iio_8/event=0xc2,umask=0x04,ch_mask=0xFFF,fc_mask=0x07/                                   
+                 0      uncore_iio_9/event=0xc2,umask=0x04,ch_mask=0xFFF,fc_mask=0x07/                                   
+        8829258971      uncore_iio_11/event=0xc2,umask=0x04,ch_mask=0xFFF,fc_mask=0x07/                                   
+
+      45.001444842 seconds time elapsed
+

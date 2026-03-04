@@ -1,0 +1,42 @@
+{
+  "config": {
+    "namespace": "raj-network-debug",
+    "rdma_op": "read",
+    "tos": 41,
+    "msg_size": 2097152,
+    "num_qps": 1,
+    "bi_directional": false,
+    "duration": 30
+  },
+  "test_mode": "duration",
+  "elapsed_time_seconds": 334.16,
+  "summary": {
+    "total_pairs": 2,
+    "successful": 0,
+    "failed": 2,
+    "total_avg_bw_gbps": 0,
+    "per_nic_avg_bw_gbps": 0
+  },
+  "results": [
+    {
+      "pair_idx": 0,
+      "src_pod": "test-nic-pcie-8gpu-10.0.67.106",
+      "src_hca": "mlx5_12",
+      "dst_pod": "test-nic-pcie-8gpu-10.0.74.185",
+      "dst_hca": "mlx5_12",
+      "success": false,
+      "bw_avg_gbps": null,
+      "error": "Unexpected CM event bl blka 8\n Unable to perform rdma_client function\n Unable to init the socket connection\ncommand terminated with exit code 1"
+    },
+    {
+      "pair_idx": 1,
+      "src_pod": "test-nic-pcie-8gpu-10.0.67.106",
+      "src_hca": "mlx5_12",
+      "dst_pod": "test-nic-pcie-8gpu-10.0.74.185",
+      "dst_hca": "mlx5_12",
+      "success": false,
+      "bw_avg_gbps": null,
+      "error": "Command timed out"
+    }
+  ]
+}

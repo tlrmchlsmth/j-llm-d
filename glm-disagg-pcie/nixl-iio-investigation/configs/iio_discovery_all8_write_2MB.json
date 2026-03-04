@@ -1,0 +1,101 @@
+{
+    "namespace": "raj-network-debug",
+    "tos": 41,
+    "rdma_op": "write",
+    "msg_size": 2097152,
+    "num_qps": 1,
+    "duration": 30,
+    "bi_directional": false,
+    "use_hugepages": false,
+    "comment": "IIO stack discovery: 8 same-stack GPU-NIC pairs (1 per IIO stack). Run pcm-iio on both nodes simultaneously to map pcm-iio Stack labels to devices. Prefill node writes to decode node.",
+    "test_pairs": [
+        {
+            "comment": "Pair 0: GPU 0 (11:00.0) + mlx5_0 (0c:00.0) — Socket 0, Stack 2 (PCIe0)",
+            "src_pod": "networking-debug-pod-10.0.66.42",
+            "src_hca": "mlx5_0",
+            "src_gpu": "0",
+            "src_gpu_type": "rocm",
+            "dst_pod": "networking-debug-pod-10.0.78.230",
+            "dst_hca": "mlx5_0",
+            "dst_gpu": "0",
+            "dst_gpu_type": "rocm"
+        },
+        {
+            "comment": "Pair 1: GPU 1 (2f:00.0) + mlx5_2 (2a:00.0) — Socket 0, Stack 6 (PCIe2)",
+            "src_pod": "networking-debug-pod-10.0.66.42",
+            "src_hca": "mlx5_2",
+            "src_gpu": "1",
+            "src_gpu_type": "rocm",
+            "dst_pod": "networking-debug-pod-10.0.78.230",
+            "dst_hca": "mlx5_2",
+            "dst_gpu": "1",
+            "dst_gpu_type": "rocm"
+        },
+        {
+            "comment": "Pair 2: GPU 2 (46:00.0) + mlx5_3 (41:00.0) — Socket 0, Stack 9 (PCIe4)",
+            "src_pod": "networking-debug-pod-10.0.66.42",
+            "src_hca": "mlx5_3",
+            "src_gpu": "2",
+            "src_gpu_type": "rocm",
+            "dst_pod": "networking-debug-pod-10.0.78.230",
+            "dst_hca": "mlx5_3",
+            "dst_gpu": "2",
+            "dst_gpu_type": "rocm"
+        },
+        {
+            "comment": "Pair 3: GPU 3 (5d:00.0) + mlx5_4 (58:00.0) — Socket 0, Stack 4 (PCIe1)",
+            "src_pod": "networking-debug-pod-10.0.66.42",
+            "src_hca": "mlx5_4",
+            "src_gpu": "3",
+            "src_gpu_type": "rocm",
+            "dst_pod": "networking-debug-pod-10.0.78.230",
+            "dst_hca": "mlx5_4",
+            "dst_gpu": "3",
+            "dst_gpu_type": "rocm"
+        },
+        {
+            "comment": "Pair 4: GPU 4 (8b:00.0) + mlx5_5 (86:00.0) — Socket 1, Stack 2 (PCIe0)",
+            "src_pod": "networking-debug-pod-10.0.66.42",
+            "src_hca": "mlx5_5",
+            "src_gpu": "4",
+            "src_gpu_type": "rocm",
+            "dst_pod": "networking-debug-pod-10.0.78.230",
+            "dst_hca": "mlx5_5",
+            "dst_gpu": "4",
+            "dst_gpu_type": "rocm"
+        },
+        {
+            "comment": "Pair 5: GPU 5 (aa:00.0) + mlx5_7 (a5:00.0) — Socket 1, Stack 6 (PCIe2)",
+            "src_pod": "networking-debug-pod-10.0.66.42",
+            "src_hca": "mlx5_7",
+            "src_gpu": "5",
+            "src_gpu_type": "rocm",
+            "dst_pod": "networking-debug-pod-10.0.78.230",
+            "dst_hca": "mlx5_7",
+            "dst_gpu": "5",
+            "dst_gpu_type": "rocm"
+        },
+        {
+            "comment": "Pair 6: GPU 6 (c2:00.0) + mlx5_8 (bd:00.0) — Socket 1, Stack 9 (PCIe4)",
+            "src_pod": "networking-debug-pod-10.0.66.42",
+            "src_hca": "mlx5_8",
+            "src_gpu": "6",
+            "src_gpu_type": "rocm",
+            "dst_pod": "networking-debug-pod-10.0.78.230",
+            "dst_hca": "mlx5_8",
+            "dst_gpu": "6",
+            "dst_gpu_type": "rocm"
+        },
+        {
+            "comment": "Pair 7: GPU 7 (da:00.0) + mlx5_9 (d5:00.0) — Socket 1, Stack 4 (PCIe1)",
+            "src_pod": "networking-debug-pod-10.0.66.42",
+            "src_hca": "mlx5_9",
+            "src_gpu": "7",
+            "src_gpu_type": "rocm",
+            "dst_pod": "networking-debug-pod-10.0.78.230",
+            "dst_hca": "mlx5_9",
+            "dst_gpu": "7",
+            "dst_gpu_type": "rocm"
+        }
+    ]
+}

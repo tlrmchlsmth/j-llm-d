@@ -1,0 +1,35 @@
+{
+    "namespace": "raj-network-debug",
+    "tos": 41,
+    "rdma_op": "read",
+    "msg_size": 2097152,
+    "num_qps": 1,
+    "duration": 30,
+    "bi_directional": false,
+    "use_hugepages": false,
+    "comment": "Baseline: 2MB RDMA READ, cross-IIO GPU-NIC pairs. Requester (src) pulls from Responder (dst).",
+    "test_pairs": [
+        {
+            "comment": "GPU 0 on IIO5 paired with mlx5_16 on IIO2 (cross-IIO)",
+            "src_pod": "test-nic-pcie-10.0.74.185",
+            "src_hca": "mlx5_16",
+            "src_gpu": "0",
+            "src_gpu_type": "rocm",
+            "dst_pod": "test-nic-pcie-10.0.67.106",
+            "dst_hca": "mlx5_16",
+            "dst_gpu": "0",
+            "dst_gpu_type": "rocm"
+        },
+        {
+            "comment": "GPU 1 on IIO11 paired with mlx5_17 on IIO7 (cross-IIO)",
+            "src_pod": "test-nic-pcie-10.0.74.185",
+            "src_hca": "mlx5_17",
+            "src_gpu": "1",
+            "src_gpu_type": "rocm",
+            "dst_pod": "test-nic-pcie-10.0.67.106",
+            "dst_hca": "mlx5_17",
+            "dst_gpu": "1",
+            "dst_gpu_type": "rocm"
+        }
+    ]
+}

@@ -1,0 +1,40 @@
+{
+  "config": {
+    "namespace": "raj-network-debug",
+    "rdma_op": "read",
+    "tos": 41,
+    "msg_size": 2097152,
+    "num_qps": 1,
+    "bi_directional": false,
+    "duration": 30
+  },
+  "test_mode": "duration",
+  "elapsed_time_seconds": 36.34,
+  "summary": {
+    "total_pairs": 2,
+    "successful": 2,
+    "failed": 0,
+    "total_avg_bw_gbps": 247.46,
+    "per_nic_avg_bw_gbps": 123.73
+  },
+  "results": [
+    {
+      "pair_idx": 0,
+      "src_pod": "test-nic-pcie-8gpu-10.0.67.106",
+      "src_hca": "mlx5_12",
+      "dst_pod": "test-nic-pcie-8gpu-10.0.74.185",
+      "dst_hca": "mlx5_12",
+      "success": true,
+      "bw_avg_gbps": 123.73
+    },
+    {
+      "pair_idx": 1,
+      "src_pod": "test-nic-pcie-8gpu-10.0.67.106",
+      "src_hca": "mlx5_13",
+      "dst_pod": "test-nic-pcie-8gpu-10.0.74.185",
+      "dst_hca": "mlx5_13",
+      "success": true,
+      "bw_avg_gbps": 123.73
+    }
+  ]
+}

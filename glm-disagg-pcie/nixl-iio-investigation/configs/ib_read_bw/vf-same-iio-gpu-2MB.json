@@ -1,0 +1,35 @@
+{
+    "namespace": "raj-network-debug",
+    "tos": 41,
+    "rdma_op": "read",
+    "msg_size": 2097152,
+    "num_qps": 1,
+    "duration": 30,
+    "bi_directional": false,
+    "use_hugepages": false,
+    "comment": "VF same-IIO ib_read_bw with GPU memory, 2MB. GPU 0 (IIO5) <-> nearest NIC (IIO5), GPU 1 (IIO11) <-> nearest NIC (IIO11). NOTE: HCA device names (mlx5_N) change across pod deployments; run gpu_to_hca_mapping.sh to discover current names.",
+    "test_pairs": [
+        {
+            "comment": "GPU 0 (IIO5) reads via nearest NIC (IIO5) - same-IIO",
+            "src_pod": "test-nic-pcie-10.0.73.241",
+            "src_hca": "mlx5_10",
+            "src_gpu": "0",
+            "src_gpu_type": "rocm",
+            "dst_pod": "test-nic-pcie-10.0.73.254",
+            "dst_hca": "mlx5_10",
+            "dst_gpu": "0",
+            "dst_gpu_type": "rocm"
+        },
+        {
+            "comment": "GPU 1 (IIO11) reads via nearest NIC (IIO11) - same-IIO",
+            "src_pod": "test-nic-pcie-10.0.73.241",
+            "src_hca": "mlx5_11",
+            "src_gpu": "1",
+            "src_gpu_type": "rocm",
+            "dst_pod": "test-nic-pcie-10.0.73.254",
+            "dst_hca": "mlx5_11",
+            "dst_gpu": "1",
+            "dst_gpu_type": "rocm"
+        }
+    ]
+}

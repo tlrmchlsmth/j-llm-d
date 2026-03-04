@@ -1,0 +1,35 @@
+{
+    "namespace": "raj-network-debug",
+    "tos": 41,
+    "rdma_op": "read",
+    "msg_size": 16384,
+    "num_qps": 1,
+    "duration": 30,
+    "bi_directional": false,
+    "use_hugepages": false,
+    "comment": "VF (MRRS=128B) cross-IIO ib_read_bw with GPU memory, 16KB. GPU 0 (IIO5) <-> mlx5_16 (IIO2), GPU 1 (IIO11) <-> mlx5_17 (IIO7).",
+    "test_pairs": [
+        {
+            "comment": "GPU 0 (IIO5) reads via mlx5_16 (IIO2) - cross-IIO",
+            "src_pod": "test-nic-pcie-10.0.73.241",
+            "src_hca": "mlx5_16",
+            "src_gpu": "0",
+            "src_gpu_type": "rocm",
+            "dst_pod": "test-nic-pcie-10.0.73.254",
+            "dst_hca": "mlx5_16",
+            "dst_gpu": "0",
+            "dst_gpu_type": "rocm"
+        },
+        {
+            "comment": "GPU 1 (IIO11) reads via mlx5_17 (IIO7) - cross-IIO",
+            "src_pod": "test-nic-pcie-10.0.73.241",
+            "src_hca": "mlx5_17",
+            "src_gpu": "1",
+            "src_gpu_type": "rocm",
+            "dst_pod": "test-nic-pcie-10.0.73.254",
+            "dst_hca": "mlx5_17",
+            "dst_gpu": "1",
+            "dst_gpu_type": "rocm"
+        }
+    ]
+}

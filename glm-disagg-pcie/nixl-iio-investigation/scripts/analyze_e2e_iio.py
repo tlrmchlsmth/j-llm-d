@@ -3,12 +3,17 @@
 
 Parses perf stat output + benchmark metrics to compute duty-cycle-corrected
 IIO rates during active transfers and compares with ib_read_bw baseline.
+
+Note on clock frequency: IIO programmable events (COMP_BUF_OCC, COMP_BUF_INS)
+use the uncore/mesh clock, which runs at ~2.4 GHz under PCIe load on
+Xeon Platinum 8480+ (Sapphire Rapids). See results/ioclk_measurement.md.
 """
 
 import re
 import sys
 from pathlib import Path
 
+UNCORE_FREQ_GHZ = 2.4
 
 # --- IIO Event Names ---
 EVENT_NAMES = {
@@ -145,9 +150,9 @@ def analyze_experiment(results_dir, isl, wire_duration_ms=None):
             ins = counters.get((iio_unit, "COMP_BUF_INS"), 0)
             if ins > 0:
                 residence = occ / ins
-                residence_us = residence / 1000  # assuming ~1 GHz IIO clock
+                residence_us = residence / (UNCORE_FREQ_GHZ * 1000)
                 print(f"\n    IIO{iio_unit} COMP_BUF residence: {residence:.0f} cycles "
-                      f"(~{residence_us:.2f} us @ 1 GHz)")
+                      f"(~{residence_us:.2f} us @ {UNCORE_FREQ_GHZ} GHz uncore)")
 
         # Also for NIC stacks
         for iio_unit in ["2", "7"]:
@@ -155,9 +160,9 @@ def analyze_experiment(results_dir, isl, wire_duration_ms=None):
             ins = counters.get((iio_unit, "COMP_BUF_INS"), 0)
             if ins > 0:
                 residence = occ / ins
-                residence_us = residence / 1000
+                residence_us = residence / (UNCORE_FREQ_GHZ * 1000)
                 print(f"    IIO{iio_unit} COMP_BUF residence: {residence:.0f} cycles "
-                      f"(~{residence_us:.2f} us @ 1 GHz)")
+                      f"(~{residence_us:.2f} us @ {UNCORE_FREQ_GHZ} GHz uncore)")
 
     # Per-NIC throughput from NIC counter data
     if metrics:
@@ -178,7 +183,7 @@ def print_baseline_comparison():
     print(f"  {'COMP_BUF_INS/s':<30} {'496 M':>12} {'287 M':>12}")
     print(f"  {'COMP_BUF residence (cycles)':<30} {'1,631':>12} {'2,479':>12}")
     print(f"  {'Throughput per NIC (Gbps)':<30} {'~254':>12} {'~148':>12}")
-    print(f"  {'COMP_BUF residence (us)':<30} {'~1.6':>12} {'~2.5':>12}")
+    print(f"  {'COMP_BUF residence (us @2.4GHz)':<30} {'~0.68':>12} {'~1.03':>12}")
     print()
     print(f"  Note: Baseline was measured with 2 flows (1 per GPU stack) on Socket 1.")
     print(f"  NIXL uses 2 NICs shared by 8 GPUs (both sockets), with 40,960-81,920")

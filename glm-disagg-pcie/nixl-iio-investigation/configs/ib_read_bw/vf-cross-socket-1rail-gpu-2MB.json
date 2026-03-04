@@ -1,0 +1,35 @@
+{
+    "namespace": "raj-network-debug",
+    "tos": 41,
+    "rdma_op": "read",
+    "msg_size": 2097152,
+    "num_qps": 1,
+    "duration": 30,
+    "bi_directional": false,
+    "use_hugepages": false,
+    "comment": "VF cross-socket 1-rail ib_read_bw with GPU memory, 2MB. GPU 4,5 (Socket 1) both share mlx5_12 (Socket 0). Emulates UCX_MAX_RMA_RAILS=1 where both ranks pick the same nearest cross-socket NIC.",
+    "test_pairs": [
+        {
+            "comment": "GPU 4 (Socket 1, IIO5) reads via mlx5_12 (Socket 0) - cross-socket, shared NIC",
+            "src_pod": "test-nic-pcie-8gpu-10.0.67.106",
+            "src_hca": "mlx5_12",
+            "src_gpu": "4",
+            "src_gpu_type": "rocm",
+            "dst_pod": "test-nic-pcie-8gpu-10.0.74.185",
+            "dst_hca": "mlx5_12",
+            "dst_gpu": "4",
+            "dst_gpu_type": "rocm"
+        },
+        {
+            "comment": "GPU 5 (Socket 1, IIO11) reads via mlx5_12 (Socket 0) - cross-socket, shared NIC",
+            "src_pod": "test-nic-pcie-8gpu-10.0.67.106",
+            "src_hca": "mlx5_12",
+            "src_gpu": "5",
+            "src_gpu_type": "rocm",
+            "dst_pod": "test-nic-pcie-8gpu-10.0.74.185",
+            "dst_hca": "mlx5_12",
+            "dst_gpu": "5",
+            "dst_gpu_type": "rocm"
+        }
+    ]
+}

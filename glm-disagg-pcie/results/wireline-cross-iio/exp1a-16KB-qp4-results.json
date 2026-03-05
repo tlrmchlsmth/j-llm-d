@@ -1,0 +1,32 @@
+{
+  "config": {
+    "namespace": "raj-network-debug",
+    "rdma_op": "read",
+    "tos": 41,
+    "msg_size": 16384,
+    "num_qps": 4,
+    "bi_directional": false,
+    "tx_depth": 512,
+    "duration": 30
+  },
+  "test_mode": "duration",
+  "elapsed_time_seconds": 35.75,
+  "summary": {
+    "total_pairs": 1,
+    "successful": 1,
+    "failed": 0,
+    "total_avg_bw_gbps": 266.81,
+    "per_nic_avg_bw_gbps": 266.81
+  },
+  "results": [
+    {
+      "pair_idx": 0,
+      "src_pod": "networking-debug-pod-10.0.69.254",
+      "src_hca": "mlx5_0",
+      "dst_pod": "networking-debug-pod-10.0.67.106",
+      "dst_hca": "mlx5_3",
+      "success": true,
+      "bw_avg_gbps": 266.81
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+# TP=1 overlay for NIXL isolation experiments.
+# Used with: MS_VALUES=ms/values-tp1.yaml just deploy
+# Only overrides tensor parallelism; GPU/NIC resource requests stay at 8 (from values.yaml + Justfile).
+decode:
+  parallelism:
+    tensor: 1
+
+prefill:
+  parallelism:
+    tensor: 1

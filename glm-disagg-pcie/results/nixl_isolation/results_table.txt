@@ -1,0 +1,79 @@
+# NIXL Transfer Speed Isolation Experiments - Final Results
+# MC=1, ISL=4096, OSL=256, MIN_PROMPTS=50
+# UCX_RC_MAX_RD_ATOMIC=16 on all experiments
+#
+# Measurements:
+#   Per-NIC TX    = RDMA READ request bytes (decode side, outgoing MRd packets)
+#   Per-NIC WR/s  = Inferred Work Request rate = RX bytes / 16KB block size / duration
+#   Per-NIC RX    = Incoming KV data throughput (decode side, CplD completions)
+#   NIXL xfer     = avg_xfer_time from vLLM decode logs
+#   NIXL post     = avg_post_time from vLLM decode logs
+#   NIXL Gbps     = avg_mb_per_xfer / avg_xfer_time * 8 (per-GPU throughput)
+#
+# Steady-state averages (first cold-start burst excluded from NIC counter analysis)
+
+| #  | Scenario | Purpose                                | TP | NICs               | Rails | IIO    | Per-NIC TX (Gbps) | Per-NIC WR/s (K) | Per-NIC RX (Gbps) | NIXL xfer (ms) | NIXL post (ms) | NIXL Gbps |
+|----|----------|----------------------------------------|----|--------------------|-------|--------|--------------------|-------------------|--------------------|----------------|----------------|-----------|
+| s1 | nixl-s1  | Baseline (1 GPU, same-IIO)             |  1 | mlx5_10            |   1   | same   | 0.862              | 2956              | 387                | 28.5           | 1.6            | 376       |
+| s2 | nixl-s2  | Single IIO crossing                    |  1 | mlx5_12            |   1   | cross  | 0.554              | 1898              | 249                | 44.4           | 1.8            | 242       |
+| s3 | nixl-s3  | Baseline (2 GPUs, same-IIO)            |  2 | mlx5_10, mlx5_11   |   1   | same   | 1.696              | 2913              | 382                | 14.8           | 1.5            | 362       |
+| s4 | nixl-s4  | Rails=2 (each GPU crosses to other's NIC) |  2 | mlx5_10, mlx5_11   |   2   | mixed* | 1.93               | 1664              | 218                | 26.9           | 3.3            | 200       |
+| s5 | nixl-s5  | Rails=2 + 1 IIO crossing (1 GPU)       |  1 | mlx5_10, mlx5_12   |   2   | mixed  | 0.688 / 0.765      | 1734 / 704        | 227 / 92           | 35.3           | 4.7            | 304       |
+| s6 | nixl-s6  | Rails=2 + 2 IIO crossings (2 GPUs)     |  2 | mlx5_12, mlx5_13   |   2   | cross  | 0.243              | 209               | 27.3               | 199.7          | 2.1            | 26.8      |
+| s6b| nixl-s6 + NUM_PATHS=4 | s6 + UCX_IB_NUM_PATHS=4  |  2 | mlx5_12, mlx5_13   |   2   | cross  | --                 | --                | 26.0 / 26.9        | 206.3          | 2.6            | 26.0      |
+
+## Notes
+# * s4 "mixed" IIO: mlx5_10 is under GPU 0's IIO, mlx5_11 is under GPU 1's IIO.
+#   With rails=2, each GPU uses BOTH NICs. So GPU 0's traffic to mlx5_11 crosses IIO
+#   (into GPU 1's PCIe tree), and GPU 1's traffic to mlx5_10 crosses IIO (into GPU 0's
+#   PCIe tree). Half of each GPU's traffic is same-IIO, half is cross-IIO.
+#   A pure "rails overhead without IIO crossing" experiment would require 2 NICs under
+#   the same IIO as one GPU, which is not available on this cluster.
+
+## Key Observations
+
+### IIO Crossing Penalty (rails=1)
+  s1 → s2: 387 → 249 Gbps per NIC (-36%), 2956K → 1898K WR/s (-36%)
+  Same-IIO NIC can push ~3M WR/s; cross-IIO drops to ~1.9M WR/s
+
+### Rails=2 Overhead: Software + Partial IIO Crossing
+  s3 → s4: 382 → 218 Gbps per NIC (-43%), 2913K → 1664K WR/s (-43%)
+  post_time: 1.5 → 3.3 ms (2.2x increase)
+  IMPORTANT: s4 is NOT a pure software-overhead experiment. With rails=2 and TP=2,
+  each GPU uses both mlx5_10 and mlx5_11. Since mlx5_10 is under GPU 0's IIO and
+  mlx5_11 is under GPU 1's IIO, half of each GPU's RDMA traffic crosses IIO stacks.
+  The -43% degradation is therefore a combination of:
+    (a) UCX rails splitting software overhead (post_time 1.5 → 3.3 ms), AND
+    (b) Half the RDMA reads crossing IIO (which we know from s1→s2 costs ~36% per-NIC)
+  These two effects cannot be isolated on this cluster because each GPU only has
+  1 NIC in its own IIO PCIe tree. Isolating pure rails overhead would require 2 NICs
+  under the same IIO as one GPU.
+
+### Combined: Rails=2 + Full Cross-IIO (s6)
+  s4 → s6: 218 → 27 Gbps per NIC (-88%), 1664K → 209K WR/s (-87%)
+  s6 uses mlx5_12 + mlx5_13 which are both under DIFFERENT IIO stacks from both GPUs.
+  Every RDMA read crosses IIO for every GPU. The combination is catastrophic:
+  14x degradation from baseline (s3 → s6).
+
+### Per-NIC Asymmetry in Mixed-IIO (s5)
+  Same-IIO NIC (mlx5_10): 227 Gbps, 1734K WR/s
+  Cross-IIO NIC (mlx5_12): 92 Gbps, 704K WR/s
+  The cross-IIO NIC gets 2.5x less throughput, suggesting UCX treats both rails equally
+  but the cross-IIO path has higher latency, so its pipeline drains slower.
+
+### UCX_IB_NUM_PATHS=4 Experiment (s6b)
+  s6 → s6b: 27.3 → 26.0/26.9 Gbps per NIC (unchanged), 199.7 → 206.3 ms xfer (unchanged)
+  post_time: 2.1 → 2.6 ms (slightly higher, within noise)
+  CONCLUSION: Increasing QPs per NIC from auto (likely 2 for NDR) to 4 had NO effect.
+  This rules out QP-level max_rd_atomic pipeline depth as the bottleneck.
+  The bottleneck in the cross-IIO case is upstream of the QPs -- likely the UCX arbiter
+  dispatch rate (1 pending per EP per progress call) or some other posting-side limit
+  that throttles the total work request rate regardless of how many QPs are available.
+
+### Aggregate Throughput Comparison
+  s1 (1 NIC, same-IIO):  387 Gbps total (1 NIC)
+  s3 (2 NICs, same-IIO): 764 Gbps total (2 NICs, rails=1) -- near-perfect 2x scaling
+  s4 (2 NICs, mixed-IIO): 436 Gbps total (2 NICs, rails=2) -- rails overhead + partial IIO crossing
+  s5 (2 NICs, mixed-IIO): 319 Gbps total (2 NICs, rails=2) -- 1 GPU, one NIC same-IIO + one cross-IIO
+  s6 (2 NICs, cross-IIO): 55 Gbps total (2 NICs, rails=2) -- all traffic crosses IIO, catastrophic
+  s6b (s6 + NUM_PATHS=4): 53 Gbps total -- no improvement, QP pipeline depth is not the bottleneck

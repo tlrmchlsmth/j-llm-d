@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# Profile NIC throughput at maximum fidelity during NIXL e2e or scatter_bench transfers.
+# Profile NIC throughput at maximum fidelity during NIXL e2e transfers.
 #
-# Deploys poll_nic_counters (no-sleep mode) on the decode bare-metal node,
-# runs a short workload, collects timestamped NIC counter traces, and analyzes.
+# Auto-discovers active NICs from UCX_NET_DEVICES on the pods.
+# Polls NIC counters on BOTH decode and prefill pods.
+# Supports 1-NIC and 2-NIC configurations.
 #
 # Usage:
-#   ./profile_nic_throughput.sh nixl   <output_dir> [NUM_PROMPTS] [ISL] [OSL]
-#   ./profile_nic_throughput.sh scatter <output_dir>
+#   ./profile_nic_throughput.sh nixl <output_dir> [NUM_PROMPTS] [ISL] [OSL]
 #
 # Examples:
-#   ./profile_nic_throughput.sh nixl   results/nic_profile_nixl 5 4096 256
-#   ./profile_nic_throughput.sh scatter results/nic_profile_scatter
+#   ./profile_nic_throughput.sh nixl results/nixl_isolation/nixl-s1 50 4096 256
 
 set -euo pipefail
 
@@ -20,7 +19,7 @@ POLLER_SRC="${SCRIPT_DIR}/poll_nic_counters.cpp"
 ANALYZER="${SCRIPT_DIR}/analyze_nic_counters.py"
 SWEEP_SCRIPT="${INVESTIGATION_DIR}/../sweep_concurrency_with_kv_transfer_logs.sh"
 
-MODE="${1:?Usage: $0 <nixl|scatter> <output_dir> [args...]}"
+MODE="${1:?Usage: $0 <nixl|scatter> <output_dir> [NUM_PROMPTS] [ISL] [OSL]}"
 OUT_DIR="${2:?Usage: $0 <nixl|scatter> <output_dir>}"
 NAMESPACE="${NAMESPACE:-raj-network-debug}"
 
@@ -61,99 +60,135 @@ PREFILL_SSH=$(node_alias "$PREFILL_NODE")
 echo "  Decode SSH:  $DECODE_SSH"
 echo "  Prefill SSH: $PREFILL_SSH"
 
-# --- Discover host PF names for pod VFs ---
-# Pod VFs (mlx5_12, mlx5_13) are on specific PCI buses.
-# Find the host PF on the same PCI bus.
+# --- Auto-discover active NICs from UCX_NET_DEVICES ---
 echo ""
-echo "Discovering host PF names for pod VF devices..."
+echo "Discovering active NICs from UCX_NET_DEVICES..."
 
-VF_PCI_1=$(kubectl exec -n "$NAMESPACE" "$DECODE_POD" -c vllm -- \
-    bash -c 'readlink /sys/class/infiniband/mlx5_12/device | rev | cut -d/ -f1 | rev' 2>/dev/null)
-VF_PCI_2=$(kubectl exec -n "$NAMESPACE" "$DECODE_POD" -c vllm -- \
-    bash -c 'readlink /sys/class/infiniband/mlx5_13/device | rev | cut -d/ -f1 | rev' 2>/dev/null)
+UCX_NET_DEVICES=$(kubectl exec -n "$NAMESPACE" "$DECODE_POD" -c vllm -- \
+    bash -c 'echo $UCX_NET_DEVICES' 2>/dev/null || echo "")
 
-VF_BUS_1=$(echo "$VF_PCI_1" | cut -d: -f2)
-VF_BUS_2=$(echo "$VF_PCI_2" | cut -d: -f2)
-
-NIC_DEV_1=$(ssh "$DECODE_SSH" "for d in /sys/class/infiniband/mlx5_*; do dev=\$(basename \$d); pci=\$(readlink \$d/device | rev | cut -d/ -f1 | rev); bus=\$(echo \$pci | cut -d: -f2); func=\$(echo \$pci | grep -o '\\.[0-9]*$'); if [ \"\$bus\" = \"${VF_BUS_1}\" ] && [ \"\$func\" = \".0\" ]; then echo \$dev; break; fi; done")
-NIC_DEV_2=$(ssh "$DECODE_SSH" "for d in /sys/class/infiniband/mlx5_*; do dev=\$(basename \$d); pci=\$(readlink \$d/device | rev | cut -d/ -f1 | rev); bus=\$(echo \$pci | cut -d: -f2); func=\$(echo \$pci | grep -o '\\.[0-9]*$'); if [ \"\$bus\" = \"${VF_BUS_2}\" ] && [ \"\$func\" = \".0\" ]; then echo \$dev; break; fi; done")
-
-echo "  Pod mlx5_12 (PCI $VF_PCI_1) -> Host $NIC_DEV_1"
-echo "  Pod mlx5_13 (PCI $VF_PCI_2) -> Host $NIC_DEV_2"
-
-if [ -z "$NIC_DEV_1" ] || [ -z "$NIC_DEV_2" ]; then
-    echo "ERROR: Could not discover host PF names. Aborting."
+if [ -z "$UCX_NET_DEVICES" ]; then
+    echo "ERROR: UCX_NET_DEVICES not set on decode pod. Cannot determine NICs."
     exit 1
 fi
 
-# --- Deploy poller into decode pod (VF counters only accessible from inside) ---
+echo "  UCX_NET_DEVICES=$UCX_NET_DEVICES"
+
+# Parse NIC names: "mlx5_10:1,mlx5_12:1" -> array of "mlx5_10" "mlx5_12"
+IFS=',' read -ra NIC_SPECS <<< "$UCX_NET_DEVICES"
+POD_NICS=()
+for spec in "${NIC_SPECS[@]}"; do
+    nic_name="${spec%%:*}"
+    POD_NICS+=("$nic_name")
+done
+
+NUM_NICS=${#POD_NICS[@]}
+echo "  Active NICs ($NUM_NICS): ${POD_NICS[*]}"
+
+# --- Deploy poller binary into both pods ---
+deploy_poller() {
+    local pod="$1"
+    local node_ssh="$2"
+    local label="$3"
+
+    echo "  Deploying poller into $label pod ($pod)..."
+    echo "    Compiling static binary on $node_ssh..."
+    scp -q "$POLLER_SRC" "${node_ssh}:/tmp/poll_nic_counters.cpp"
+    ssh "$node_ssh" "g++ -O2 -static -o /tmp/poll_nic_counters_static /tmp/poll_nic_counters.cpp 2>&1 | grep -v warning || true"
+    echo "    Copying static binary into pod..."
+    scp -q "${node_ssh}:/tmp/poll_nic_counters_static" /tmp/poll_nic_counters_static
+    kubectl -n "$NAMESPACE" cp /tmp/poll_nic_counters_static "${pod}:/tmp/poll_nic_counters" -c vllm 2>/dev/null
+    kubectl -n "$NAMESPACE" exec "$pod" -c vllm -- chmod +x /tmp/poll_nic_counters
+    echo "    Done."
+}
+
 echo ""
-echo "Deploying NIC counter poller into decode pod..."
-echo "  Compiling static binary on $DECODE_SSH..."
-scp "$POLLER_SRC" "${DECODE_SSH}:/tmp/poll_nic_counters.cpp"
-ssh "$DECODE_SSH" "g++ -O2 -static -o /tmp/poll_nic_counters_static /tmp/poll_nic_counters.cpp"
-echo "  Copying static binary into decode pod..."
-scp "${DECODE_SSH}:/tmp/poll_nic_counters_static" /tmp/poll_nic_counters_static
-kubectl -n "$NAMESPACE" cp /tmp/poll_nic_counters_static "${DECODE_POD}:/tmp/poll_nic_counters" -c vllm
-kubectl -n "$NAMESPACE" exec "$DECODE_POD" -c vllm -- chmod +x /tmp/poll_nic_counters
-echo "  Deployed successfully."
+echo "Deploying NIC counter pollers..."
+deploy_poller "$DECODE_POD" "$DECODE_SSH" "decode"
+deploy_poller "$PREFILL_POD" "$PREFILL_SSH" "prefill"
 
-# VF device names inside the pod
-POD_NIC_1="mlx5_12"
-POD_NIC_2="mlx5_13"
-
-# --- Start pollers inside the pod ---
+# --- Poller management ---
 start_pollers() {
-    echo "Starting NIC counter pollers inside decode pod (no-sleep max fidelity)..."
+    echo ""
+    echo "Starting NIC counter pollers (no-sleep max fidelity)..."
 
-    # Kill any existing pollers
-    kubectl -n "$NAMESPACE" exec "$DECODE_POD" -c vllm -- \
-        bash -c 'pkill -f poll_nic_counters 2>/dev/null || true' 2>/dev/null || true
+    for pod_label in decode prefill; do
+        if [ "$pod_label" = "decode" ]; then
+            pod="$DECODE_POD"
+        else
+            pod="$PREFILL_POD"
+        fi
 
-    # Start pollers in background inside the pod
-    kubectl -n "$NAMESPACE" exec "$DECODE_POD" -c vllm -- \
-        bash -c "nohup /tmp/poll_nic_counters ${POD_NIC_1} /tmp/nic_${POD_NIC_1}.tsv 0 > /tmp/poll1.log 2>&1 &"
+        kubectl -n "$NAMESPACE" exec "$pod" -c vllm -- \
+            bash -c 'pkill -f poll_nic_counters 2>/dev/null || true' 2>/dev/null || true
 
-    kubectl -n "$NAMESPACE" exec "$DECODE_POD" -c vllm -- \
-        bash -c "nohup /tmp/poll_nic_counters ${POD_NIC_2} /tmp/nic_${POD_NIC_2}.tsv 0 > /tmp/poll2.log 2>&1 &"
+        local idx=1
+        for nic in "${POD_NICS[@]}"; do
+            kubectl -n "$NAMESPACE" exec "$pod" -c vllm -- \
+                bash -c "nohup /tmp/poll_nic_counters ${nic} /tmp/nic_${nic}.tsv 0 > /tmp/poll_${nic}.log 2>&1 &"
+            echo "  Started poller: ${pod_label}/${nic}"
+            idx=$((idx + 1))
+        done
+    done
 
-    echo "  Pollers running. Waiting 2s for initialization..."
+    echo "  Waiting 2s for initialization..."
     sleep 2
-
-    # Verify pollers are running
-    kubectl -n "$NAMESPACE" exec "$DECODE_POD" -c vllm -- \
-        bash -c 'ps aux | grep poll_nic | grep -v grep | wc -l' 2>/dev/null || true
 }
 
 stop_pollers() {
+    echo ""
     echo "Stopping NIC counter pollers..."
-    kubectl -n "$NAMESPACE" exec "$DECODE_POD" -c vllm -- \
-        bash -c 'pkill -SIGINT -f poll_nic_counters 2>/dev/null || true'
+    for pod_label in decode prefill; do
+        if [ "$pod_label" = "decode" ]; then
+            pod="$DECODE_POD"
+        else
+            pod="$PREFILL_POD"
+        fi
+        kubectl -n "$NAMESPACE" exec "$pod" -c vllm -- \
+            bash -c 'pkill -SIGINT -f poll_nic_counters 2>/dev/null || true' 2>/dev/null || true
+    done
     echo "  Waiting 10s for pollers to flush output..."
     sleep 10
 
-    # Check poll logs for sample counts
-    echo "  Poller 1 log:"
-    kubectl -n "$NAMESPACE" exec "$DECODE_POD" -c vllm -- cat /tmp/poll1.log 2>/dev/null || true
-    echo "  Poller 2 log:"
-    kubectl -n "$NAMESPACE" exec "$DECODE_POD" -c vllm -- cat /tmp/poll2.log 2>/dev/null || true
+    for pod_label in decode prefill; do
+        if [ "$pod_label" = "decode" ]; then
+            pod="$DECODE_POD"
+        else
+            pod="$PREFILL_POD"
+        fi
+        for nic in "${POD_NICS[@]}"; do
+            echo "  ${pod_label}/${nic} poller log:"
+            kubectl -n "$NAMESPACE" exec "$pod" -c vllm -- cat /tmp/poll_${nic}.log 2>/dev/null || echo "    (no log)"
+        done
+    done
 }
 
 collect_results() {
-    echo "Collecting NIC counter traces from decode pod..."
-    kubectl -n "$NAMESPACE" cp "${DECODE_POD}:/tmp/nic_${POD_NIC_1}.tsv" "$OUT_DIR/nic_decode_${POD_NIC_1}.tsv" -c vllm 2>/dev/null || echo "  WARNING: Failed to copy ${POD_NIC_1} trace"
-    kubectl -n "$NAMESPACE" cp "${DECODE_POD}:/tmp/nic_${POD_NIC_2}.tsv" "$OUT_DIR/nic_decode_${POD_NIC_2}.tsv" -c vllm 2>/dev/null || echo "  WARNING: Failed to copy ${POD_NIC_2} trace"
+    echo ""
+    echo "Collecting NIC counter traces..."
+    for pod_label in decode prefill; do
+        if [ "$pod_label" = "decode" ]; then
+            pod="$DECODE_POD"
+        else
+            pod="$PREFILL_POD"
+        fi
+        for nic in "${POD_NICS[@]}"; do
+            local dst="$OUT_DIR/nic_${pod_label}_${nic}.tsv"
+            kubectl -n "$NAMESPACE" cp "${pod}:/tmp/nic_${nic}.tsv" "$dst" -c vllm 2>/dev/null \
+                || echo "  WARNING: Failed to copy ${pod_label}/${nic} trace"
+        done
+    done
 
     echo ""
     echo "Collected files:"
-    ls -lh "$OUT_DIR"/nic_decode_*.tsv 2>/dev/null || true
+    ls -lh "$OUT_DIR"/nic_*.tsv 2>/dev/null || echo "  (none)"
 }
 
 # ========================================================
 # MODE: NIXL e2e benchmark
 # ========================================================
 if [ "$MODE" = "nixl" ]; then
-    NUM_PROMPTS="${3:-5}"
+    NUM_PROMPTS="${3:-50}"
     ISL="${4:-4096}"
     OSL="${5:-256}"
     MC=1
@@ -179,19 +214,15 @@ if [ "$MODE" = "nixl" ]; then
     collect_results
 
 # ========================================================
-# MODE: scatter_bench
+# MODE: scatter_bench (manual)
 # ========================================================
 elif [ "$MODE" = "scatter" ]; then
     echo ""
     echo "scatter_bench profiling"
-    echo "TODO: Trigger scatter_bench from networking-debug pod"
-    echo "For now, start pollers and wait for manual scatter_bench run."
-    echo ""
-
     start_pollers
 
     echo "=========================================="
-    echo "Pollers running. Now run scatter_bench manually from the networking-debug pod."
+    echo "Pollers running. Now run scatter_bench manually."
     echo "Press Enter when scatter_bench is done..."
     echo "=========================================="
     read -r

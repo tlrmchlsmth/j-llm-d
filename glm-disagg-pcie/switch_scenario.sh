@@ -5,7 +5,7 @@
 # on both prefill and decode deployments, triggering a Recreate rollout
 # (old pod dies → new pod starts on same node).
 #
-# Usage: ./switch_scenario.sh <1|2|3|2r2|3r2>
+# Usage: ./switch_scenario.sh <1|2|3|2r2|3r2|nixl-s1..nixl-s6>
 #        UCX_RC_MAX_RD_ATOMIC=16 ./switch_scenario.sh 2r2
 #
 # Scenarios (NIC pairs used for KV cache transfer):
@@ -14,6 +14,14 @@
 #   3:   mlx5_16, mlx5_17  (PCI bd:00.1, d5:00.1)  UCX_MAX_RMA_RAILS=1
 #   2r2: mlx5_12, mlx5_13  (PCI 41:00.1, 58:00.1)  UCX_MAX_RMA_RAILS=2
 #   3r2: mlx5_16, mlx5_17  (PCI bd:00.1, d5:00.1)  UCX_MAX_RMA_RAILS=2
+#
+# NIXL isolation experiments (require matching TP deploy):
+#   nixl-s1: mlx5_10             rails=1  (TP=1, same-IIO baseline)
+#   nixl-s2: mlx5_12             rails=1  (TP=1, cross-IIO)
+#   nixl-s3: mlx5_10, mlx5_11   rails=1  (TP=2, same-IIO baseline)
+#   nixl-s4: mlx5_10, mlx5_11   rails=2  (TP=2, mixed-IIO -- each GPU crosses to other's NIC)
+#   nixl-s5: mlx5_10, mlx5_12   rails=2  (TP=1, mixed IIO, rails overhead)
+#   nixl-s6: mlx5_12, mlx5_13   rails=2  (TP=2, cross-IIO, rails overhead)
 #
 # In scenarios 2r2/3r2, UCX_MAX_RMA_RAILS=2 forces each rank to use both
 # NICs (2 RMA lanes), working around UCX's greedy per-endpoint device
@@ -24,7 +32,7 @@
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <1|2|3|2r2|3r2>"
+    echo "Usage: $0 <1|2|3|2r2|3r2|nixl-s1..nixl-s6>"
     exit 1
 fi
 
@@ -39,7 +47,13 @@ case "$SCENARIO" in
     3)   NET_DEVICES="mlx5_16:1,mlx5_17:1" ;;
     2r2) NET_DEVICES="mlx5_12:1,mlx5_13:1"; RMA_RAILS="2" ;;
     3r2) NET_DEVICES="mlx5_16:1,mlx5_17:1"; RMA_RAILS="2" ;;
-    *)   echo "ERROR: Unknown scenario '$SCENARIO'. Use 1, 2, 3, 2r2, or 3r2."; exit 1 ;;
+    nixl-s1) NET_DEVICES="mlx5_10:1";           RMA_RAILS="1" ;;
+    nixl-s2) NET_DEVICES="mlx5_12:1";           RMA_RAILS="1" ;;
+    nixl-s3) NET_DEVICES="mlx5_10:1,mlx5_11:1"; RMA_RAILS="1" ;;
+    nixl-s4) NET_DEVICES="mlx5_10:1,mlx5_11:1"; RMA_RAILS="2" ;;
+    nixl-s5) NET_DEVICES="mlx5_10:1,mlx5_12:1"; RMA_RAILS="2" ;;
+    nixl-s6) NET_DEVICES="mlx5_12:1,mlx5_13:1"; RMA_RAILS="2" ;;
+    *)   echo "ERROR: Unknown scenario '$SCENARIO'. Use 1, 2, 3, 2r2, 3r2, or nixl-s1..nixl-s6."; exit 1 ;;
 esac
 
 echo "=============================================="

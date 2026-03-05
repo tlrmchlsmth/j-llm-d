@@ -1,0 +1,31 @@
+{
+  "config": {
+    "namespace": "raj-network-debug",
+    "rdma_op": "write",
+    "tos": 41,
+    "msg_size": 16384,
+    "num_qps": 8,
+    "bi_directional": false,
+    "tx_depth": 512,
+    "duration": 30
+  },
+  "summary": {
+    "total_pairs": 2,
+    "successful": 2,
+    "failed": 0,
+    "total_avg_bw_gbps": 545.07,
+    "per_nic_avg_bw_gbps": 272.53
+  },
+  "results": [
+    {
+      "pair_idx": 0,
+      "bw_avg_gbps": 273.26,
+      "success": true
+    },
+    {
+      "pair_idx": 1,
+      "bw_avg_gbps": 271.81,
+      "success": true
+    }
+  ]
+}

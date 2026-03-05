@@ -7,13 +7,14 @@
 3. [Test Environment](#test-environment)
 4. [The GPU-NIC Placement Problem](#the-gpu-nic-placement-problem)
 5. [Narrowing the Gap: Message Size Matters](#narrowing-the-gap-message-size-matters)
-6. [Investigating the Prefill-Side PCIe Path](#investigating-the-prefill-side-pcie-path)
-7. [IIO Counter Results](#iio-counter-results)
-8. [Two Hypotheses for the Low Insertion Rate](#two-hypotheses-for-the-low-insertion-rate)
-9. [Validation: Custom RDMA Scatter Benchmark](#validation-custom-rdma-scatter-benchmark)
-10. [Investigating the NIXL/UCX Software Stack](#investigating-the-nixlucx-software-stack)
-11. [Wire-Level NIC Counter Profiling](#wire-level-nic-counter-profiling)
-12. [Conclusion and Next Steps](#conclusion-and-next-steps)
+6. [Wire-Line Throughput for Cross-IIO](#wire-line-throughput-for-cross-iio)
+7. [Investigating the Prefill-Side PCIe Path](#investigating-the-prefill-side-pcie-path)
+8. [IIO Counter Results](#iio-counter-results)
+9. [Two Hypotheses for the Low Insertion Rate](#two-hypotheses-for-the-low-insertion-rate)
+10. [Validation: Custom RDMA Scatter Benchmark](#validation-custom-rdma-scatter-benchmark)
+11. [Investigating the NIXL/UCX Software Stack](#investigating-the-nixlucx-software-stack)
+12. [Wire-Level NIC Counter Profiling](#wire-level-nic-counter-profiling)
+13. [Conclusion and Next Steps](#conclusion-and-next-steps)
 
 ---
 
@@ -245,6 +246,141 @@ The apparent differences: `ib_read_bw` reads from a single contiguous GPU buffer
 and uses the low-level `libibverbs` API directly. NIXL reads 40,960 scattered
 16 KB blocks from random locations in GPU memory, going through the UCX
 software stack. Which of these differences explains the 5.5x gap?
+
+---
+
+## Wire-Line Throughput for Cross-IIO
+
+Before investigating the NIXL-specific gap, we need to establish the raw
+wireline ceiling for cross-IIO transfers. Using `ib_read_bw` with GPU memory
+on the `networking-debug-pod` PF NICs (MRRS = 4096 bytes), we ran four
+experiments that isolate which side of the RDMA READ path is the bottleneck.
+All tests use `--tx-depth=512` and sweep QP count from 1 to 16.
+
+### Experiment Design
+
+In an RDMA READ, two DMA operations occur on the **responder** (prefill) node:
+
+1. The NIC **reads** from GPU memory (PCIe non-posted MRd + CplD round-trip)
+2. The NIC sends data out on the wire
+
+On the **requester** (decode) node, the NIC receives data from the wire and
+**writes** it to GPU memory (PCIe posted MWr, fire-and-forget).
+
+To isolate each path, we place the cross-IIO hop on only one side at a time:
+
+| Experiment | Cross-IIO side | Streams | Prefill NIC→GPU | Decode NIC→GPU |
+|------------|---------------|---------|-----------------|----------------|
+| 1a | Prefill (read) | 1 | mlx5_3→GPU0 (cross-IIO) | mlx5_0→GPU0 (same-IIO) |
+| 1b | Prefill (read) | 2 | mlx5_3→GPU0, mlx5_4→GPU1 (cross-IIO) | mlx5_0→GPU0, mlx5_2→GPU1 (same-IIO) |
+| 2a | Decode (write) | 1 | mlx5_0→GPU0 (same-IIO) | mlx5_3→GPU0 (cross-IIO) |
+| 2b | Decode (write) | 2 | mlx5_0→GPU0, mlx5_2→GPU1 (same-IIO) | mlx5_3→GPU0, mlx5_4→GPU1 (cross-IIO) |
+
+### Results: 2 MB Messages
+
+| Experiment | Description | Per-NIC Throughput (Gbps) |
+|------------|-------------|--------------------------|
+| 1a | Prefill cross-IIO read, 1 stream | 270 |
+| 1b | Prefill cross-IIO read, 2 streams | 272 |
+| 2a | Decode cross-IIO write, 1 stream | 359 |
+| 2b | Decode cross-IIO write, 2 streams | 359 |
+
+The read vs. write asymmetry is stark. When the NIC **writes** to GPU memory
+across IIO stacks (exp 2a/2b), it achieves **359 Gbps** -- essentially line rate.
+PCIe writes are **posted** transactions: the NIC fires off MWr TLPs with no
+round-trip wait for a completion. When the NIC **reads** from GPU memory across
+IIO stacks (exp 1a/1b), throughput drops to **~270 Gbps**. PCIe reads are
+**non-posted**: each MRd TLP must wait for CplD data to return across the mesh
+before the tag can be reused. This round-trip penalty caps the read path at
+roughly 75% of line rate.
+
+Adding a second concurrent stream (1a→1b, 2a→2b) causes no per-NIC degradation,
+confirming there is no contention at the IIO level between independent GPU-NIC
+pairs crossing the same mesh.
+
+### Results: 16 KB Messages
+
+| Experiment | Description | Per-NIC Throughput (Gbps) |
+|------------|-------------|--------------------------|
+| 1a | Prefill cross-IIO read, 1 stream | 271 |
+| 1b | Prefill cross-IIO read, 2 streams | 272 |
+| 2a | Decode cross-IIO write, 1 stream | 267 |
+| 2b | Decode cross-IIO write, 2 streams | 266 |
+
+At 16 KB, both read and write converge to **~270 Gbps**. The write path, which
+was unconstrained at 2 MB, now also takes a throughput hit: smaller messages
+mean more PCIe transactions per byte, and even posted writes face IIO scheduling
+and header overhead at high transaction rates.
+
+### Takeaway: The Wireline Ceiling
+
+In the actual P/D deployment (cross-IIO configuration), cross-IIO hops occur
+on **both** the prefill and decode sides. The effective wireline ceiling is
+determined by the slower of the two paths:
+
+- **Prefill-side NIC reading from GPU** (non-posted): ~270 Gbps per NIC
+- **Decode-side NIC writing to GPU** (posted): ~359 Gbps at 2 MB, ~267 Gbps at 16 KB
+
+At 2 MB messages, the prefill-side read path is clearly the bottleneck at
+~270 Gbps. At 16 KB, both paths converge to the same ~270 Gbps ceiling.
+Either way, **~260-270 Gbps per NIC is the maximum achievable wireline
+throughput for cross-IIO RDMA transfers**, regardless of message size.
+
+This means the **252 Gbps** measured by `ib_read_bw` with VF NICs (MRRS = 128B)
+in the throughput comparison table above is already within ~93% of this ceiling.
+The NIXL throughput of ~27 Gbps is **10x below the wireline limit** -- a gap
+that cannot be explained by PCIe topology alone.
+
+### Would NIXL Push Instead of Pull Change the Ceiling?
+
+NIXL currently uses RDMA READ (pull): the **decode** NIC initiates the transfer,
+and the **prefill** NIC responds by DMA-reading from GPU memory. A natural
+question is whether switching to RDMA WRITE (push) -- where the **prefill** NIC
+initiates the transfer from a local Send Queue -- would improve throughput.
+The hypothesis: with push, the prefill NIC has a full pipeline of locally queued
+Work Requests and can schedule its DMA reads from GPU memory more aggressively
+than when reacting to incoming RDMA READ requests from the network.
+
+To test this, we ran both `ib_read_bw` (pull) and `ib_write_bw` (push) with
+cross-IIO GPU-NIC pairs (GPU0-mlx5_3, GPU1-mlx5_4) on **both** the prefill
+and decode nodes simultaneously -- 2 streams, PF NICs, `--tx-depth=512`,
+sweeping QPs from 1 to 16.
+
+**2 MB messages (per-NIC Gbps):**
+
+| Mode | QP=1 | QP=2 | QP=4 | QP=8 | QP=16 |
+|------|------|------|------|------|-------|
+| Pull (`ib_read_bw`) | 254 | 265 | 271 | 272 | 272 |
+| Push (`ib_write_bw`) | 254 | 265 | 270 | 272 | 272 |
+
+**16 KB messages (per-NIC Gbps):**
+
+| Mode | QP=1 | QP=2 | QP=4 | QP=8 | QP=16 |
+|------|------|------|------|------|-------|
+| Pull (`ib_read_bw`) | 149 | 262 | 267 | 268 | 268 |
+| Push (`ib_write_bw`) | 251 | 265 | 270 | 273 | 272 |
+
+At saturation (QP >= 4), pull and push converge to the **same ~272 Gbps
+ceiling**. The bottleneck is identical in both cases: the prefill NIC must
+DMA-read from GPU memory across IIO stacks, and the non-posted PCIe read
+round-trip (MRd → mesh → GPU → CplD → mesh → NIC) caps throughput at ~270 Gbps
+regardless of how the work is initiated.
+
+The one difference appears at **16 KB with QP=1**: push achieves 251 Gbps
+while pull only reaches 149 Gbps. With push, the NIC has 512 Work Requests
+queued locally in its Send Queue, so even a single QP provides enough
+outstanding DMA reads to fill the bandwidth-delay product across the mesh.
+With pull, the NIC processes incoming RDMA READ requests as they arrive -- at
+QP=1, only one request is outstanding at a time, which is insufficient to
+hide the mesh round-trip latency for small messages. Adding more QPs (QP >= 2)
+closes this gap as the NIC can then overlap multiple in-flight requests.
+
+**Takeaway:** Switching NIXL from pull to push would **not** raise the wireline
+ceiling. The prefill-side cross-IIO DMA read path is the fundamental bottleneck,
+and it applies equally to both RDMA READ responses and RDMA WRITE initiations.
+Push would only help in scenarios where the NIC's request pipeline is
+under-filled -- which is precisely the software-level problem we investigate
+in the rest of this post.
 
 ---
 

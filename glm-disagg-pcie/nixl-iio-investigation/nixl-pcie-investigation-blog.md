@@ -575,32 +575,68 @@ Applied all parameters simultaneously:
 
 Result: **~27 Gbps** -- still no improvement.
 
-### What This Tells Us
+**Experiment 3: `UCX_RC_TX_POLL_ALWAYS=y`**
 
-The fact that aggressively tuning UCX's IB transport parameters has zero effect
-on throughput means **the bottleneck is above the UCX transport layer**. The
-NIC's Send Queue was not the constraint -- UCX was already keeping it fed
-adequately with the defaults. The constraint is higher up in the stack: in
-how NIXL posts descriptors to UCX, how UCX's UCP layer processes them, and
-how vLLM's event loop drives `ucp_worker_progress()`.
+Forces UCX to poll TX completions on every `ucp_worker_progress()` call
+(default skips TX polling if RX completions are found first).
 
-The key architectural differences between our scatter bench and NIXL/UCX:
+Result: **~27 Gbps** -- no improvement.
 
-1. **Per-descriptor software overhead:** Each of 40,960 descriptors traverses
-   NIXL → UCX UCP → UCX UCT → IB verbs. Even at 300 ns per call, posting
-   all descriptors takes ~12 ms. During this posting loop, no completions are
-   processed, so the pipeline stalls.
+### Source Code Analysis: Where the Pipeline Stalls
 
-2. **Progress model:** UCX uses cooperative scheduling. `ucp_worker_progress()`
-   must be called to poll completions and advance the queue. If vLLM's event
-   loop interleaves progress calls with other tasks (scheduling, sampling,
-   memory management), the RDMA pipeline has idle gaps. Our scatter bench uses
-   a dedicated tight post/poll loop with no other work.
+To understand why transport-level tuning has no effect, we examined the NIXL
+and UCX source code. The analysis reveals the bottleneck is in the
+descriptor posting pattern and UCX's internal pending queue management.
 
-3. **No interleaved post/poll:** Our bench posts WQEs and polls completions
-   in the same tight loop. NIXL likely posts all 40,960 descriptors first,
-   then drives progress. The first SQ-worth of WQEs may complete while
-   thousands more are still being posted in software.
+**NIXL posting path** (`src/plugins/ucx/ucx_backend.cpp`):
+
+```
+postXfer → sendXferRange → sendXferRangeBatch → ep.read() → ucp_get_nbx()
+```
+
+`sendXferRangeBatch` posts all 40,960 descriptors in a tight loop with **no
+`ucp_worker_progress()` calls between iterations**. The entire batch is posted
+before any completions are processed.
+
+**UCX internal behavior when the SQ fills:**
+
+When the Send Queue fills up (at entry #256 with default `TX_QUEUE_LEN`), UCX
+returns `UCS_ERR_NO_RESOURCE` and adds the operation to an internal **pending
+queue** via `uct_ep_pending_add()`. The remaining ~40,704 descriptors each
+take this fast path (~100 ns for pending_add vs ~300 ns for a successful post).
+
+The critical bottleneck is in how the pending queue drains:
+`ucp_worker_progress()` calls `ucs_arbiter_dispatch(..., per_group=1)`, which
+dispatches **at most 1 pending operation per RC endpoint per progress call**.
+Even when 64 SQ credits are freed at once (due to `TX_CQ_MODERATION=64`), the
+arbiter only posts 1 new WQE per endpoint per iteration.
+
+**The pipeline stall pattern:**
+
+```
+Phase 1: Burst posting (~4 ms)
+  ├─ First 256 ucp_get_nbx → succeed (fill SQ)
+  ├─ Next 40,704 ucp_get_nbx → UCS_ERR_NO_RESOURCE → pending queue
+  └─ NIC processes initial 256 WQEs in ~160 μs, then sits IDLE for ~3.8 ms
+
+Phase 2: Progress draining
+  ├─ NIXL calls status() → while(worker->progress());
+  ├─ Each progress(): poll CQ (batch of 64 credits) + dispatch 1 pending/EP
+  └─ ~20,352 progress iterations needed to drain 40,704 pendings (2 EPs)
+```
+
+During Phase 1, the NIC finishes its initial 256 WQEs in ~160 μs (with
+`max_rd_atomic=16`, 256 WQEs / 16 concurrent = 16 batches × ~10 μs each).
+The NIC then waits idle for ~3.8 ms while the software continues adding
+to the pending queue. This explains why increasing the SQ depth or
+`max_rd_atomic` has no effect: the software pipeline, not the hardware
+pipeline, is the bottleneck.
+
+**Progress threading:** When NIXL's progress thread is enabled, it uses
+`poll()` with a minimum 1 ms timeout between progress bursts. This introduces
+additional idle gaps. When inline progress is used (the default for
+`checkXfer()`), the tight `while(progress())` loop is faster but still
+constrained by the 1-pending-per-EP-per-call arbiter limit.
 
 ---
 
@@ -628,7 +664,7 @@ layer, in how descriptors are posted and how progress is driven.
 | CHA coherency overhead | P2P traffic bypasses CHA entirely (10,000x less CHA traffic) |
 | **Scattered GPU memory access** | **Custom scatter bench achieves ~137 Gbps with identical scatter pattern** |
 | VF MRRS limitation (128B) | `ib_read_bw` with VF (MRRS=128B) + GPU at 16KB achieves 148 Gbps, identical to PF (MRRS=4096B). VF MRRS locked by firmware. |
-| UCX RC transport defaults | Tuning TX_QUEUE_LEN, TX_MAX_BATCH, TX_CQ_MODERATION, MAX_RD_ATOMIC has no effect |
+| UCX RC transport defaults | Tuning TX_QUEUE_LEN, TX_MAX_BATCH, TX_CQ_MODERATION, MAX_RD_ATOMIC, TX_POLL_ALWAYS has no effect |
 | Network congestion | Zero PFC pauses, no drops on decode-side NIC counters |
 | NIC fan-out contention | Only 2 GPUs active, same topology as `ib_read_bw` |
 
@@ -644,10 +680,10 @@ to fill the bandwidth-delay product.
 
 | Area | Rationale |
 |------|-----------|
-| **NIXL descriptor posting pattern** | How does NIXL post 40,960 descriptors to UCX? Burst or interleaved with progress? Profiling the posting loop timing would reveal pipeline stalls. |
-| **UCX progress frequency** | How often does vLLM call `ucp_worker_progress()` during a transfer? Infrequent progress calls would create idle gaps in the RDMA pipeline. |
-| **`UCX_RC_TX_POLL_ALWAYS=y`** | Forces UCX to poll TX completions on every progress call (default skips TX if RX found). May improve pipeline throughput. |
-| **Descriptor coalescing** | Sorting blocks by GPU address and merging adjacent 16 KB blocks into larger READs would reduce descriptor count (e.g., 4 adjacent blocks → one 64 KB READ). |
+| **Interleaved posting with progress** | NIXL's burst-then-progress pattern leaves the NIC idle for ~3.8 ms during posting. Interleaving `ucp_worker_progress()` every N descriptors (e.g., every 256) would keep the pipeline fed during posting. |
+| **UCX arbiter dispatch limit** | UCX's `ucs_arbiter_dispatch(..., per_group=1)` drains only 1 pending per EP per progress call. Increasing `per_group` or bypassing the arbiter for bulk RMA operations could dramatically improve pipeline throughput. |
+| **Descriptor coalescing** | Sorting blocks by GPU address and merging adjacent 16 KB blocks into larger READs would reduce descriptor count (e.g., 4 adjacent blocks → one 64 KB READ), reducing both posting overhead and pending queue pressure. |
+| **Raw verbs backend for NIXL** | A `libibverbs`-based NIXL plugin (bypassing UCX entirely) could use a tight post/poll loop identical to `rdma_scatter_bench`, recovering the full ~137 Gbps hardware capability. |
 | **Same-IIO GPU-NIC placement** | Eliminates the mesh crossing entirely (355 Gbps observed), making the BDP constraint irrelevant. |
 | **Topology-aware K8s scheduling** | Ensure GPU-NIC co-location when assigning SR-IOV VFs. |
 

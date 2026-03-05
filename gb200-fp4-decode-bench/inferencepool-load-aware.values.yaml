@@ -51,6 +51,10 @@ inferencePool:
     - number: 8001
     - number: 8002
     - number: 8003
+    # - number: 8004
+    # - number: 8005
+    # - number: 8006
+    # - number: 8007
   modelServers:
     matchLabels:
       llm-d.ai/inferenceServing: "true"

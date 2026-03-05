@@ -4,6 +4,12 @@ resources:
   - decode.yaml
   - prefill.yaml
   - serviceAccount.yaml
-  - jit-build-scripts.yaml
 configurations:
   - kustomize-config.yaml
+
+configMapGenerator:
+  - name: jit-build-scripts
+    options:
+      disableNameSuffixHash: true
+    files:
+      - jit_mla_rope_quant.py

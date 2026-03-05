@@ -138,23 +138,30 @@ spec:
                 git fetch elvircrn gb200_fused_op
                 git fetch elvircrn gb200_working_fused_rope
                 git fetch elvircrn gb200_working
+                git fetch elvircrn gemm2-combine-overlap
                 # git cherry-pick --no-commit 00a944ef8e
 
                 # Q_b proj PR
-                # git cherry-pick --no-commit 24ae04cb7a
+                git cherry-pick --no-commit 24ae04cb7a
+                
+                # GEMM Overlap
+                git cherry-pick --no-commit 8a30cbc503
 
                 # Yank ropequant from FlashInfer into vLLM tree
-                # git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
-                # git cherry-pick --no-commit 782ef44e4a1512297f05314eb85f18c1573307f2
-                # git cherry-pick --no-commit 7cf5ce6e1b
-
-                # JIT-compile the new CUDA kernel
-                # echo "=== JIT-compiling mla_rope_quant at $(date) ==="
-                # python tools/jit_mla_rope_quant.py
-                # sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py
-                # sed -i 's/torch\.ops\._C\.mla_rope_quantize_fp8/mla_rope_quant_ext.mla_rope_quantize_fp8/g' vllm/_custom_ops.py
-                # export PYTHONPATH=/tmp/jit_build/mla_rope_quant:${PYTHONPATH:-}
-                # echo "=== JIT build complete at $(date) ==="
+                git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
+                git cherry-pick --no-commit 782ef44e4a1512297f05314eb85f18c1573307f2
+                git cherry-pick --no-commit 8af5bb313d8efed3d1fc0ff501ea723813313470
+                # Fused RoPE+FP8 quant + KV cache scatter-write (split 2K)
+                git cherry-pick --no-commit 13b2949ac4
+                # Dual-stream: aux_stream() singleton for cudagraph compat
+                git cherry-pick --no-commit b16ecc1647
+                echo "=== JIT-compiling mla_rope_quant at $(date) ==="
+                python tools/jit_mla_rope_quant.py
+                sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py
+                sed -i 's/torch\.ops\._C\.mla_rope_quantize_fp8/mla_rope_quant_ext.mla_rope_quantize_fp8/g' vllm/_custom_ops.py
+                sed -i 's/torch\.ops\._C\.mla_fused_cache_/mla_rope_quant_ext.mla_fused_cache_/g' vllm/_custom_ops.py
+                export PYTHONPATH=/tmp/jit_build/mla_rope_quant:${PYTHONPATH:-}
+                echo "=== JIT build complete at $(date) ==="
 
                 # Derive batch-size-dependent env vars from MAX_TOKENS
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
@@ -163,27 +170,36 @@ spec:
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
 
-                exec vllm serve \
-                  nvidia/DeepSeek-R1-0528-FP4-v2 \
-                  --port 8200 \
-                  --disable-uvicorn-access-log \
-                  --enable-expert-parallel \
-                  --tensor-parallel-size $TP_SIZE \
-                  --data-parallel-hybrid-lb \
-                  --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
-                  --data-parallel-size-local $DP_SIZE_LOCAL \
-                  --data-parallel-start-rank $START_RANK \
-                  --data-parallel-address ${LWS_LEADER_ADDRESS} \
-                  --data-parallel-rpc-port 5555 \
-                  --async-scheduling \
-                  --all2all-backend deepep_low_latency \
-                  --trust-remote-code \
-                  --kv_transfer_config "$KV_TRANSFER_CONFIG" \
-                  --max-num-batched-tokens 32768 \
-                  --max-num-seqs $MAX_TOKENS \
-                  --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
-                  --max-cudagraph-capture-size 32768 \
-                  --enable-force-include-usage
+                for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
+                  VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
+                  FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
+                  CUDA_VISIBLE_DEVICES=$R $NSYS_PREFIX vllm serve $PROFILER_ARGS \
+                    nvidia/DeepSeek-R1-0528-FP4-v2 \
+                    --host :: \
+                    --port $((8200 + R)) \
+                    --disable-uvicorn-access-log \
+                    --enable-expert-parallel \
+                    --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
+                    --data-parallel-rank $((START_RANK + R)) \
+                    --data-parallel-size-local 1 \
+                    --data-parallel-address ${LWS_LEADER_ADDRESS} \
+                    --data-parallel-rpc-port 5555 \
+                    --trust-remote-code \
+                    --gpu-memory-utilization 0.75 \
+                    --kv-cache-dtype fp8 \
+                    --kv_transfer_config "$KV_TRANSFER_CONFIG" \
+                    --async-scheduling \
+                    --max-cudagraph-capture-size 8192 \
+                    --max-num-batched-tokens 8192 \
+                    --all2all-backend "deepep_low_latency" \
+                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+                    --enable-force-include-usage &
+                done
+
+                # If any process exits, kill all and restart pod
+                wait -n
+                kill $(jobs -p) 2>/dev/null
+                exit 1
 
             env:
               # Set to a Lustre venv path to override baked-in vLLM (e.g. /mnt/lustre/tms/vllm-venv)
@@ -211,20 +227,36 @@ spec:
                     key: HF_TOKEN
                     optional: true
               - name: HF_HOME
-                value: /mnt/lustre/hf_cache
+                value: /mnt/lustre/vllm-vlm-elvircrn
+              - name: TRANSFORMERS_CACHE
+                value: /mnt/lustre/vllm-vlm-elvircrn
+              - name: HF_HUB_CACHE
+                value: /mnt/lustre/vllm-vlm-elvircrn
 
               # Compile caches - persist across restarts for faster startup
               - name: VLLM_CACHE_ROOT
-                value: /mnt/lustre/tms/vllm_cache_extdp
+                value: /mnt/lustre/vllm-vlm-elvircrn/vllm_cache
               - name: FLASHINFER_CACHE_DIR
-                value: /mnt/lustre/tms/flashinfer_cache_extdp
+                value: /mnt/lustre/vllm-vlm-elvircrn/flashinfer_cache
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
                 value: "1"
 
+              - name: DP_SIZE_LOCAL
+                value: "4"
+
               - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"
+
+              - name: VLLM_MLA_FUSED_ROPE_CACHE
+                value: "1"
+
+              - name: VLLM_DEEPEP_COMBINE_GEMM2_OVERLAP
+                value: "1"
+
+              - name: VLLM_DEEPEP_COMBINE_COMM_SMS
+                value: "32"
 
               # Common vLLM settings
               - name: TRITON_LIBCUDA_PATH

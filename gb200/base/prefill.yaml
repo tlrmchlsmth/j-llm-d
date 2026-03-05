@@ -95,10 +95,12 @@ spec:
                     --trust-remote-code \
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
                     --async-scheduling \
+                    --gpu-memory-utilization 0.75 \
                     --kv-cache-dtype fp8 \
+                    --enforce-eager \
+                    --max-cudagraph-capture-size 8192 \
+                    --max-num-batched-tokens 8192 \
                     --all2all-backend allgather_reducescatter \
-                    --max-cudagraph-capture-size 32768 \
-                    --max-num-batched-tokens 32768 \
                     --enable-force-include-usage &
                 done
 
@@ -130,13 +132,17 @@ spec:
                     key: HF_TOKEN
                     optional: true
               - name: HF_HOME
-                value: /mnt/lustre/hf_cache
+                value: /mnt/lustre/vllm-vlm-elvircrn
+              - name: TRANSFORMERS_CACHE
+                value: /mnt/lustre/vllm-vlm-elvircrn
+              - name: HF_HUB_CACHE
+                value: /mnt/lustre/vllm-vlm-elvircrn
 
               # Compile caches - persist across restarts for faster startup
               - name: VLLM_CACHE_ROOT
-                value: /mnt/lustre/tms/vllm_cache_extdp
+                value: /mnt/lustre/vllm-vlm-elvircrn/vllm_cache
               - name: FLASHINFER_CACHE_DIR
-                value: /mnt/lustre/tms/flashinfer_cache_extdp
+                value: /mnt/lustre/vllm-vlm-elvircrn/flashinfer_cache
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
@@ -166,6 +172,9 @@ spec:
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S
                 value: "1800"
+
+              - name: VLLM_FLASHINFER_MOE_BACKEND
+                value: "masked_gemm"
 
               # Debug logging
               - name: VLLM_LOGGING_LEVEL

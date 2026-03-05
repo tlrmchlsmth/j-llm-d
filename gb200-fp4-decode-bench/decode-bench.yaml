@@ -10,7 +10,7 @@ metadata:
 spec:
   replicas: 1
   leaderWorkerTemplate:
-    size: 4
+    size: 8
     workerTemplate:
       metadata:
         labels:
@@ -105,6 +105,84 @@ spec:
             securityContext:
               allowPrivilegeEscalation: false
               runAsNonRoot: true
+
+
+
+          - name: routing-proxy-rank4
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:latest@sha256:e408208da659a8d5b33be94eaaff437c0af8b0ea920a87e023901d66ae62a9bc
+            imagePullPolicy: Always
+            args:
+              - --port=8004
+              - --vllm-port=8204
+              - --secure-proxy=false
+              - --connector=nixlv2
+            ports:
+              - containerPort: 8004
+                name: proxy-rank3
+                protocol: TCP
+            restartPolicy: Always
+            resources: {}
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+
+          - name: routing-proxy-rank5
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:latest@sha256:e408208da659a8d5b33be94eaaff437c0af8b0ea920a87e023901d66ae62a9bc
+            imagePullPolicy: Always
+            args:
+              - --port=8005
+              - --vllm-port=8205
+              - --secure-proxy=false
+              - --connector=nixlv2
+            ports:
+              - containerPort: 8005
+                name: proxy-rank5
+                protocol: TCP
+            restartPolicy: Always
+            resources: {}
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+
+          - name: routing-proxy-rank6
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:latest@sha256:e408208da659a8d5b33be94eaaff437c0af8b0ea920a87e023901d66ae62a9bc
+            imagePullPolicy: Always
+            args:
+              - --port=8006
+              - --vllm-port=8206
+              - --secure-proxy=false
+              - --connector=nixlv2
+            ports:
+              - containerPort: 8006
+                name: proxy-rank6
+                protocol: TCP
+            restartPolicy: Always
+            resources: {}
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+
+
+          - name: routing-proxy-rank7
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:latest@sha256:e408208da659a8d5b33be94eaaff437c0af8b0ea920a87e023901d66ae62a9bc
+            imagePullPolicy: Always
+            args:
+              - --port=8007
+              - --vllm-port=8207
+              - --secure-proxy=false
+              - --connector=nixlv2
+            ports:
+              - containerPort: 8007
+                name: proxy-rank3
+                protocol: TCP
+            restartPolicy: Always
+            resources: {}
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+
+
+
         containers:
           - name: vllm
             image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
@@ -146,14 +224,22 @@ spec:
                 git fetch elvircrn gb200_fused_op
                 git fetch elvircrn gb200_working_fused_rope
                 git fetch elvircrn gb200_working
+                git fetch elvircrn gemm2-combine-overlap
                 # git cherry-pick --no-commit 00a944ef8e
 
                 # MLA torch.concat optimization
                 # git cherry-pick --no-commit e93799b752
                 
-                
                 # Q_b proj PR
                 git cherry-pick --no-commit 24ae04cb7a
+                
+                # GEMM Overlap
+                git cherry-pick --no-commit 8a30cbc503
+                
+                # Supposed stream fixes
+                git cherry-pick --no-commit 84c235350e
+                git cherry-pick --no-commit 8a2fc6a23b
+                git cherry-pick --no-commit 9312409cf4
 
                 # Yank ropequant from FlashInfer into vLLM tree
                 git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
@@ -161,8 +247,8 @@ spec:
                 git cherry-pick --no-commit 8af5bb313d8efed3d1fc0ff501ea723813313470
                 # Fused RoPE+FP8 quant + KV cache scatter-write (split 2K)
                 git cherry-pick --no-commit 13b2949ac4
-                # Dual-stream: event-based fork/join for cudagraph compat
-                git cherry-pick --no-commit e61f00702c
+                # Dual-stream: aux_stream() singleton for cudagraph compat
+                git cherry-pick --no-commit b16ecc1647
                 echo "=== JIT-compiling mla_rope_quant at $(date) ==="
                 python tools/jit_mla_rope_quant.py
                 sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py
@@ -337,6 +423,12 @@ spec:
               - name: VLLM_MLA_FUSED_ROPE_CACHE
                 value: "1"
 
+              - name: VLLM_DEEPEP_COMBINE_GEMM2_OVERLAP
+                value: "1"
+
+              - name: VLLM_DEEPEP_COMBINE_COMM_SMS
+                value: "32"
+
               # Profiling (set ENABLE_PROFILING=1 to enable)
               - name: ENABLE_PROFILING
                 value: "1"
@@ -349,7 +441,7 @@ spec:
                 value: "10"   # Profile for 10 seconds
               # cuda profiling options
               - name: PROFILER_MAX_ITERS
-                value: "4"   # Profile N iterations
+                value: "3"   # Profile N iterations
               - name: VLLM_NVTX_SCOPES_FOR_PROFILING
                 value: "0"    # Disabled - requires nvtx module
 
@@ -366,6 +458,22 @@ spec:
               - containerPort: 8203
                 name: vllm-rank3
                 protocol: TCP
+
+
+
+              - containerPort: 8204
+                name: vllm-rank4
+                protocol: TCP
+              - containerPort: 8205
+                name: vllm-rank5
+                protocol: TCP
+              - containerPort: 8206
+                name: vllm-rank6
+                protocol: TCP
+              - containerPort: 8207
+                name: vllm-rank7
+                protocol: TCP
+
             readinessProbe:
               httpGet:
                 path: /health

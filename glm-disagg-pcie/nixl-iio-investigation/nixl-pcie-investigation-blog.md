@@ -9,8 +9,10 @@
 5. [Narrowing the Gap: Message Size Matters](#narrowing-the-gap-message-size-matters)
 6. [Investigating the Prefill-Side PCIe Path](#investigating-the-prefill-side-pcie-path)
 7. [IIO Counter Results](#iio-counter-results)
-8. [Root Cause: Scattered GPU Memory and the BDP Limit](#root-cause-scattered-gpu-memory-and-the-bdp-limit)
-9. [Conclusion and Implications](#conclusion-and-implications)
+8. [Two Hypotheses for the Low Insertion Rate](#two-hypotheses-for-the-low-insertion-rate)
+9. [Validation: Custom RDMA Scatter Benchmark](#validation-custom-rdma-scatter-benchmark)
+10. [Investigating the NIXL/UCX Software Stack](#investigating-the-nixlucx-software-stack)
+11. [Conclusion and Next Steps](#conclusion-and-next-steps)
 
 ---
 
@@ -29,10 +31,13 @@ what `ib_read_bw` achieves for the same message size with contiguous GPU memory.
 Network-side counters showed no congestion, no packet drops, no PFC pauses.
 The bottleneck was entirely inside the host.
 
-This post traces that bottleneck from the PCIe topology through Intel IIO performance
-counters to its root cause: the GPU's internal memory system responding slowly to
-scattered DMA read requests, exhausting the NIC's PCIe tag pool and throttling
-throughput via the bandwidth-delay product.
+This post traces that bottleneck from PCIe topology through Intel IIO performance
+counters to its root cause. Our initial hypothesis -- that scattered GPU memory
+access was inflating DMA read latency -- was debunked by a custom RDMA benchmark
+that achieved **~137 Gbps** with the same scattered access pattern. The real
+bottleneck is in the **NIXL/UCX software stack**, which does not load the NIC's
+RDMA READ pipeline with enough outstanding requests to fill the bandwidth-delay
+product across the cross-IIO mesh path.
 
 ---
 
@@ -235,8 +240,10 @@ non-posted completion path. But the **5.5x gap** between `ib_read_bw` at 16 KB
 - The same cross-IIO topology
 - The same 16 KB transfer granularity
 
-The only difference: `ib_read_bw` reads from a single contiguous GPU buffer.
-NIXL reads 40,960 scattered 16 KB blocks from random locations in GPU memory.
+The apparent differences: `ib_read_bw` reads from a single contiguous GPU buffer
+and uses the low-level `libibverbs` API directly. NIXL reads 40,960 scattered
+16 KB blocks from random locations in GPU memory, going through the UCX
+software stack. Which of these differences explains the 5.5x gap?
 
 ---
 
@@ -365,10 +372,11 @@ the same per-entry rate.
 **3. The COMP_BUF insertion rate is 5x lower for NIXL.**
 
 NIXL produces CplD data at only 58 M entries/s versus 287 M/s for `ib_read_bw`
-at 16 KB. Since the per-entry processing time is the same, fewer entries are
-arriving at the GPU's IIO stack per unit time. The GPU is responding to MRd
-requests at 1/5th the rate -- not because the IIO stack is slower, but because
-the GPU's internal memory system takes longer to service each request.
+at 16 KB. Since the per-entry processing time is the same, fewer CplD entries
+are arriving at the GPU's IIO stack per unit time. Either the NIC is issuing
+fewer MRd requests (software pipeline underloaded), or the GPU is responding
+more slowly to each request (scattered memory access). The next section
+investigates which explanation is correct.
 
 **4. ISL scaling is linear at constant throughput.**
 
@@ -380,30 +388,57 @@ simply doubles the total time.
 
 ---
 
-## Root Cause: Scattered GPU Memory and the BDP Limit
+## Two Hypotheses for the Low Insertion Rate
 
-### The Two-Segment Model
+The COMP_BUF insertion rate for NIXL is 5x lower than `ib_read_bw` at 16 KB
+(58 M/s vs 287 M/s), while the per-entry residence time is identical. This
+means fewer CplD entries arrive at the GPU's IIO stack per unit time. There
+are two possible explanations:
 
-The end-to-end PCIe round-trip for each MRd/CplD pair can be decomposed into
-two segments:
+**Hypothesis 1: GPU memory scatter inflates DMA read latency.** NIXL's 40,960
+scattered 16 KB reads hit random GPU virtual addresses, causing IOTLB thrashing
+and random HBM row activations. Each MRd takes longer to complete, the NIC's
+PCIe tag pool fills up, and the NIC cannot issue new MRd TLPs until tags are
+freed. The system reaches a steady state where the MRd issue rate equals the
+GPU's slow CplD response rate.
+
+**Hypothesis 2: Software does not load the read pipeline.** The NIXL/UCX
+software stack does not issue enough concurrent RDMA READ operations to keep
+the NIC's pipeline full. The NIC's tag pool never fills up -- it simply has
+fewer MRd TLPs in flight because the software hasn't posted them. The GPU
+responds fine; it just receives fewer requests.
+
+Both hypotheses produce the same observable: fewer CplD entries per second in
+the COMP_BUF, with the same per-entry residence time. The IIO counters alone
+cannot distinguish between them.
+
+### The BDP Framework
+
+Regardless of which hypothesis is correct, the throughput is governed by the
+bandwidth-delay product:
+
+```
+Throughput = Data_in_flight / Round_trip_time
+```
+
+The end-to-end PCIe round-trip for each MRd/CplD pair decomposes into two
+segments:
 
 ```
 NIC ─── IIO(NIC) ═══ mesh ═══ IIO(GPU) ─── GPU MMU ─── HBM
         │                      │               │          │
         └────  Segment 1 ──────┘               └── Seg 2 ─┘
           (PCIe + mesh crossing)           (GPU memory access)
-              SAME for both                    DIFFERENT
-          contiguous & scattered           contiguous vs scattered
 ```
 
-**Segment 1 (NIC IIO → mesh → GPU IIO):** This is the PCIe and mesh crossing
-latency. We measured it directly via the COMP_BUF residence time: ~2,400 uncore
-cycles (~1.0 us at 2.4 GHz), constant across all workloads. The host IOMMU is in passthrough mode
-(`iommu=pt`), so host-side address translation is not a factor. P2P traffic
-takes a direct IIO-to-IIO mesh path that bypasses the CHA coherency engine
-(verified by CHA TOR counters showing 10,000x less traffic than IIO).
+**Segment 1 (NIC IIO → mesh → GPU IIO):** The PCIe and mesh crossing
+latency, measured directly via the COMP_BUF residence time: ~2,400 uncore
+cycles (~1.0 us at 2.4 GHz), constant across all workloads. The host IOMMU is
+in passthrough mode (`iommu=pt`), and P2P traffic takes a direct IIO-to-IIO
+mesh path that bypasses the CHA coherency engine (verified by CHA TOR counters
+showing 10,000x less traffic than IIO).
 
-We also measured the mesh crossing overhead independently using
+We measured the mesh crossing overhead independently using
 `ib_read_bw --outstanding` sweeps at 16 KB with VF + GPU memory:
 
 | Config | --outstanding=1 BW (Gbps) | RTT per 16 KB read (us) |
@@ -412,102 +447,177 @@ We also measured the mesh crossing overhead independently using
 | Same-IIO | 13.50 | 9.71 |
 | **Difference (mesh crossing)** | | **~1.0 us** |
 
-The ~1.0 us mesh crossing overhead is consistent with the COMP_BUF residence
-time of ~1.03 us (2,479 uncore cycles at ~2.4 GHz). At higher outstanding
-counts, throughput scales linearly
-until saturating at 148 Gbps (cross-IIO) and 197 Gbps (same-IIO) at
-`--outstanding=16`.
+At higher outstanding counts, throughput scales linearly until saturating at
+148 Gbps (cross-IIO) and 197 Gbps (same-IIO) at `--outstanding=16`.
 
-**Segment 2 (GPU IIO → GPU internal MMU → HBM → back):** This is the GPU's
-internal memory access time. It is invisible to CPU-side IIO counters, but its
-effect is directly observable: the reduced COMP_BUF insertion rate for NIXL
-means fewer CplD entries arrive from the GPU per unit time.
+**Segment 2 (GPU IIO → GPU internal → HBM → back):** The GPU's internal
+memory access time. Invisible to CPU-side IIO counters, but its effect is
+observable through the insertion rate. Under Hypothesis 1, scattered access
+inflates Segment 2 latency. Under Hypothesis 2, Segment 2 latency is normal
+but fewer MRd requests arrive to begin with.
 
-- **Contiguous access** (`ib_read_bw`): sequential addresses, warm GPU TLB,
-  HBM row buffer hits → fast per-MRd response
-- **Scattered access** (NIXL): 40,960 random GPU virtual addresses, GPU IOTLB
-  thrashing, random HBM row activations → slow per-MRd response
-
-### Tag Pool Exhaustion (Little's Law)
-
-The NIC has a finite pool of PCIe tags for tracking outstanding non-posted
-(MRd) requests. Each MRd TLP consumes one tag, which is held until the
-corresponding CplD returns. The throughput is governed by Little's Law:
-
-```
-Throughput = Tag_pool_size_bytes / RTT_per_MRd
-```
-
-The tag pool is fixed hardware. The `--outstanding` sweep confirms the NIC
-sustains up to 16 concurrent outstanding reads per QP. When Segment 2 latency
-increases -- as it does for scattered GPU memory access -- the total round-trip
-time per MRd increases proportionally. With a fixed concurrency window, the
-throughput drops by the same factor.
-
-### Quantifying the Inflation
-
-From `ib_read_bw --outstanding=1` at 16 KB (contiguous GPU memory):
-- Cross-IIO RTT: **10.71 us**
-
-For NIXL at the same 16 KB, with 5.5x lower throughput, the effective RTT
-must be ~5.5x higher:
-- Estimated NIXL RTT: **~59 us**
-
-Since Segment 1 is constant (~1 us for the mesh crossing), the difference
-is entirely in Segment 2:
-
-| Component | ib_read_bw (contiguous) | NIXL (scattered) | Ratio |
-|-----------|------------------------|-------------------|-------|
-| Segment 1 (mesh crossing) | ~1 us | ~1 us | 1x |
-| Segment 2 (GPU memory) | ~9.7 us | ~58 us | ~6x |
-| **Total RTT** | **10.7 us** | **~59 us** | **~5.5x** |
-
-The GPU's internal memory access latency inflates by ~6x when servicing
-scattered 16 KB reads versus sequential contiguous reads. This 6x
-Segment 2 inflation, combined with the fixed PCIe tag pool, produces the
-observed 5.5x throughput degradation.
-
-### The Steady-State Feedback Loop
-
-The system reaches a closed-loop equilibrium:
-
-```
-            tag freed
-           ◀─────────────────────────────────────────────────────┐
-           │                                                     │
-NIC issues ──▶ NIC IIO ──[MRd]──▶ Mesh ──[MRd]──▶ GPU IIO ──▶ GPU
-MRd (128B)    (tag consumed)                                     │
-                                                          GPU reads from
-                                                          scattered HBM
-                                                          (SLOW: ~58 us)
-                                                                 │
-NIC receives ◀── NIC IIO ◀──[CplD]── Mesh ◀──[CplD]── GPU IIO ◀─┘
-CplD, frees tag                        COMP_BUF: ~2.4 us
-                                       (constant, not the bottleneck)
-```
-
-1. The NIC initially issues MRd TLPs at full rate, filling its tag pool
-2. The GPU takes ~58 us to respond to each scattered read (vs ~10 us for contiguous)
-3. The NIC's tag pool fills up -- it cannot issue new MRd TLPs until tags are freed
-4. In steady state, the NIC's MRd issue rate equals the GPU's CplD response rate
-5. For each CplD the NIC gets back, it frees a tag and issues one new MRd
-6. Throughput is entirely governed by how fast the GPU can respond: `Throughput = tags × MRRS / RTT`
-
-The COMP_BUF residence time (~2,400 cycles) is a small, constant fraction of
-the total RTT. The mesh and IIO stacks are not the bottleneck. The GPU's
-internal memory system is.
+To distinguish the hypotheses, we need a controlled experiment that isolates
+the scatter pattern from the software stack.
 
 ---
 
-## Conclusion and Implications
+## Validation: Custom RDMA Scatter Benchmark
+
+We built a custom RDMA READ benchmark (`rdma_scatter_bench.cpp`) that uses raw
+`libibverbs` to replicate NIXL's exact scatter pattern while bypassing the
+NIXL/UCX software stack entirely. This isolates the hardware path: if
+scattered reads are inherently slow, the benchmark will show the same
+throughput degradation regardless of the software stack.
+
+### Benchmark Design
+
+The benchmark allocates a large GPU memory pool via `hipMalloc`, registers it
+as a single IB memory region, then issues 40,960 individual 16 KB RDMA READs
+to randomly scattered offsets within the pool -- matching NIXL's descriptor
+count and access pattern exactly.
+
+Key parameters (vs UCX defaults):
+
+| Parameter | `rdma_scatter_bench` | UCX default |
+|-----------|---------------------|-------------|
+| SQ depth | 8,192 | 256 |
+| CQ depth | 16,384 | 4,096 |
+| Signal every | 512 WQEs | 64 WQEs |
+| `max_rd_atomic` | 16 | 4 |
+| Posting style | Tight post/poll loop | Progress-based |
+
+The benchmark posts WQEs and polls completions in a tight interleaved loop,
+keeping the NIC's pipeline full at all times. This represents the maximum
+throughput achievable on the hardware path.
+
+### Results
+
+| Mode | Pool Size | Throughput (Gbps) |
+|------|-----------|-------------------|
+| Contiguous | 2 GB | 137-139 |
+| Scattered | 2 GB | 137-138 |
+| Contiguous | 6 GB | 139 |
+| Scattered | 6 GB | 137 |
+| `ib_read_bw` 16KB (reference) | N/A | 148 |
+| **NIXL KV transfer** | **~50+ GB** | **~27** |
+
+**Scattered and contiguous memory access give identical throughput at ~137 Gbps.**
+The MI300X GPU memory system handles random 16 KB DMA reads across a 6 GB
+pool just as efficiently as sequential contiguous ones. The scatter pattern is
+NOT the bottleneck.
+
+The ~137 Gbps is slightly below `ib_read_bw`'s 148 Gbps due to per-WQE posting
+overhead in our custom benchmark vs `ib_read_bw`'s highly optimized path. But
+it is **5x higher** than NIXL's 27 Gbps.
+
+### Hypothesis 1 Debunked
+
+This result definitively rules out Hypothesis 1 (GPU memory scatter). The
+scatter bench achieves near-line-rate throughput with the exact same scatter
+pattern that NIXL uses. The GPU responds just as quickly to scattered reads
+as to contiguous ones -- the COMP_BUF insertion rate difference we observed
+for NIXL is not caused by the GPU's memory system.
+
+**Therefore, Hypothesis 2 is correct: the NIXL/UCX software stack does not load
+the NIC's RDMA READ pipeline with enough outstanding requests to fill the
+bandwidth-delay product.** The NIC's tag pool has capacity, the GPU is fast
+enough, but the software doesn't issue MRd requests quickly enough to keep the
+pipeline full.
+
+---
+
+## Investigating the NIXL/UCX Software Stack
+
+With the hardware path ruled out, we turn to the software. NIXL uses UCX's
+UCP layer (via the `libplugin_UCX.so` plugin) for RDMA transfers. Each of the
+40,960 KV cache block descriptors becomes a `ucp_get_nb` call, which UCX
+translates into an IB verbs RDMA READ work request.
+
+### UCX RC Transport Defaults
+
+We examined the UCX v1.12 source code to identify the RC transport parameters
+that control the RDMA READ pipeline. The defaults are conservative:
+
+| Parameter | UCX Default | `rdma_scatter_bench` | Effect |
+|-----------|------------|---------------------|--------|
+| `UCX_RC_TX_QUEUE_LEN` | **256** | 8,192 | NIC Send Queue depth per QP |
+| `UCX_RC_TX_MAX_BATCH` | **16** | N/A (raw verbs) | WQEs batched per doorbell ring |
+| `UCX_RC_TX_CQ_MODERATION` | **64** | 512 | WQEs per signaled completion |
+| `UCX_RC_MAX_RD_ATOMIC` | **4** | 16 | Outstanding RDMA READs per QP |
+| `UCX_RC_TX_NUM_GET_BYTES` | **inf** | N/A | Max outstanding GET bytes (no limit) |
+| `UCX_RC_TX_CQ_LEN` | **4,096** | 16,384 | Completion Queue length |
+
+With the default SQ depth of 256, UCX must cycle through the Send Queue ~160
+times for 40,960 descriptors, ringing the NIC doorbell every 16 WQEs (2,560
+doorbell rings per transfer). Our scatter bench uses a 8,192-deep SQ and
+signals only every 512 WQEs.
+
+### UCX Tuning Experiments
+
+We systematically tuned each parameter on the live NIXL deployment (applied
+to both prefill and decode pods, verified via `kubectl exec -- env`):
+
+**Experiment 1: `UCX_RC_MAX_RD_ATOMIC=16`**
+
+Increases the per-QP outstanding RDMA READ limit from 4 to 16, matching
+our scatter bench. With 2 rails (`UCX_MAX_RMA_RAILS=2`), this allows
+32 concurrent RDMA READs across both NICs.
+
+Result: **~27 Gbps** -- no improvement.
+
+**Experiment 2: Full transport tuning**
+
+Applied all parameters simultaneously:
+- `UCX_RC_TX_QUEUE_LEN=4096` (16x increase in SQ depth)
+- `UCX_RC_TX_MAX_BATCH=64` (4x increase in doorbell batching)
+- `UCX_RC_TX_CQ_MODERATION=256` (4x reduction in CQ signaling)
+- `UCX_RC_MAX_RD_ATOMIC=16` (4x increase in outstanding READs)
+
+Result: **~27 Gbps** -- still no improvement.
+
+### What This Tells Us
+
+The fact that aggressively tuning UCX's IB transport parameters has zero effect
+on throughput means **the bottleneck is above the UCX transport layer**. The
+NIC's Send Queue was not the constraint -- UCX was already keeping it fed
+adequately with the defaults. The constraint is higher up in the stack: in
+how NIXL posts descriptors to UCX, how UCX's UCP layer processes them, and
+how vLLM's event loop drives `ucp_worker_progress()`.
+
+The key architectural differences between our scatter bench and NIXL/UCX:
+
+1. **Per-descriptor software overhead:** Each of 40,960 descriptors traverses
+   NIXL → UCX UCP → UCX UCT → IB verbs. Even at 300 ns per call, posting
+   all descriptors takes ~12 ms. During this posting loop, no completions are
+   processed, so the pipeline stalls.
+
+2. **Progress model:** UCX uses cooperative scheduling. `ucp_worker_progress()`
+   must be called to poll completions and advance the queue. If vLLM's event
+   loop interleaves progress calls with other tasks (scheduling, sampling,
+   memory management), the RDMA pipeline has idle gaps. Our scatter bench uses
+   a dedicated tight post/poll loop with no other work.
+
+3. **No interleaved post/poll:** Our bench posts WQEs and polls completions
+   in the same tight loop. NIXL likely posts all 40,960 descriptors first,
+   then drives progress. The first SQ-worth of WQEs may complete while
+   thousands more are still being posted in software.
+
+---
+
+## Conclusion and Next Steps
 
 ### What We Found
 
 The 5.5x throughput gap between `ib_read_bw` (148 Gbps) and NIXL KV transfer
-(27 Gbps) at 16 KB message size is caused entirely by the **GPU memory access
-pattern**. NIXL's 40,960 scattered 16 KB descriptors force the GPU to service
-random HBM accesses with poor TLB and row buffer locality, inflating the
-per-request response time by ~6x compared to contiguous access.
+(27 Gbps) at 16 KB message size is **not caused by the GPU memory access
+pattern**. A custom RDMA benchmark issuing the same 40,960 scattered 16 KB
+reads achieves ~137 Gbps -- nearly matching `ib_read_bw`.
+
+The bottleneck is in the **NIXL/UCX software stack**, which does not keep the
+NIC's RDMA READ pipeline sufficiently loaded. Despite tuning UCX's RC transport
+parameters (Send Queue depth, doorbell batching, CQ moderation, `max_rd_atomic`),
+NIXL throughput remains at ~27 Gbps. The constraint is above the transport
+layer, in how descriptors are posted and how progress is driven.
 
 ### What We Ruled Out
 
@@ -516,50 +626,39 @@ per-request response time by ~6x compared to contiguous access.
 | IIO completion buffer saturation | Buffer is less occupied for NIXL than for `ib_read_bw` |
 | CPU mesh congestion | Per-entry residence time is identical across all workloads |
 | CHA coherency overhead | P2P traffic bypasses CHA entirely (10,000x less CHA traffic) |
-| VF MRRS limitation (128B) | `ib_read_bw` with VF (MRRS=128B) + GPU at 16KB achieves 148 Gbps, identical to PF (MRRS=4096B) results. VF MRRS cannot be changed: `setpci` writes are silently dropped even from the host -- ConnectX-7 firmware controls VF DevCtl. |
+| **Scattered GPU memory access** | **Custom scatter bench achieves ~137 Gbps with identical scatter pattern** |
+| VF MRRS limitation (128B) | `ib_read_bw` with VF (MRRS=128B) + GPU at 16KB achieves 148 Gbps, identical to PF (MRRS=4096B). VF MRRS locked by firmware. |
+| UCX RC transport defaults | Tuning TX_QUEUE_LEN, TX_MAX_BATCH, TX_CQ_MODERATION, MAX_RD_ATOMIC has no effect |
 | Network congestion | Zero PFC pauses, no drops on decode-side NIC counters |
 | NIC fan-out contention | Only 2 GPUs active, same topology as `ib_read_bw` |
 
 ### Key Takeaway
 
-**Synthetic benchmarks like `ib_read_bw` do not reflect real application
-transfer performance.** `ib_read_bw` reads from a single contiguous GPU buffer,
-which is the best case for GPU DMA. Real workloads like NIXL scatter KV cache
-blocks across GPU memory, and the resulting GPU memory access latency dominates
-PCIe throughput via the bandwidth-delay product. The 148 Gbps that `ib_read_bw`
-reports at 16 KB is unattainable in practice for scattered transfers.
+**The hardware path is not the bottleneck.** The NIC, GPU memory system, IIO
+stacks, and CPU mesh can all support ~137 Gbps of scattered 16 KB RDMA READs
+in the cross-IIO configuration. The 5.5x gap is entirely due to the NIXL/UCX
+software stack not loading the pipeline with enough outstanding read requests
+to fill the bandwidth-delay product.
 
-### Potential Mitigations
+### Areas for Further Investigation
 
-| Mitigation | Expected Effect |
-|------------|----------------|
-| **Contiguous KV allocation** | Reduce scatter; approach `ib_read_bw` contiguous performance |
-| **Larger vLLM block size** | Fewer, larger descriptors; better GPU memory locality |
-| **Descriptor coalescing** | Merge adjacent blocks into larger RDMA READs |
-| **Increase VF MRRS** | Unlikely to help: PF (MRRS=4096B) matches VF (128B) for contiguous access; VF MRRS locked by firmware |
-| **Same-IIO GPU-NIC placement** | Eliminate mesh crossing entirely (355 Gbps observed) |
-| **Topology-aware K8s scheduling** | Ensure GPU-NIC co-location when assigning SR-IOV VFs |
+| Area | Rationale |
+|------|-----------|
+| **NIXL descriptor posting pattern** | How does NIXL post 40,960 descriptors to UCX? Burst or interleaved with progress? Profiling the posting loop timing would reveal pipeline stalls. |
+| **UCX progress frequency** | How often does vLLM call `ucp_worker_progress()` during a transfer? Infrequent progress calls would create idle gaps in the RDMA pipeline. |
+| **`UCX_RC_TX_POLL_ALWAYS=y`** | Forces UCX to poll TX completions on every progress call (default skips TX if RX found). May improve pipeline throughput. |
+| **Descriptor coalescing** | Sorting blocks by GPU address and merging adjacent 16 KB blocks into larger READs would reduce descriptor count (e.g., 4 adjacent blocks → one 64 KB READ). |
+| **Same-IIO GPU-NIC placement** | Eliminates the mesh crossing entirely (355 Gbps observed), making the BDP constraint irrelevant. |
+| **Topology-aware K8s scheduling** | Ensure GPU-NIC co-location when assigning SR-IOV VFs. |
 
 ### Open Questions
 
-- **VF MRRS is locked at 128B** and cannot be changed: `setpci` writes to the
-  VF DevCtl register are silently dropped both from within the pod and from
-  the host -- the ConnectX-7 firmware controls VF config space. Changing it
-  would require a firmware configuration change or kernel driver patch (mlx5
-  `pci_set_readrq`). Note: `ib_read_bw` with PF NICs (MRRS=4096B) achieves
-  the same throughput as VF NICs (MRRS=128B) for contiguous GPU memory,
-  so MRRS is unlikely to be the bottleneck for scattered access either.
-  The GPU memory access latency dominates regardless of MRRS.
 - The IIO programmable event clock is the dynamic uncore/mesh frequency (~2.4 GHz
   under load on this SKU), not the `ioclk` free-running counter (~45 MHz reference).
   How does uncore frequency scaling affect IIO counter accuracy in bursty workloads?
-- Is there a way to increase the NIC-side PCIe tag pool or otherwise increase
-  the concurrency window for outstanding DMA reads? Increasing MRRS is one
-  approach: larger read requests mean more bytes in flight per tag, effectively
-  increasing the bandwidth-delay product for a fixed tag count. However, as
-  noted above, VF MRRS is locked by firmware, and PF-level MRRS=4096B already
-  shows no improvement for contiguous access.
 - Would switching to RDMA WRITE (prefill pushes) help? The sender's NIC still
   performs DMA reads from GPU memory, but the write-sender path achieves 69%
   higher throughput in `ib_write_bw` vs `ib_read_bw` at 16 KB (248 vs 148 Gbps)
   due to NIC pipelining advantages with pre-posted WQEs.
+- What is the breakdown of time within a single NIXL transfer? How much time is
+  spent posting descriptors vs waiting for completions vs stalled on progress?

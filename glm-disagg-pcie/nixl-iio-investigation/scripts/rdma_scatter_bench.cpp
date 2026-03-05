@@ -63,6 +63,8 @@ struct Config {
     int cq_depth = 16384;
     int signal_every = 512;
     int max_rd_atomic = 16;
+    const char *start_barrier = nullptr; // wait for this file before transfers
+    bool rerandomize = false; // regenerate random offsets for each transfer
 };
 
 struct QPInfo {
@@ -95,7 +97,9 @@ static Config parse_args(int argc, char **argv) {
                 "  --seed <s>          Random seed for scattered mode (default: 42)\n"
                 "  --sq-depth <d>      Send queue depth (default: 8192)\n"
                 "  --signal-every <n>  Signal completion every N WRs (default: 512)\n"
-                "  --max-rd-atomic <n> Max outstanding RDMA READs (default: 16)\n",
+                "  --max-rd-atomic <n> Max outstanding RDMA READs (default: 16)\n"
+                "  --start-barrier <f> Wait for file <f> to exist before transfers\n"
+                "  --rerandomize       Re-generate scattered offsets each transfer (cold start sim)\n",
                 argv[0]);
         exit(1);
     }
@@ -131,6 +135,10 @@ static Config parse_args(int argc, char **argv) {
             c.signal_every = atoi(argv[++i]);
         else if (strcmp(argv[i], "--max-rd-atomic") == 0 && i + 1 < argc)
             c.max_rd_atomic = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--start-barrier") == 0 && i + 1 < argc)
+            c.start_barrier = argv[++i];
+        else if (strcmp(argv[i], "--rerandomize") == 0)
+            c.rerandomize = true;
     }
 
     if (!c.is_server && !c.server_ip) {
@@ -429,6 +437,14 @@ int main(int argc, char **argv) {
     tcp_sync(tcp_fd);
     printf("\n");
 
+    // --- Wait for barrier if specified ---
+    if (cfg.start_barrier) {
+        printf("Waiting for barrier file: %s\n", cfg.start_barrier);
+        while (access(cfg.start_barrier, F_OK) != 0)
+            usleep(1000); // poll every 1ms
+        printf("Barrier released! Starting benchmark.\n");
+    }
+
     // --- Benchmark (client only) ---
     if (!cfg.is_server) {
         // Remote offsets: server's block layout (same seed → same offsets)
@@ -436,13 +452,23 @@ int main(int argc, char **argv) {
             generate_offsets(cfg.num_blocks, cfg.block_size, pool_size,
                              cfg.scattered, cfg.seed);
         // Local offsets: client's block layout (same mode)
-        auto &local_offsets = offsets;
+        auto local_offsets = offsets;
 
-        printf("Starting %d transfers of %d blocks (%s, %.1f MB each)...\n\n",
+        printf("Starting %d transfers of %d blocks (%s%s, %.1f MB each)...\n\n",
                cfg.transfers, cfg.num_blocks, mode_str,
+               cfg.rerandomize ? ", rerandomize" : "",
                data_size / (1024.0 * 1024.0));
 
         for (int t = 0; t < cfg.transfers; t++) {
+            if (cfg.rerandomize && cfg.scattered) {
+                unsigned new_seed = cfg.seed + t + 1;
+                local_offsets =
+                    generate_offsets(cfg.num_blocks, cfg.block_size, pool_size,
+                                     true, new_seed);
+                remote_offsets =
+                    generate_offsets(cfg.num_blocks, cfg.block_size, pool_size,
+                                     true, new_seed + 10000);
+            }
             auto t_start = std::chrono::high_resolution_clock::now();
 
             int posted = 0;

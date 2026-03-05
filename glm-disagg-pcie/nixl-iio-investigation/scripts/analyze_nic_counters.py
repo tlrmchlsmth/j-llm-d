@@ -172,26 +172,20 @@ def main():
     print("NIC Counter Analysis - Wire-Level KV Transfer Profiling")
     print("=" * 70)
 
-    # Decode side: RX counters (receiving RDMA READ CplD data)
-    for dev in ["mlx5_12", "mlx5_13"]:
-        f = results_dir / f"nic_decode_{dev}.tsv"
-        if f.exists():
-            analyze_file(f, f"Decode {dev} (RX - incoming KV data)", "rx")
+    # Auto-discover all nic_decode_*.tsv and nic_prefill_*.tsv files
+    decode_files = sorted(results_dir.glob("nic_decode_*.tsv"))
+    prefill_files = sorted(results_dir.glob("nic_prefill_*.tsv"))
 
-    # Prefill side: TX counters (sending RDMA READ CplD data)
-    for dev in ["mlx5_12", "mlx5_13"]:
-        f = results_dir / f"nic_prefill_{dev}.tsv"
-        if f.exists():
-            analyze_file(f, f"Prefill {dev} (TX - outgoing KV data)", "tx")
+    for f in decode_files:
+        dev = f.stem.replace("nic_decode_", "")
+        analyze_file(f, f"Decode {dev} (RX - incoming KV data)", "rx")
 
-    # Also check prefill RX (RDMA READ requests, should be small)
-    print(f"\n{'='*70}")
-    print("Prefill RX (RDMA READ requests - should be small)")
-    print("=" * 70)
-    for dev in ["mlx5_12", "mlx5_13"]:
-        f = results_dir / f"nic_prefill_{dev}.tsv"
-        if f.exists():
-            analyze_file(f, f"Prefill {dev} (RX - incoming MRd requests)", "rx")
+    for f in prefill_files:
+        dev = f.stem.replace("nic_prefill_", "")
+        analyze_file(f, f"Prefill {dev} (TX - outgoing KV data)", "tx")
+
+    if not decode_files and not prefill_files:
+        print("  No NIC counter files found in", results_dir)
 
 
 if __name__ == "__main__":

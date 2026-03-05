@@ -1,0 +1,173 @@
+
+==============================================
+Discovering model server pods in namespace: raj-network-debug
+==============================================
+  Detected:     glm-disagg
+  Decode pod:   ms-glm-disagg-llm-d-modelservice-decode-5d4648f5f7-w2blh
+  Decode log:   /home/rajjoshi/workspace/j-llm-d-blog/glm-disagg-pcie/results/nic_profile_nixl/decode_mc1.log
+  Prefill pod:  ms-glm-disagg-llm-d-modelservice-prefill-596b69d8fb-7sh6g
+  Prefill log:  /home/rajjoshi/workspace/j-llm-d-blog/glm-disagg-pcie/results/nic_profile_nixl/prefill_mc1.log
+  Metrics from: prefill pods  IPs: 10.244.2.169  (port: 8000)
+  NIXL from:    decode pods  IPs: 10.244.4.207  (port: 8200)
+
+Starting decode pod log capture to /home/rajjoshi/workspace/j-llm-d-blog/glm-disagg-pcie/results/nic_profile_nixl/decode_mc1.log ...
+Starting prefill pod log capture to /home/rajjoshi/workspace/j-llm-d-blog/glm-disagg-pcie/results/nic_profile_nixl/prefill_mc1.log ...
+
+==============================================
+Running Concurrency Sweep (timeout: 900s)
+  Target: glm-disagg | Max Concurrency: 1
+==============================================
+SWEEP_START
+CONFIG: target=glm-disagg model=RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic isl=4096 osl=256 gpu_count=16
+TARGET_DURATION: 60s  MIN_PROMPTS: 5
+CONCURRENCY_LEVELS: 1
+
+CALIBRATION: concurrency=1 num_prompts=20
+vllm bench serve --base-url $(just _url glm-disagg) --model $(just _model glm-disagg) --dataset-name random --random-input-len 4096 --random-output-len 256 --max-concurrency 1 --request-rate 4096 --seed $(date +%M%H%M%S) --num-prompts 20 --ignore-eos
+#!/usr/bin/env bash
+URL=$(just _url glm-disagg)
+RESP=$(curl -s "$URL/v1/models")
+MODEL=$(echo "$RESP" | jq -r '.data[0].id' 2>/dev/null)
+if [[ -z "$MODEL" || "$MODEL" == "null" ]]; then
+  echo "ERROR: Could not detect model from glm-disagg. Response: $RESP" >&2
+  exit 1
+fi
+echo "$MODEL"
+INFO 03-05 03:18:30 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 03-05 03:18:30 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 03-05 03:18:30 [interface.py:225] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 03-05 03:18:32 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f94ae883ce0>, seed=18031827, num_prompts=20, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, enable_multimodal_chat=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=256, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai', base_url='http://infra-glm-disagg-inference-gateway-istio.raj-network-debug.svc.cluster.local', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=1, model='RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic', input_len=None, output_len=None, tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=4096.0, burstiness=1.0, trust_remote_code=False, disable_tqdm=False, num_warmups=0, profile=False, save_result=False, save_detailed=False, append_result=False, metadata=None, result_dir=None, result_filename=None, ignore_eos=True, percentile_metrics=None, metric_percentiles='99', goodput=None, request_id_prefix='bench-fcb09fc7-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 03-05 03:18:34 [datasets.py:611] Sampling input_len from [4095, 4095] and output_len from [256, 256]
+WARNING: vllm bench serve no longer sets temperature==0 (greedy) in requests by default. The default will be determined on the server side and can be model/API specific. For the old behavior, include --temperature=0.
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: 4096.0
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+  0%|          | 0/20 [00:00<?, ?it/s]  5%|▌         | 1/20 [01:01<19:20, 61.09s/it] 10%|█         | 2/20 [01:06<08:30, 28.38s/it] 15%|█▌        | 3/20 [01:12<05:04, 17.92s/it] 20%|██        | 4/20 [01:17<03:28, 13.01s/it] 25%|██▌       | 5/20 [01:23<02:34, 10.29s/it] 30%|███       | 6/20 [01:28<02:01,  8.65s/it] 35%|███▌      | 7/20 [01:33<01:39,  7.62s/it] 40%|████      | 8/20 [01:39<01:23,  6.94s/it] 45%|████▌     | 9/20 [01:44<01:11,  6.48s/it] 50%|█████     | 10/20 [01:50<01:01,  6.18s/it] 55%|█████▌    | 11/20 [01:55<00:53,  5.97s/it] 60%|██████    | 12/20 [02:01<00:46,  5.82s/it] 65%|██████▌   | 13/20 [02:06<00:40,  5.73s/it] 70%|███████   | 14/20 [02:12<00:33,  5.66s/it] 75%|███████▌  | 15/20 [02:17<00:28,  5.61s/it] 80%|████████  | 16/20 [02:23<00:22,  5.58s/it] 85%|████████▌ | 17/20 [02:28<00:16,  5.56s/it] 90%|█████████ | 18/20 [02:34<00:11,  5.55s/it] 95%|█████████▌| 19/20 [02:39<00:05,  5.54s/it]100%|██████████| 20/20 [02:45<00:00,  5.54s/it]100%|██████████| 20/20 [02:45<00:00,  8.28s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     20        
+Failed requests:                         0         
+Maximum request concurrency:             1         
+Request rate configured (RPS):           4096.00   
+Benchmark duration (s):                  165.51    
+Total input tokens:                      81900     
+Total generated tokens:                  5120      
+Request throughput (req/s):              0.12      
+Output token throughput (tok/s):         30.94     
+Peak output token throughput (tok/s):    57.00     
+Peak concurrent requests:                2.00      
+Total token throughput (tok/s):          525.78    
+---------------Time to First Token----------------
+Mean TTFT (ms):                          3767.69   
+Median TTFT (ms):                        987.09    
+P99 TTFT (ms):                           46040.64  
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          17.68     
+Median TPOT (ms):                        17.66     
+P99 TPOT (ms):                           17.79     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           17.68     
+Median ITL (ms):                         17.68     
+P99 ITL (ms):                            21.04     
+==================================================
+COMPUTED_NUM_PROMPTS: 5 (throughput=525.78 tok/s, timeout=300s)
+
+==============================================
+Snapshotting Prometheus metrics (pre-benchmark)
+==============================================
+  10.244.2.169: queue(sum=0.000974, count=90) prefill(sum=65.672020, count=90)
+  NIXL (decode pods):
+  10.244.4.207: xfer(sum=147.622191, count=180) post(sum=0.572292, count=180) bytes(sum=120795955200, count=180) desc(sum=7372800, count=180)
+
+BENCH_RUN: concurrency=1 num_prompts=5 timeout=300s
+vllm bench serve --base-url $(just _url glm-disagg) --model $(just _model glm-disagg) --dataset-name random --random-input-len 4096 --random-output-len 256 --max-concurrency 1 --request-rate 4096 --seed $(date +%M%H%M%S) --num-prompts 5 --ignore-eos
+#!/usr/bin/env bash
+URL=$(just _url glm-disagg)
+RESP=$(curl -s "$URL/v1/models")
+MODEL=$(echo "$RESP" | jq -r '.data[0].id' 2>/dev/null)
+if [[ -z "$MODEL" || "$MODEL" == "null" ]]; then
+  echo "ERROR: Could not detect model from glm-disagg. Response: $RESP" >&2
+  exit 1
+fi
+echo "$MODEL"
+INFO 03-05 03:21:25 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 03-05 03:21:25 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 03-05 03:21:25 [interface.py:225] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 03-05 03:21:28 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f01b349bce0>, seed=21032122, num_prompts=5, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, enable_multimodal_chat=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=256, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai', base_url='http://infra-glm-disagg-inference-gateway-istio.raj-network-debug.svc.cluster.local', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=1, model='RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic', input_len=None, output_len=None, tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=4096.0, burstiness=1.0, trust_remote_code=False, disable_tqdm=False, num_warmups=0, profile=False, save_result=False, save_detailed=False, append_result=False, metadata=None, result_dir=None, result_filename=None, ignore_eos=True, percentile_metrics=None, metric_percentiles='99', goodput=None, request_id_prefix='bench-a366aae0-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 03-05 03:21:29 [datasets.py:611] Sampling input_len from [4095, 4095] and output_len from [256, 256]
+  0%|          | 0/5 [00:00<?, ?it/s]WARNING: vllm bench serve no longer sets temperature==0 (greedy) in requests by default. The default will be determined on the server side and can be model/API specific. For the old behavior, include --temperature=0.
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: 4096.0
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+ 20%|██        | 1/5 [00:05<00:21,  5.50s/it] 40%|████      | 2/5 [00:10<00:16,  5.49s/it] 60%|██████    | 3/5 [00:16<00:10,  5.49s/it] 80%|████████  | 4/5 [00:21<00:05,  5.49s/it]100%|██████████| 5/5 [00:27<00:00,  5.50s/it]100%|██████████| 5/5 [00:27<00:00,  5.50s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     5         
+Failed requests:                         0         
+Maximum request concurrency:             1         
+Request rate configured (RPS):           4096.00   
+Benchmark duration (s):                  27.48     
+Total input tokens:                      20475     
+Total generated tokens:                  1280      
+Request throughput (req/s):              0.18      
+Output token throughput (tok/s):         46.58     
+Peak output token throughput (tok/s):    57.00     
+Peak concurrent requests:                2.00      
+Total token throughput (tok/s):          791.67    
+---------------Time to First Token----------------
+Mean TTFT (ms):                          988.98    
+Median TTFT (ms):                        987.73    
+P99 TTFT (ms):                           995.70    
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          17.67     
+Median TPOT (ms):                        17.67     
+P99 TPOT (ms):                           17.70     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           17.67     
+Median ITL (ms):                         17.68     
+P99 ITL (ms):                            20.96     
+==================================================
+BENCH_RUN_END: concurrency=1
+
+==============================================
+Sweep Completed (exit 0)
+==============================================
+SWEEP_END
+
+==============================================
+Snapshotting Prometheus metrics (post-benchmark)
+==============================================
+  10.244.2.169: queue(sum=0.001023, count=95) prefill(sum=69.304737, count=95)
+  NIXL (decode pods):
+  10.244.4.207: xfer(sum=149.655982, count=190) post(sum=0.598693, count=190) bytes(sum=127506841600, count=190) desc(sum=7782400, count=190)
+
+==============================================
+Prometheus Metrics Summary (concurrency=1)
+==============================================
+Prefill Pod Metrics:
+  Pod 10.244.2.169:
+    request_queue_time:   avg = 0.000010 s  (count=5)
+    request_prefill_time: avg = 0.726543 s  (count=5)
+  System total (1 prefill pods):
+    request_queue_time:   avg = 0.000010 s  (count=5)
+    request_prefill_time: avg = 0.726543 s  (count=5)
+
+NIXL KV Transfer Metrics (decode pods):
+  Decode 10.244.4.207:
+    total_transfers:    10
+    avg_xfer_time:      203.379 ms
+    avg_post_time:      2.640 ms
+    avg_mb_per_xfer:    671.1 MB
+    avg_descriptors:    40960
+
+Stopping log captures...
+Decode log:  /home/rajjoshi/workspace/j-llm-d-blog/glm-disagg-pcie/results/nic_profile_nixl/decode_mc1.log (30 lines, 12K)
+Prefill log: /home/rajjoshi/workspace/j-llm-d-blog/glm-disagg-pcie/results/nic_profile_nixl/prefill_mc1.log (41 lines, 12K)

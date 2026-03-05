@@ -12,7 +12,8 @@
 8. [Two Hypotheses for the Low Insertion Rate](#two-hypotheses-for-the-low-insertion-rate)
 9. [Validation: Custom RDMA Scatter Benchmark](#validation-custom-rdma-scatter-benchmark)
 10. [Investigating the NIXL/UCX Software Stack](#investigating-the-nixlucx-software-stack)
-11. [Conclusion and Next Steps](#conclusion-and-next-steps)
+11. [Wire-Level NIC Counter Profiling](#wire-level-nic-counter-profiling)
+12. [Conclusion and Next Steps](#conclusion-and-next-steps)
 
 ---
 
@@ -640,6 +641,151 @@ constrained by the 1-pending-per-EP-per-call arbiter limit.
 
 ---
 
+## Wire-Level NIC Counter Profiling
+
+To move beyond IIO-level inference and directly measure the NIC's behavior, we
+built a high-fidelity NIC counter poller (`poll_nic_counters.cpp`) that reads
+InfiniBand `port_xmit_data` (TX) and `port_rcv_data` (RX) counters via sysfs
+at maximum frequency (no sleep between reads, ~5 μs per sample). This captures
+the time-series throughput profile of each VF NIC inside the decode pod during
+NIXL KV transfers.
+
+### Methodology
+
+The poller runs inside the decode pod (where the VF counters reflect per-VF
+traffic), capturing timestamped TX and RX byte counts for both NICs (mlx5_12,
+mlx5_13) simultaneously. We run a short e2e benchmark (50 prompts, MC=1) and
+collect traces spanning the full benchmark duration.
+
+For the decode side of an RDMA READ:
+- **TX** = outgoing RDMA READ request packets (MRd). These are small packets
+  (~146 bytes on the wire, consisting of BTH + RETH headers).
+- **RX** = incoming completion data (CplD). Each 16 KB KV block arrives as
+  a stream of RX bytes.
+
+### NIXL Throughput Profile
+
+The NIC counter traces reveal a striking pattern: NIXL's throughput per NIC
+is **flat at ~27 Gbps** across every transfer burst, with no visible ramp-up,
+stalls, or inter-transfer gaps.
+
+| NIC | TX Rate (Gbps) | RX Rate (Gbps) | WR Rate (WRs/sec) | TX per WR (bytes) |
+|-----|---------------|----------------|-------------------|--------------------|
+| mlx5_12 | 0.240 | 26.9 | 205,452 | 146 |
+| mlx5_13 | 0.239 | 26.8 | 204,698 | 146 |
+
+Both NICs show identical behavior across all ~25 transfer bursts, with
+WR rates stable to within 1%.
+
+### WR Rate Derivation
+
+The Work Request (WR) posting rate is derived from the TX byte counter:
+
+1. **Total TX bytes per burst**: measured directly from `port_xmit_data` delta
+2. **Total blocks per burst**: `RX_bytes / 16,384` (each 16 KB block = one RDMA READ)
+3. **TX bytes per WR**: `TX_bytes / total_blocks` = ~146 bytes (consistent with
+   RDMA READ request packet: 12B BTH + 28B RETH + headers + padding)
+4. **WR rate**: `total_blocks / burst_duration`
+
+Cross-check: `205,452 WRs/sec × 16,384 bytes/WR × 8 bits/byte = 26.9 Gbps`,
+which matches the RX rate exactly. The NIC is receiving data at exactly the
+rate predicted by its outgoing request rate.
+
+### The Constant Rate Confirms a Software Bottleneck
+
+The flat throughput profile is the key evidence. If the NIC were starved
+by GPU memory latency (Hypothesis 1), we would expect variable throughput
+with stalls or a ramp-up/ramp-down pattern as the NIC's tag pool fills and
+drains. Instead, the NIC receives a perfectly steady stream of work at
+~205K WRs/sec -- the rate at which UCX's progress loop drains the pending
+queue through the `per_group=1` arbiter.
+
+### Comparison with rdma_scatter_bench
+
+To calibrate what the hardware is capable of, we ran `rdma_scatter_bench`
+in a multi-instance configuration that faithfully reproduces NIXL's TP=2,
+rails=2 topology: 4 concurrent instances (2 GPUs × 2 NICs on decode, each
+reading from the corresponding GPU on prefill), with barrier synchronization
+to ensure simultaneous start.
+
+**Multi-instance scatter_bench (TP=2, rails=2 topology):**
+
+| Instance | Per-Instance Gbps | Notes |
+|----------|------------------|-------|
+| GPU0/mlx5_3 | 114-125 | First transfer slow (~9.7 Gbps, ATC cold) |
+| GPU0/mlx5_4 | 114-125 | Warm transfers: 114-125 Gbps |
+| GPU1/mlx5_3 | 114-125 | Identical pattern on second GPU |
+| GPU1/mlx5_4 | 114-125 | |
+
+NIC-level aggregates (from counter traces, 2 QPs per NIC):
+
+| NIC | Cold 1st Transfer | Warm Steady State |
+|-----|--------------------|--------------------|
+| mlx5_3 | ~19.5 Gbps | 230-253 Gbps |
+| mlx5_4 | ~22 Gbps | 230-253 Gbps |
+
+The "cold" first transfer (~19.5 Gbps aggregate) reflects Address Translation
+Cache (ATC) warmup on the very first RDMA access after `ibv_reg_mr`. Once
+the ATC is populated, subsequent transfers sustain 230-253 Gbps aggregate per
+NIC -- nearly saturating PCIe Gen5 x16 write bandwidth.
+
+### Ruling Out Cold Start: The --rerandomize Experiment
+
+A natural concern: each NIXL KV transfer involves a new vLLM request's KV
+blocks at different GPU memory addresses. Could NIXL's ~27 Gbps reflect a
+per-transfer cold-start penalty similar to scatter_bench's slow first transfer?
+
+We added a `--rerandomize` option to `rdma_scatter_bench` that regenerates
+completely new random offsets (different seed) for both local and remote
+buffers on every transfer iteration. This simulates NIXL's behavior where
+every request accesses different KV block addresses.
+
+**Single-instance (1 GPU, 1 NIC):**
+
+| Mode | Transfer 1 | Transfers 2-10 |
+|------|-----------|---------------|
+| Warm (same offsets each time) | 137.7 Gbps | 138.8-139.0 Gbps |
+| **Rerandomize** (new offsets each time) | **138.0 Gbps** | **137.5-140.0 Gbps** |
+
+**Multi-instance (4 concurrent, TP=2 rails=2 topology, rerandomize):**
+
+| Instance | Transfer 1 | Transfers 2-5 |
+|----------|-----------|---------------|
+| GPU0/mlx5_3 | 134.4 Gbps | 138.6-140.8 Gbps |
+| GPU0/mlx5_4 | 135.9 Gbps | 137.9-139.7 Gbps |
+| GPU1/mlx5_3 | 136.1 Gbps | 138.8-139.9 Gbps |
+| GPU1/mlx5_4 | 135.9 Gbps | 137.8-140.6 Gbps |
+
+NIC aggregate (from counter traces): ~135 Gbps per NIC, constant across all
+transfers.
+
+**There is no cold-start penalty from changing offsets.** The NIC's ATC caches
+page-level translations for the entire `ibv_reg_mr`-registered GPU memory
+pool. Accessing different random offsets within the registered region does not
+cause ATC misses -- only the very first access after MR registration triggers
+ATC warmup.
+
+Since NIXL's GPU memory is also pre-registered at vLLM startup, all KV
+transfers (including the first) benefit from a warm ATC. Yet NIXL achieves
+only 27 Gbps. The cold-start hypothesis is ruled out.
+
+### WR Rate Comparison Summary
+
+| Workload | WR Rate (WRs/sec) | Per-NIC RX (Gbps) | Ratio vs NIXL |
+|----------|-------------------|--------------------|---------------|
+| NIXL (all transfers) | 205K | 26.9 | 1.0x |
+| scatter_bench multi cold (1st transfer) | 74K | 9.2 | 0.4x |
+| scatter_bench multi warm (2nd+ transfers) | 1,056K | 132 | 5.1x |
+| scatter_bench multi rerandomize (all) | ~1,030K | ~135 | 5.0x |
+
+NIXL's WR rate is 2.8x higher than scatter_bench's truly cold first transfer
+(which suffers ATC warmup, not address randomization). But it is **5x lower**
+than scatter_bench's sustained rate with the same topology and scatter pattern.
+The hardware can clearly sustain 1M+ WRs/sec per QP; NIXL's software stack
+delivers only 205K.
+
+---
+
 ## Conclusion and Next Steps
 
 ### What We Found
@@ -647,10 +793,15 @@ constrained by the 1-pending-per-EP-per-call arbiter limit.
 The 5.5x throughput gap between `ib_read_bw` (148 Gbps) and NIXL KV transfer
 (27 Gbps) at 16 KB message size is **not caused by the GPU memory access
 pattern**. A custom RDMA benchmark issuing the same 40,960 scattered 16 KB
-reads achieves ~137 Gbps -- nearly matching `ib_read_bw`.
+reads achieves ~137 Gbps -- nearly matching `ib_read_bw` -- even under the
+full TP=2, rails=2 topology with 4 concurrent cross-IIO flows and randomized
+offsets on every transfer.
 
-The bottleneck is in the **NIXL/UCX software stack**, which does not keep the
-NIC's RDMA READ pipeline sufficiently loaded. Despite tuning UCX's RC transport
+The bottleneck is in the **NIXL/UCX software stack**, which delivers Work
+Requests at only **205K WRs/sec** per NIC versus the **1M+ WRs/sec** the
+hardware sustains in `rdma_scatter_bench`. High-fidelity NIC counter profiling
+confirmed a flat, constant throughput profile with no stalls or gaps -- the NIC
+is fed work at a steady but insufficient rate. Despite tuning UCX's RC transport
 parameters (Send Queue depth, doorbell batching, CQ moderation, `max_rd_atomic`),
 NIXL throughput remains at ~27 Gbps. The constraint is above the transport
 layer, in how descriptors are posted and how progress is driven.
@@ -667,6 +818,8 @@ layer, in how descriptors are posted and how progress is driven.
 | UCX RC transport defaults | Tuning TX_QUEUE_LEN, TX_MAX_BATCH, TX_CQ_MODERATION, MAX_RD_ATOMIC, TX_POLL_ALWAYS has no effect |
 | Network congestion | Zero PFC pauses, no drops on decode-side NIC counters |
 | NIC fan-out contention | Only 2 GPUs active, same topology as `ib_read_bw` |
+| Per-transfer cold start (new KV block addresses) | `--rerandomize` scatter bench shows no throughput drop with new random offsets each transfer. ATC covers entire registered MR. |
+| NIC stalls or variable rate | NIC counter profiling shows flat, constant 205K WRs/sec with no gaps. Bottleneck is upstream in software. |
 
 ### Key Takeaway
 

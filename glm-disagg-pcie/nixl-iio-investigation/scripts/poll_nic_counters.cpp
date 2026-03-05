@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
+#include <stdlib.h>
 
 #include <chrono>
 #include <iostream>
@@ -23,12 +24,11 @@ void sig_handler(int signum) {
     }
 }
 
-#define MAX_SAMPLES 4000000
+#define MAX_SAMPLES 20000000
 
 #define NO_CHANGE_STREAK_THRESHOLD 20
 
-// ~100us sleep between polls: 4M samples * 100us = ~400 seconds coverage
-#define POLL_INTERVAL_US 100
+int POLL_INTERVAL_US = 0;
 
 typedef struct nic_counter_sample
 {
@@ -122,9 +122,10 @@ void output_nic_counters(FILE* fout_fd) {
 
 int main(int argc, char* argv[]) {
 
-    if (argc != 3) {
-        std::cerr << "Usage: " << argv[0] << " <mlx_dev> <output_file>" << std::endl;
-        std::cerr << "Example: " << argv[0] << " mlx5_3 /tmp/nic_mlx5_3.tsv" << std::endl;
+    if (argc < 3 || argc > 4) {
+        std::cerr << "Usage: " << argv[0] << " <mlx_dev> <output_file> [poll_interval_us]" << std::endl;
+        std::cerr << "Example: " << argv[0] << " mlx5_3 /tmp/nic_mlx5_3.tsv       # no sleep (max fidelity)" << std::endl;
+        std::cerr << "         " << argv[0] << " mlx5_3 /tmp/nic_mlx5_3.tsv 100   # 100us between polls" << std::endl;
         return 1;
     }
 
@@ -133,13 +134,21 @@ int main(int argc, char* argv[]) {
 
     char* mlx_dev = argv[1];
     char* output_file = argv[2];
+    if (argc == 4) {
+        POLL_INTERVAL_US = atoi(argv[3]);
+    }
 
     const std::string tx_byte_counter_file = std::string("/sys/class/infiniband/") + mlx_dev + "/ports/1/counters/port_xmit_data";
     const std::string rx_byte_counter_file = std::string("/sys/class/infiniband/") + mlx_dev + "/ports/1/counters/port_rcv_data";
 
     printf("Polling %s (TX: %s, RX: %s)\n", mlx_dev, tx_byte_counter_file.c_str(), rx_byte_counter_file.c_str());
-    printf("MAX_SAMPLES=%d, POLL_INTERVAL=%dus, coverage=~%ds\n",
-           MAX_SAMPLES, POLL_INTERVAL_US, MAX_SAMPLES * POLL_INTERVAL_US / 1000000);
+    if (POLL_INTERVAL_US > 0) {
+        printf("MAX_SAMPLES=%d, POLL_INTERVAL=%dus, coverage=~%ds\n",
+               MAX_SAMPLES, POLL_INTERVAL_US, MAX_SAMPLES * POLL_INTERVAL_US / 1000000);
+    } else {
+        printf("MAX_SAMPLES=%d, POLL_INTERVAL=0 (max fidelity, ~%ds at ~5us/sample)\n",
+               MAX_SAMPLES, MAX_SAMPLES * 5 / 1000000);
+    }
 
     std::fill(nic_counter_samples.begin(), nic_counter_samples.end(), nic_counter_sample());
 
@@ -164,7 +173,7 @@ int main(int argc, char* argv[]) {
 
     for (; polled_count < MAX_SAMPLES; polled_count++) {
         get_nic_counters(&nic_counter_samples[polled_count], tx_fd, rx_fd);
-        usleep(POLL_INTERVAL_US);
+        if (POLL_INTERVAL_US > 0) usleep(POLL_INTERVAL_US);
     }
 
     printf("Buffer full (%d samples). Writing output.\n", polled_count);

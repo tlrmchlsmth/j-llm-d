@@ -108,81 +108,6 @@ spec:
 
 
 
-          - name: routing-proxy-rank4
-            image: ghcr.io/llm-d/llm-d-routing-sidecar:latest@sha256:e408208da659a8d5b33be94eaaff437c0af8b0ea920a87e023901d66ae62a9bc
-            imagePullPolicy: Always
-            args:
-              - --port=8004
-              - --vllm-port=8204
-              - --secure-proxy=false
-              - --connector=nixlv2
-            ports:
-              - containerPort: 8004
-                name: proxy-rank3
-                protocol: TCP
-            restartPolicy: Always
-            resources: {}
-            securityContext:
-              allowPrivilegeEscalation: false
-              runAsNonRoot: true
-
-          - name: routing-proxy-rank5
-            image: ghcr.io/llm-d/llm-d-routing-sidecar:latest@sha256:e408208da659a8d5b33be94eaaff437c0af8b0ea920a87e023901d66ae62a9bc
-            imagePullPolicy: Always
-            args:
-              - --port=8005
-              - --vllm-port=8205
-              - --secure-proxy=false
-              - --connector=nixlv2
-            ports:
-              - containerPort: 8005
-                name: proxy-rank5
-                protocol: TCP
-            restartPolicy: Always
-            resources: {}
-            securityContext:
-              allowPrivilegeEscalation: false
-              runAsNonRoot: true
-
-          - name: routing-proxy-rank6
-            image: ghcr.io/llm-d/llm-d-routing-sidecar:latest@sha256:e408208da659a8d5b33be94eaaff437c0af8b0ea920a87e023901d66ae62a9bc
-            imagePullPolicy: Always
-            args:
-              - --port=8006
-              - --vllm-port=8206
-              - --secure-proxy=false
-              - --connector=nixlv2
-            ports:
-              - containerPort: 8006
-                name: proxy-rank6
-                protocol: TCP
-            restartPolicy: Always
-            resources: {}
-            securityContext:
-              allowPrivilegeEscalation: false
-              runAsNonRoot: true
-
-
-          - name: routing-proxy-rank7
-            image: ghcr.io/llm-d/llm-d-routing-sidecar:latest@sha256:e408208da659a8d5b33be94eaaff437c0af8b0ea920a87e023901d66ae62a9bc
-            imagePullPolicy: Always
-            args:
-              - --port=8007
-              - --vllm-port=8207
-              - --secure-proxy=false
-              - --connector=nixlv2
-            ports:
-              - containerPort: 8007
-                name: proxy-rank3
-                protocol: TCP
-            restartPolicy: Always
-            resources: {}
-            securityContext:
-              allowPrivilegeEscalation: false
-              runAsNonRoot: true
-
-
-
         containers:
           - name: vllm
             image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
@@ -233,13 +158,8 @@ spec:
                 # Q_b proj PR
                 git cherry-pick --no-commit 24ae04cb7a
                 
-                # GEMM Overlap
-                git cherry-pick --no-commit 8a30cbc503
-                
-                # Supposed stream fixes
-                git cherry-pick --no-commit 84c235350e
-                git cherry-pick --no-commit 8a2fc6a23b
-                git cherry-pick --no-commit 9312409cf4
+                # GEMM2-combine two-stream overlap (single squashed commit)
+                git cherry-pick --no-commit 7cb5e86cba
 
                 # Yank ropequant from FlashInfer into vLLM tree
                 git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
@@ -249,13 +169,22 @@ spec:
                 git cherry-pick --no-commit 13b2949ac4
                 # Dual-stream: aux_stream() singleton for cudagraph compat
                 git cherry-pick --no-commit b16ecc1647
+                # BF16×BF16→FP8 CUTLASS absorption BMM
+                git cherry-pick --no-commit 2ed1e3b0e8
                 echo "=== JIT-compiling mla_rope_quant at $(date) ==="
                 python tools/jit_mla_rope_quant.py
                 sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py
                 sed -i 's/torch\.ops\._C\.mla_rope_quantize_fp8/mla_rope_quant_ext.mla_rope_quantize_fp8/g' vllm/_custom_ops.py
                 sed -i 's/torch\.ops\._C\.mla_fused_cache_/mla_rope_quant_ext.mla_fused_cache_/g' vllm/_custom_ops.py
                 export PYTHONPATH=/tmp/jit_build/mla_rope_quant:${PYTHONPATH:-}
-                echo "=== JIT build complete at $(date) ==="
+                echo "=== JIT rope_quant build complete at $(date) ==="
+
+                echo "=== JIT-compiling mla_absorption_bmm at $(date) ==="
+                python tools/jit_mla_absorption_bmm.py
+                sed -i '1s/^/import mla_absorption_bmm_ext\n/' vllm/_custom_ops.py
+                sed -i 's/torch\.ops\._C\.mla_absorption_bmm_bf16/mla_absorption_bmm_ext.mla_absorption_bmm_bf16/g' vllm/_custom_ops.py
+                export PYTHONPATH=/tmp/jit_build/mla_absorption_bmm:${PYTHONPATH:-}
+                echo "=== JIT absorption_bmm build complete at $(date) ==="
 
                 PROFILER_ARGS=""
                 NSYS_PREFIX=""
@@ -429,6 +358,9 @@ spec:
               - name: VLLM_DEEPEP_COMBINE_COMM_SMS
                 value: "32"
 
+              - name: VLLM_MLA_FUSED_ABSORPTION
+                value: "1"
+
               # Profiling (set ENABLE_PROFILING=1 to enable)
               - name: ENABLE_PROFILING
                 value: "1"
@@ -459,21 +391,6 @@ spec:
                 name: vllm-rank3
                 protocol: TCP
 
-
-
-              - containerPort: 8204
-                name: vllm-rank4
-                protocol: TCP
-              - containerPort: 8205
-                name: vllm-rank5
-                protocol: TCP
-              - containerPort: 8206
-                name: vllm-rank6
-                protocol: TCP
-              - containerPort: 8207
-                name: vllm-rank7
-                protocol: TCP
-
             readinessProbe:
               httpGet:
                 path: /health
@@ -500,5 +417,9 @@ spec:
               - name: jit-build-scripts
                 mountPath: /opt/vllm-source/tools/jit_mla_rope_quant.py
                 subPath: jit_mla_rope_quant.py
+                readOnly: true
+              - name: jit-build-scripts
+                mountPath: /opt/vllm-source/tools/jit_mla_absorption_bmm.py
+                subPath: jit_mla_absorption_bmm.py
                 readOnly: true
             workingDir: /code

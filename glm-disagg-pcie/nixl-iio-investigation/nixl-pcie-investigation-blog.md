@@ -14,7 +14,8 @@
 10. [Validation: Custom RDMA Scatter Benchmark](#validation-custom-rdma-scatter-benchmark)
 11. [Investigating the NIXL/UCX Software Stack](#investigating-the-nixlucx-software-stack)
 12. [Wire-Level NIC Counter Profiling](#wire-level-nic-counter-profiling)
-13. [Conclusion and Next Steps](#conclusion-and-next-steps)
+13. [Asymmetric IIO Experiment: Proving the Request-Side Bottleneck](#asymmetric-iio-experiment-proving-the-request-side-bottleneck)
+14. [Conclusion and Next Steps](#conclusion-and-next-steps)
 
 ---
 
@@ -922,6 +923,81 @@ delivers only 205K.
 
 ---
 
+## Asymmetric IIO Experiment: Proving the Request-Side Bottleneck
+
+All prior experiments used the same cross-IIO GPU-NIC pairs on **both** the
+decode and prefill pods (nixl-s6 / scenario 2r2: `mlx5_12,mlx5_13` on both
+sides). The NIC counter profiling showed a flat ~27 Gbps per NIC with a
+constant WR posting rate of ~208K WRs/sec -- pointing to a software-side
+bottleneck. But a key question remained: **is the low request rate caused by
+the decode-side cross-IIO path latency slowing down UCX's completion polling
+and WR reposting loop, or is it purely a software limitation independent of
+PCIe topology?**
+
+### Experiment Design (nixl-s7)
+
+To isolate the decode-side IIO topology's contribution, we created an
+**asymmetric** deployment:
+
+| Pod | NICs | IIO Relationship | UCX Rails |
+|-----|------|-----------------|-----------|
+| **Decode** | mlx5_10, mlx5_11 | **Same-IIO** (each NIC under its GPU's PCIe tree) | 2 |
+| **Prefill** | mlx5_12, mlx5_13 | **Cross-IIO** (NICs on different IIO stacks from GPUs) | 2 |
+
+The decode pod's NICs now have a low-latency path to their respective GPUs
+(no mesh crossing for completion writes), while the prefill pod retains the
+cross-IIO configuration (the NIC must read GPU data across the mesh). If the
+decode-side IIO latency was throttling the request rate, this change should
+dramatically improve throughput -- even though the prefill-side read path
+still crosses the mesh and represents the ultimate wireline ceiling (~270 Gbps).
+
+### Results
+
+**NIXL KV transfer throughput (from decode pod vLLM logs):**
+
+| Metric | nixl-s6 (both cross-IIO) | nixl-s7 (decode same-IIO) | Speedup |
+|--------|-------------------------|--------------------------|---------|
+| avg_xfer_time | 199.740 ms | 29.321 ms | 6.8x |
+| avg_post_time | 2.132 ms | 2.863 ms | -- |
+| effective_xfer_time | 197.608 ms | 26.458 ms | 7.5x |
+| **Per-rank RDMA throughput** | **27.2 Gbps** | **202.9 Gbps** | **7.5x** |
+
+*Per-rank RDMA throughput = (671.1 MB / effective_xfer_time) × 8.*
+
+**Decode NIC request rate and wire-level throughput (from high-fidelity NIC counters):**
+
+| Metric | nixl-s6 | nixl-s7 | Change |
+|--------|---------|---------|--------|
+| **mlx5_10 / mlx5_12 RX (Gbps)** | 28.3 | 189.5 | **6.7x** |
+| **mlx5_11 / mlx5_13 RX (Gbps)** | 28.4 | 185.2 | **6.5x** |
+| mlx5_10 / mlx5_12 WR rate | 208,539 | 1,436,484 | **6.9x** |
+| mlx5_11 / mlx5_13 WR rate | 208,585 | 1,404,503 | **6.7x** |
+| TX bytes per WR | 146 | 145 | identical |
+
+### Interpretation
+
+Moving the decode pod to same-IIO NICs increased the RDMA READ request rate
+from **~208K to ~1.42M WRs/sec per NIC** -- a **6.8x improvement**. The
+per-rank NIXL transfer throughput jumped from 27.2 Gbps to 202.9 Gbps.
+
+This confirms that the **decode-side PCIe topology was the dominant bottleneck**
+behind the low NIXL transfer speeds. When the decode NIC's completion write
+path to GPU memory crosses the CPU mesh (cross-IIO), the round-trip latency
+for each RDMA READ completion is high. Since UCX's progress loop must poll
+for completions and repost new WRs serially, this high per-completion latency
+directly throttles the WR injection rate. Moving to same-IIO eliminates the
+mesh crossing, drastically reducing completion latency and allowing UCX to
+sustain a much higher request rate.
+
+The prefill side remains cross-IIO in nixl-s7, meaning the NIC on the prefill
+node still reads GPU data across the mesh. Yet the system achieves ~190 Gbps
+per NIC -- close to the wireline ceiling measured by `ib_read_bw` for the
+cross-IIO read path (~252 Gbps). The remaining gap to the wireline ceiling
+is attributable to NIXL/UCX software overhead (descriptor posting, progress
+arbitration) as established in earlier sections.
+
+---
+
 ## Conclusion and Next Steps
 
 ### What We Found
@@ -941,6 +1017,14 @@ is fed work at a steady but insufficient rate. Despite tuning UCX's RC transport
 parameters (Send Queue depth, doorbell batching, CQ moderation, `max_rd_atomic`),
 NIXL throughput remains at ~27 Gbps. The constraint is above the transport
 layer, in how descriptors are posted and how progress is driven.
+
+The asymmetric IIO experiment (nixl-s7) provided the definitive confirmation:
+moving only the **decode pod** to same-IIO NICs (while keeping prefill cross-IIO)
+increased the decode NIC request rate from **208K to 1.42M WRs/sec** and NIXL
+transfer throughput from **27 Gbps to 203 Gbps per rank** -- a **7.5x speedup**.
+This proves that the decode-side cross-IIO completion latency was throttling
+UCX's WR reposting loop, and that reducing this latency is sufficient to
+recover most of the hardware's capability.
 
 ### What We Ruled Out
 

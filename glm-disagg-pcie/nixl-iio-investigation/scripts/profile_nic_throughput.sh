@@ -60,30 +60,48 @@ PREFILL_SSH=$(node_alias "$PREFILL_NODE")
 echo "  Decode SSH:  $DECODE_SSH"
 echo "  Prefill SSH: $PREFILL_SSH"
 
-# --- Auto-discover active NICs from UCX_NET_DEVICES ---
+# --- Auto-discover active NICs from UCX_NET_DEVICES (per pod) ---
 echo ""
 echo "Discovering active NICs from UCX_NET_DEVICES..."
 
-UCX_NET_DEVICES=$(kubectl exec -n "$NAMESPACE" "$DECODE_POD" -c vllm -- \
+parse_nics() {
+    local ucx_net_devices="$1"
+    local -n _out_array=$2
+    IFS=',' read -ra specs <<< "$ucx_net_devices"
+    _out_array=()
+    for spec in "${specs[@]}"; do
+        _out_array+=("${spec%%:*}")
+    done
+}
+
+DECODE_UCX_NET=$(kubectl exec -n "$NAMESPACE" "$DECODE_POD" -c vllm -- \
+    bash -c 'echo $UCX_NET_DEVICES' 2>/dev/null || echo "")
+PREFILL_UCX_NET=$(kubectl exec -n "$NAMESPACE" "$PREFILL_POD" -c vllm -- \
     bash -c 'echo $UCX_NET_DEVICES' 2>/dev/null || echo "")
 
-if [ -z "$UCX_NET_DEVICES" ]; then
+if [ -z "$DECODE_UCX_NET" ]; then
     echo "ERROR: UCX_NET_DEVICES not set on decode pod. Cannot determine NICs."
     exit 1
 fi
+if [ -z "$PREFILL_UCX_NET" ]; then
+    echo "ERROR: UCX_NET_DEVICES not set on prefill pod. Cannot determine NICs."
+    exit 1
+fi
 
-echo "  UCX_NET_DEVICES=$UCX_NET_DEVICES"
+parse_nics "$DECODE_UCX_NET" DECODE_NICS
+parse_nics "$PREFILL_UCX_NET" PREFILL_NICS
 
-# Parse NIC names: "mlx5_10:1,mlx5_12:1" -> array of "mlx5_10" "mlx5_12"
-IFS=',' read -ra NIC_SPECS <<< "$UCX_NET_DEVICES"
-POD_NICS=()
-for spec in "${NIC_SPECS[@]}"; do
-    nic_name="${spec%%:*}"
-    POD_NICS+=("$nic_name")
-done
+echo "  Decode  UCX_NET_DEVICES=$DECODE_UCX_NET  -> NICs: ${DECODE_NICS[*]}"
+echo "  Prefill UCX_NET_DEVICES=$PREFILL_UCX_NET -> NICs: ${PREFILL_NICS[*]}"
 
-NUM_NICS=${#POD_NICS[@]}
-echo "  Active NICs ($NUM_NICS): ${POD_NICS[*]}"
+get_nics_for_pod() {
+    local label="$1"
+    if [ "$label" = "decode" ]; then
+        echo "${DECODE_NICS[@]}"
+    else
+        echo "${PREFILL_NICS[@]}"
+    fi
+}
 
 # --- Deploy poller binary into both pods ---
 deploy_poller() {
@@ -122,12 +140,12 @@ start_pollers() {
         kubectl -n "$NAMESPACE" exec "$pod" -c vllm -- \
             bash -c 'pkill -f poll_nic_counters 2>/dev/null || true' 2>/dev/null || true
 
-        local idx=1
-        for nic in "${POD_NICS[@]}"; do
+        local nics
+        read -ra nics <<< "$(get_nics_for_pod "$pod_label")"
+        for nic in "${nics[@]}"; do
             kubectl -n "$NAMESPACE" exec "$pod" -c vllm -- \
                 bash -c "nohup /tmp/poll_nic_counters ${nic} /tmp/nic_${nic}.tsv 0 > /tmp/poll_${nic}.log 2>&1 &"
             echo "  Started poller: ${pod_label}/${nic}"
-            idx=$((idx + 1))
         done
     done
 
@@ -156,7 +174,9 @@ stop_pollers() {
         else
             pod="$PREFILL_POD"
         fi
-        for nic in "${POD_NICS[@]}"; do
+        local nics
+        read -ra nics <<< "$(get_nics_for_pod "$pod_label")"
+        for nic in "${nics[@]}"; do
             echo "  ${pod_label}/${nic} poller log:"
             kubectl -n "$NAMESPACE" exec "$pod" -c vllm -- cat /tmp/poll_${nic}.log 2>/dev/null || echo "    (no log)"
         done
@@ -172,7 +192,9 @@ collect_results() {
         else
             pod="$PREFILL_POD"
         fi
-        for nic in "${POD_NICS[@]}"; do
+        local nics
+        read -ra nics <<< "$(get_nics_for_pod "$pod_label")"
+        for nic in "${nics[@]}"; do
             local dst="$OUT_DIR/nic_${pod_label}_${nic}.tsv"
             kubectl -n "$NAMESPACE" cp "${pod}:/tmp/nic_${nic}.tsv" "$dst" -c vllm 2>/dev/null \
                 || echo "  WARNING: Failed to copy ${pod_label}/${nic} trace"

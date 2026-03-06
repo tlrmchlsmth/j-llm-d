@@ -943,15 +943,21 @@ factors** that could each limit request throughput:
    NIC, manage per-rail pending queues, and coordinate completions across
    two transport endpoints.
 
+The nixl-s6 baseline configuration for reference:
+
+| Pod | GPUs | NICs | GPU-NIC Pairing | UCX Rails |
+|-----|------|------|----------------|-----------|
+| **Both** | GPU 0 (11:00.0), GPU 1 (2f:00.0) | mlx5_12 (41:00.1), mlx5_13 (58:00.1) | **Cross-IIO**: GPU 0 (IIO 0)↔mlx5_12 (IIO 2), GPU 1 (IIO 1)↔mlx5_13 (IIO 3) | 2 |
+
 To separate these factors, we designed three targeted experiments: two that
 each remove exactly one factor, and a third that removes both.
 
 ### nixl-s7: Remove Cross-IIO, Keep Rails Splitting
 
-| Pod | NICs | IIO Relationship | UCX Rails |
-|-----|------|-----------------|-----------|
-| **Decode** | mlx5_10, mlx5_11 | **Same-IIO** (each NIC under its GPU's PCIe tree) | 2 |
-| **Prefill** | mlx5_12, mlx5_13 | **Cross-IIO** (NICs on different IIO stacks from GPUs) | 2 |
+| Pod | GPUs | NICs | GPU-NIC Pairing | UCX Rails |
+|-----|------|------|----------------|-----------|
+| **Decode** | GPU 0 (11:00.0), GPU 1 (2f:00.0) | mlx5_10 (0c:00.1), mlx5_11 (2a:00.1) | **Same-IIO**: GPU 0↔mlx5_10 share IIO stack 0, GPU 1↔mlx5_11 share IIO stack 1 | 2 |
+| **Prefill** | GPU 0 (11:00.0), GPU 1 (2f:00.0) | mlx5_12 (41:00.1), mlx5_13 (58:00.1) | **Cross-IIO**: GPU 0 (IIO 0)↔mlx5_12 (IIO 2), GPU 1 (IIO 1)↔mlx5_13 (IIO 3) | 2 |
 
 The decode pod's NICs have a low-latency path to their respective GPUs (no
 mesh crossing for completion writes). Rails=2 is retained, so each GPU rank
@@ -962,10 +968,10 @@ cross-IIO throughout.
 
 ### nixl-s8: Remove Rails Splitting, Keep Cross-IIO
 
-| Pod | NICs | IIO Relationship | UCX Rails |
-|-----|------|-----------------|-----------|
-| **Decode** | mlx5_11, mlx5_16 | **Cross-IIO** (each NIC on a neighboring IIO stack) | 1 |
-| **Prefill** | mlx5_11, mlx5_16 | **Cross-IIO** (same) | 1 |
+| Pod | GPUs | NICs | GPU-NIC Pairing | UCX Rails |
+|-----|------|------|----------------|-----------|
+| **Decode** | GPU 0 (11:00.0), GPU 7 (da:00.0) | mlx5_11 (2a:00.1), mlx5_16 (bd:00.1) | **Cross-IIO**: GPU 0 (IIO 0)↔mlx5_11 (IIO 1), GPU 7 (IIO 7)↔mlx5_16 (IIO 6) | 1 |
+| **Prefill** | GPU 0 (11:00.0), GPU 7 (da:00.0) | mlx5_11 (2a:00.1), mlx5_16 (bd:00.1) | **Cross-IIO**: same as decode | 1 |
 
 With `UCX_MAX_RMA_RAILS=1`, each GPU rank uses exactly one dedicated NIC --
 no rails splitting, no multi-rail arbitration. Both GPU-NIC pairs remain
@@ -982,10 +988,10 @@ rank based on this NUMA distance differentiation.
 
 ### nixl-s9: Remove Both Factors on Decode
 
-| Pod | NICs | IIO Relationship | UCX Rails |
-|-----|------|-----------------|-----------|
-| **Decode** | mlx5_10, mlx5_11 | **Same-IIO** (each NIC under its GPU's PCIe tree) | 1 |
-| **Prefill** | mlx5_11, mlx5_16 | **Cross-IIO** (each NIC on a neighboring IIO stack) | 1 |
+| Pod | GPUs | NICs | GPU-NIC Pairing | UCX Rails |
+|-----|------|------|----------------|-----------|
+| **Decode** | GPU 0 (11:00.0), GPU 1 (2f:00.0) | mlx5_10 (0c:00.1), mlx5_11 (2a:00.1) | **Same-IIO**: GPU 0↔mlx5_10 share IIO stack 0, GPU 1↔mlx5_11 share IIO stack 1 | 1 |
+| **Prefill** | GPU 0 (11:00.0), GPU 7 (da:00.0) | mlx5_11 (2a:00.1), mlx5_16 (bd:00.1) | **Cross-IIO**: GPU 0 (IIO 0)↔mlx5_11 (IIO 1), GPU 7 (IIO 7)↔mlx5_16 (IIO 6) | 1 |
 
 This scenario removes *both* confounding factors on the decode pod: same-IIO
 placement eliminates mesh crossing for completions, and rails=1 eliminates
@@ -1040,6 +1046,14 @@ arbiter entirely. The TX bytes per WR dropped from 146 to 73 bytes, indicating
 that the RDMA READ request packets are smaller without multi-rail coordination
 headers. Despite both GPU-NIC pairs being cross-IIO, the elimination of rails
 splitting overhead alone is sufficient to recover near-wireline throughput.
+
+The posting time also drops significantly: `avg_post_time` falls from ~2.1-2.9
+ms with rails=2 (nixl-s6, nixl-s7) to ~1.7-1.8 ms with rails=1 (nixl-s8,
+nixl-s9). With rails=2, each descriptor must pass through UCX's multi-rail
+arbiter to select the target NIC, manage per-rail pending queues, and
+coordinate two transport endpoints. With rails=1, this entire layer is
+bypassed -- the descriptor goes directly to a single transport endpoint,
+cutting posting overhead by ~35%.
 
 **Removing both factors (nixl-s9)** produced a **9.6x** throughput
 improvement (27 → 260 Gbps). The WR rate reached 1.9M per NIC, and per-NIC
@@ -1135,7 +1149,10 @@ is caused by two software/configuration factors on the decode pod that
 
 1. **UCX multi-rail splitting**: with `rails=2`, UCX's arbiter adds
    per-descriptor overhead for NIC selection and cross-rail coordination.
-   Removing this alone (nixl-s8) recovers 96% of the wireline ceiling.
+   Removing this alone (nixl-s8) recovers 96% of the wireline ceiling. The
+   posting overhead also drops measurably: `avg_post_time` falls from ~2.1-2.9
+   ms (rails=2) to ~1.7-1.8 ms (rails=1), a ~35% reduction, as descriptors
+   bypass the multi-rail arbiter and go directly to a single transport endpoint.
 
 2. **Cross-IIO completion latency**: the CPU mesh crossing increases
    per-completion round-trip time, slowing UCX's poll-and-repost loop.
@@ -1151,17 +1168,98 @@ The hardware -- NIC, GPU memory, IIO stacks, and CPU mesh -- can sustain
 ~251 Gbps of scattered 16 KB RDMA READs per NIC when the software pipeline
 is efficient (rails=1, dedicated same-IIO NIC per GPU).
 
+### Practical Recommendations
+
+Our experiments show that the ideal configuration is simple: each GPU rank
+gets a single dedicated NIC on its own IIO stack, with `UCX_MAX_RMA_RAILS=1`.
+But achieving this in practice requires coordination across three layers --
+Kubernetes scheduling, UCX transport selection, and vLLM process spawning --
+none of which are topology-aware today.
+
+#### The GPU-NIC Placement Gap in Kubernetes
+
+Today, Kubernetes allocates GPUs (via the NVIDIA device plugin) and NICs (via
+the SR-IOV device plugin) independently. When a pod requests a subset of the
+GPU-NIC pairs available on a node, there is no guarantee that the assigned
+devices share a PCIe Root Complex. In practice, cross-IIO pairings are the
+norm rather than the exception.
+
+[DRANET](https://dranet.dev/) addresses this gap by using Kubernetes Dynamic
+Resource Allocation (DRA) to jointly schedule GPUs and NICs with NUMA and
+PCIe topology awareness. DRANET launched in preview on GKE in October 2025.
+Until DRANET or similar solutions are widely deployed across cloud providers,
+pods that receive a subset of a node's GPU-NIC pairs should expect cross-IIO
+pairings and must compensate in software.
+
+#### Why UCX Cannot Fix This Alone
+
+UCX's topology module
+([`ucs_topo_get_distance_sysfs`](https://github.com/openucx/ucx/blob/master/src/ucs/sys/topo/base/topo.c))
+resolves both the GPU and NIC sysfs paths and walks the PCIe tree to find the
+lowest common ancestor. It then classifies the pair into one of three distance
+tiers:
+
+| Common Ancestor | Distance Classification | Estimated Bandwidth |
+|-----------------|------------------------|---------------------|
+| Same PCIe Root Complex (same IIO stack) | Close | `min(3500 MB/s, 19200 MB/s / path_hops)` |
+| System root, same NUMA | Medium | ~17 GB/s (flat) |
+| System root, different NUMA | Far | ~220 MB/s (flat) |
+
+This estimated bandwidth feeds into UCX's transport scoring function
+([`ucp_wireup_iface_bw_distance`](https://github.com/openucx/ucx/blob/master/src/ucp/wireup/wireup.c)),
+which ranks NICs for each endpoint connection. The NIC with the highest
+effective bandwidth score wins.
+
+The problem is in the "medium" tier: when a GPU and NIC are under different
+PCIe Root Complexes but on the same NUMA node (the cross-IIO case), **all
+such NICs receive the same flat ~17 GB/s score**. UCX cannot differentiate
+between a NIC on a neighboring IIO stack and one on a distant IIO stack
+within the same NUMA domain.
+
+Because vLLM spawns a separate process per GPU rank, each rank runs an
+independent UCX instance that picks the "best" NIC from its own perspective.
+When multiple NICs have identical scores, all instances may converge on the
+same NIC -- creating a shared bottleneck where multiple GPUs funnel traffic
+through a single 400G link while other NICs sit idle.
+
+#### What vLLM Can Do Today
+
+**1. Per-rank `UCX_NET_DEVICES` binding.** vLLM uses Python multiprocessing
+(`fork` or `spawn`) to create per-GPU worker processes. Each worker inherits
+the parent's environment at spawn time. vLLM (or a helper init container) can
+discover the GPU-NIC topology at startup by walking `/sys/bus/pci/devices/`
+sysfs paths and matching PCIe Root Complexes -- the same approach used by the
+[`gpu_to_hca_mapping.sh`](https://github.com/llm-d/llm-d) script in this
+investigation. Before spawning each worker, setting `UCX_NET_DEVICES` to just
+the NIC chosen for that GPU rank gives each UCX instance visibility to only
+its dedicated NIC, eliminating the greedy-selection problem entirely. A
+precedent already exists in llm-d's GKE configuration, where
+`DEEP_EP_DEVICE_TO_HCA_MAPPING` provides a per-GPU NIC binding for
+DeepEP/NVSHMEM as a single environment variable.
+
+**2. Default `UCX_MAX_RMA_RAILS=1` when #NICs >= #GPUs.** When the pod has
+at least as many NICs as active GPU ranks, there is no need for multi-rail
+splitting -- each GPU can have a dedicated NIC. Our experiments show that
+`rails=2` introduces multi-rail arbiter overhead that is the larger of the
+two confounding factors (9.1x degradation vs baseline). Defaulting to
+`rails=1` avoids this overhead entirely.
+
+**3. The goal: dedicated NIC per GPU, no splitting.** The ideal configuration
+demonstrated in our experiments is straightforward: each GPU rank gets a
+single dedicated NIC (ideally on the same IIO stack) with
+`UCX_MAX_RMA_RAILS=1`. This eliminates both confounding factors and saturates
+the wireline ceiling. When same-IIO placement is not possible (the common
+case without DRANET), per-rank NIC binding with `rails=1` still recovers 96%
+of the wireline ceiling by eliminating the rails splitting overhead.
+
 ### Areas for Further Investigation
 
 | Area | Rationale |
 |------|-----------|
-| **Single-rail with topology-aware NIC binding** | nixl-s8 and nixl-s9 show rails=1 is dramatically faster. NIXL/UCX should detect GPU-NIC topology and assign one same-IIO NIC per rank, avoiding both multi-rail overhead and cross-IIO latency. |
 | **Interleaved posting with progress** | NIXL's burst-then-progress pattern leaves the NIC idle for ~3.8 ms during posting. Interleaving `ucp_worker_progress()` every N descriptors (e.g., every 256) would keep the pipeline fed during posting. |
 | **UCX arbiter dispatch limit** | UCX's `ucs_arbiter_dispatch(..., per_group=1)` drains only 1 pending per EP per progress call. Increasing `per_group` or bypassing the arbiter for bulk RMA operations could dramatically improve pipeline throughput. |
 | **Descriptor coalescing** | Sorting blocks by GPU address and merging adjacent 16 KB blocks into larger READs would reduce descriptor count (e.g., 4 adjacent blocks → one 64 KB READ), reducing both posting overhead and pending queue pressure. |
 | **Raw verbs backend for NIXL** | A `libibverbs`-based NIXL plugin (bypassing UCX entirely) could use a tight post/poll loop identical to `rdma_scatter_bench`, recovering the full hardware capability. |
-| **Same-IIO GPU-NIC placement** | nixl-s9 confirms same-IIO on the decode side saturates the wireline ceiling. Apply the same to the prefill side to eliminate the ~252 Gbps ceiling entirely (same-IIO `ib_read_bw` achieves 355 Gbps). |
-| **Topology-aware K8s scheduling** | Ensure GPU-NIC co-location when assigning SR-IOV VFs. |
 
 ### Open Questions
 

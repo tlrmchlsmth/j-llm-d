@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # Master orchestration for NIXL Transfer Speed Isolation Experiments.
 #
-# Runs 6 deployment configurations isolating IIO crossing overhead and
+# Runs deployment configurations isolating IIO crossing overhead and
 # UCX rails overhead, measuring per-NIC WR request rate and NIXL transfer
 # throughput via NIC counters and vLLM logs.
 #
 # Usage:
-#   ./run_isolation_experiments.sh [nixl-s1|nixl-s2|...|nixl-s6|tp1|tp2|all]
+#   ./run_isolation_experiments.sh [nixl-s1|..|nixl-s9|tp1|tp2|confound|all]
 #
 # Examples:
-#   ./run_isolation_experiments.sh all          # Run all 6 experiments
+#   ./run_isolation_experiments.sh all          # Run all 6 early experiments (s1-s6)
 #   ./run_isolation_experiments.sh tp1          # Run TP=1 group (s1, s2, s5)
 #   ./run_isolation_experiments.sh tp2          # Run TP=2 group (s3, s4, s6)
-#   ./run_isolation_experiments.sh nixl-s3      # Run single experiment
+#   ./run_isolation_experiments.sh confound     # Run confounding-factor experiments (s6-s9)
+#   ./run_isolation_experiments.sh nixl-s7      # Run single experiment
 
 set -euo pipefail
 
@@ -29,10 +30,11 @@ NUM_PROMPTS="${NUM_PROMPTS:-50}"
 ISL="${ISL:-4096}"
 OSL="${OSL:-256}"
 
-# TP=1 experiments use GPU 0 only; TP=2 use GPU 0+1
+# TP=1 experiments use GPU 0 only; TP=2 use GPU 0+1 (or 0+7 for cross-NUMA)
 declare -A SCENARIO_TP=(
     [nixl-s1]=1  [nixl-s2]=1  [nixl-s5]=1
     [nixl-s3]=2  [nixl-s4]=2  [nixl-s6]=2
+    [nixl-s7]=2  [nixl-s8]=2  [nixl-s9]=2
 )
 declare -A SCENARIO_PURPOSE=(
     [nixl-s1]="Baseline (1 GPU, same-IIO)"
@@ -40,7 +42,10 @@ declare -A SCENARIO_PURPOSE=(
     [nixl-s3]="Baseline (2 GPUs, same-IIO)"
     [nixl-s4]="Rails=2 (each GPU crosses to other's NIC)"
     [nixl-s5]="Rails + 1 IIO crossing (1 GPU)"
-    [nixl-s6]="Rails + 2 IIO crossings (2 GPUs)"
+    [nixl-s6]="Cross-IIO + rails=2 (baseline for confounding)"
+    [nixl-s7]="Remove cross-IIO on decode, keep rails=2"
+    [nixl-s8]="Remove rails splitting, keep cross-IIO"
+    [nixl-s9]="Remove both factors on decode"
 )
 declare -A SCENARIO_NICS=(
     [nixl-s1]="mlx5_10"
@@ -49,10 +54,14 @@ declare -A SCENARIO_NICS=(
     [nixl-s4]="mlx5_10,mlx5_11"
     [nixl-s5]="mlx5_10,mlx5_12"
     [nixl-s6]="mlx5_12,mlx5_13"
+    [nixl-s7]="mlx5_10,mlx5_11"
+    [nixl-s8]="mlx5_11,mlx5_16"
+    [nixl-s9]="mlx5_10,mlx5_11"
 )
 declare -A SCENARIO_RAILS=(
     [nixl-s1]=1  [nixl-s2]=1  [nixl-s3]=1
     [nixl-s4]=2  [nixl-s5]=2  [nixl-s6]=2
+    [nixl-s7]=2  [nixl-s8]=1  [nixl-s9]=1
 )
 declare -A SCENARIO_IIO=(
     [nixl-s1]="same"
@@ -61,6 +70,9 @@ declare -A SCENARIO_IIO=(
     [nixl-s4]="mixed"
     [nixl-s5]="mixed"
     [nixl-s6]="cross"
+    [nixl-s7]="same(decode)/cross(prefill)"
+    [nixl-s8]="cross"
+    [nixl-s9]="same(decode)/cross(prefill)"
 )
 
 mkdir -p "$RESULTS_BASE"
@@ -320,7 +332,15 @@ case "$TARGET" in
         run_experiment nixl-s6 6
         print_results_table
         ;;
-    nixl-s[1-6])
+    confound)
+        init_results_table
+        run_experiment nixl-s6 6
+        run_experiment nixl-s7 7
+        run_experiment nixl-s8 8
+        run_experiment nixl-s9 9
+        print_results_table
+        ;;
+    nixl-s[1-9])
         num="${TARGET##nixl-s}"
         if [ ! -f "$RESULTS_TABLE" ]; then
             init_results_table
@@ -329,7 +349,7 @@ case "$TARGET" in
         print_results_table
         ;;
     *)
-        echo "Usage: $0 [all|tp1|tp2|nixl-s1..nixl-s6]"
+        echo "Usage: $0 [all|tp1|tp2|confound|nixl-s1..nixl-s9]"
         exit 1
         ;;
 esac

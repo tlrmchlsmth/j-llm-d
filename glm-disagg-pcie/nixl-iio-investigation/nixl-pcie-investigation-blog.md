@@ -14,7 +14,7 @@
 10. [Validation: Custom RDMA Scatter Benchmark](#validation-custom-rdma-scatter-benchmark)
 11. [Investigating the NIXL/UCX Software Stack](#investigating-the-nixlucx-software-stack)
 12. [Wire-Level NIC Counter Profiling](#wire-level-nic-counter-profiling)
-13. [Asymmetric IIO Experiment: Proving the Request-Side Bottleneck](#asymmetric-iio-experiment-proving-the-request-side-bottleneck)
+13. [Isolating the Decode-Side Bottleneck: Two Confounding Factors](#isolating-the-decode-side-bottleneck-two-confounding-factors)
 14. [Conclusion and Next Steps](#conclusion-and-next-steps)
 
 ---
@@ -923,78 +923,152 @@ delivers only 205K.
 
 ---
 
-## Asymmetric IIO Experiment: Proving the Request-Side Bottleneck
+## Isolating the Decode-Side Bottleneck: Two Confounding Factors
 
-All prior experiments used the same cross-IIO GPU-NIC pairs on **both** the
-decode and prefill pods (nixl-s6 / scenario 2r2: `mlx5_12,mlx5_13` on both
-sides). The NIC counter profiling showed a flat ~27 Gbps per NIC with a
-constant WR posting rate of ~208K WRs/sec -- pointing to a software-side
-bottleneck. But a key question remained: **is the low request rate caused by
-the decode-side cross-IIO path latency slowing down UCX's completion polling
-and WR reposting loop, or is it purely a software limitation independent of
-PCIe topology?**
+The NIC counter profiling in the previous section showed that NIXL's decode
+pod sends RDMA READ requests at a flat ~208K WRs/sec per NIC -- far below
+the ~1M+ WRs/sec the hardware sustains in `rdma_scatter_bench`. But what
+exactly throttles this request rate on the decode pod?
 
-### Experiment Design (nixl-s7)
+In the original scenario 2r2 (nixl-s6), the decode pod has **two confounding
+factors** that could each limit request throughput:
 
-To isolate the decode-side IIO topology's contribution, we created an
-**asymmetric** deployment:
+1. **Cross-IIO GPU-NIC latency**: each NIC writes RDMA READ completions to
+   a GPU on a different IIO stack, crossing the CPU mesh. This increases the
+   per-completion round-trip time, which slows down UCX's poll-and-repost loop.
+
+2. **UCX rails splitting overhead**: with `UCX_MAX_RMA_RAILS=2`, each GPU
+   rank splits its 40,960 descriptors across two NICs. UCX's multi-rail
+   arbiter adds software overhead for every descriptor to select the target
+   NIC, manage per-rail pending queues, and coordinate completions across
+   two transport endpoints.
+
+To separate these factors, we designed three targeted experiments: two that
+each remove exactly one factor, and a third that removes both.
+
+### nixl-s7: Remove Cross-IIO, Keep Rails Splitting
 
 | Pod | NICs | IIO Relationship | UCX Rails |
 |-----|------|-----------------|-----------|
 | **Decode** | mlx5_10, mlx5_11 | **Same-IIO** (each NIC under its GPU's PCIe tree) | 2 |
 | **Prefill** | mlx5_12, mlx5_13 | **Cross-IIO** (NICs on different IIO stacks from GPUs) | 2 |
 
-The decode pod's NICs now have a low-latency path to their respective GPUs
-(no mesh crossing for completion writes), while the prefill pod retains the
-cross-IIO configuration (the NIC must read GPU data across the mesh). If the
-decode-side IIO latency was throttling the request rate, this change should
-dramatically improve throughput -- even though the prefill-side read path
-still crosses the mesh and represents the ultimate wireline ceiling (~270 Gbps).
+The decode pod's NICs have a low-latency path to their respective GPUs (no
+mesh crossing for completion writes). Rails=2 is retained, so each GPU rank
+still splits traffic across both NICs via UCX's multi-rail arbiter. Note:
+with rails=2, each GPU also uses the *other* GPU's NIC (cross-IIO), so the
+decode side is mixed-IIO (50% same, 50% cross). The prefill pod retains
+cross-IIO throughout.
+
+### nixl-s8: Remove Rails Splitting, Keep Cross-IIO
+
+| Pod | NICs | IIO Relationship | UCX Rails |
+|-----|------|-----------------|-----------|
+| **Decode** | mlx5_11, mlx5_16 | **Cross-IIO** (each NIC on a neighboring IIO stack) | 1 |
+| **Prefill** | mlx5_11, mlx5_16 | **Cross-IIO** (same) | 1 |
+
+With `UCX_MAX_RMA_RAILS=1`, each GPU rank uses exactly one dedicated NIC --
+no rails splitting, no multi-rail arbitration. Both GPU-NIC pairs remain
+cross-IIO on the decode side.
+
+To force UCX to assign *different* NICs to each rank (UCX's greedy selection
+assigns both ranks to the same NIC when all paths are equidistant), we use
+`CUDA_VISIBLE_DEVICES=0,7` to place the two TP=2 ranks on GPUs across NUMA
+domains: GPU 0 (NUMA 0, IIO stack 0) and GPU 7 (NUMA 1, IIO stack 7). The
+NICs mlx5_11 (NUMA 0, IIO stack 1) and mlx5_16 (NUMA 1, IIO stack 6) then
+have unambiguous distance: GPU 0 prefers mlx5_11 (same-NUMA) over mlx5_16
+(cross-NUMA), and vice versa for GPU 7. UCX correctly assigns one NIC per
+rank based on this NUMA distance differentiation.
+
+### nixl-s9: Remove Both Factors on Decode
+
+| Pod | NICs | IIO Relationship | UCX Rails |
+|-----|------|-----------------|-----------|
+| **Decode** | mlx5_10, mlx5_11 | **Same-IIO** (each NIC under its GPU's PCIe tree) | 1 |
+| **Prefill** | mlx5_11, mlx5_16 | **Cross-IIO** (each NIC on a neighboring IIO stack) | 1 |
+
+This scenario removes *both* confounding factors on the decode pod: same-IIO
+placement eliminates mesh crossing for completions, and rails=1 eliminates
+multi-rail arbitration. Each decode GPU has a dedicated same-IIO NIC. The
+prefill pod retains cross-IIO with `CUDA_VISIBLE_DEVICES=0,7` (identical to
+nixl-s8), so the wireline ceiling on the prefill side remains unchanged.
+
+On the decode pod, GPUs 0 and 1 (the TP=2 default) naturally use mlx5_10 and
+mlx5_11 respectively -- these are the closest NICs by PCIe distance. With
+rails=1, UCX assigns one NIC per rank without any ambiguity.
 
 ### Results
 
 **NIXL KV transfer throughput (from decode pod vLLM logs):**
 
-| Metric | nixl-s6 (both cross-IIO) | nixl-s7 (decode same-IIO) | Speedup |
-|--------|-------------------------|--------------------------|---------|
-| avg_xfer_time | 199.740 ms | 29.321 ms | 6.8x |
-| avg_post_time | 2.132 ms | 2.863 ms | -- |
-| effective_xfer_time | 197.608 ms | 26.458 ms | 7.5x |
-| **Per-rank RDMA throughput** | **27.2 Gbps** | **202.9 Gbps** | **7.5x** |
+| Metric | nixl-s6 (baseline) | nixl-s7 (no cross-IIO) | nixl-s8 (no rails split) | nixl-s9 (neither) |
+|--------|--------------------|----------------------|------------------------|--------------------|
+| avg_xfer_time | 199.740 ms | 29.321 ms | 23.446 ms | 22.422 ms |
+| avg_post_time | 2.132 ms | 2.863 ms | 1.687 ms | 1.797 ms |
+| effective_xfer_time | 197.608 ms | 26.458 ms | 21.759 ms | 20.625 ms |
+| **Per-rank throughput** | **27.2 Gbps** | **202.9 Gbps** | **246.7 Gbps** | **260.3 Gbps** |
 
 *Per-rank RDMA throughput = (671.1 MB / effective_xfer_time) × 8.*
 
 **Decode NIC request rate and wire-level throughput (from high-fidelity NIC counters):**
 
-| Metric | nixl-s6 | nixl-s7 | Change |
-|--------|---------|---------|--------|
-| **mlx5_10 / mlx5_12 RX (Gbps)** | 28.3 | 189.5 | **6.7x** |
-| **mlx5_11 / mlx5_13 RX (Gbps)** | 28.4 | 185.2 | **6.5x** |
-| mlx5_10 / mlx5_12 WR rate | 208,539 | 1,436,484 | **6.9x** |
-| mlx5_11 / mlx5_13 WR rate | 208,585 | 1,404,503 | **6.7x** |
-| TX bytes per WR | 146 | 145 | identical |
+| Metric | nixl-s6 | nixl-s7 | nixl-s8 | nixl-s9 |
+|--------|---------|---------|---------|---------|
+| NIC 1 RX (Gbps) | 28.3 | 189.5 | 241.6 | 250.8 |
+| NIC 2 RX (Gbps) | 28.4 | 185.2 | 242.0 | 250.8 |
+| NIC 1 WR rate (WRs/sec) | 208,539 | 1,436,484 | 1,834,745 | 1,912,000 |
+| NIC 2 WR rate (WRs/sec) | 208,585 | 1,404,503 | 1,836,783 | 1,888,000 |
+| TX bytes per WR | 146 | 145 | 73 | 73 |
 
-### Interpretation
+### Analysis: Confounding Factors That Cripple Together
 
-Moving the decode pod to same-IIO NICs increased the RDMA READ request rate
-from **~208K to ~1.42M WRs/sec per NIC** -- a **6.8x improvement**. The
-per-rank NIXL transfer throughput jumped from 27.2 Gbps to 202.9 Gbps.
+Each factor individually degrades throughput, but **together they have a
+crippling effect** -- the baseline nixl-s6 achieves only 27 Gbps, far worse
+than either factor alone would predict.
 
-This confirms that the **decode-side PCIe topology was the dominant bottleneck**
-behind the low NIXL transfer speeds. When the decode NIC's completion write
-path to GPU memory crosses the CPU mesh (cross-IIO), the round-trip latency
-for each RDMA READ completion is high. Since UCX's progress loop must poll
-for completions and repost new WRs serially, this high per-completion latency
-directly throttles the WR injection rate. Moving to same-IIO eliminates the
-mesh crossing, drastically reducing completion latency and allowing UCX to
-sustain a much higher request rate.
+**Removing cross-IIO (nixl-s7)** produced a **7.5x** throughput improvement
+(27 → 203 Gbps). The WR rate jumped from 208K to 1.42M per NIC. Eliminating
+the mesh crossing on the decode side dramatically reduces completion latency,
+allowing UCX's progress loop to drain completions and repost new WRs much
+faster. However, nixl-s7 retains rails=2, and each GPU still has 50% of its
+traffic crossing IIO (to the other GPU's NIC), which limits the improvement.
 
-The prefill side remains cross-IIO in nixl-s7, meaning the NIC on the prefill
-node still reads GPU data across the mesh. Yet the system achieves ~190 Gbps
-per NIC -- close to the wireline ceiling measured by `ib_read_bw` for the
-cross-IIO read path (~252 Gbps). The remaining gap to the wireline ceiling
-is attributable to NIXL/UCX software overhead (descriptor posting, progress
-arbitration) as established in earlier sections.
+**Removing rails splitting (nixl-s8)** produced a **9.1x** throughput
+improvement (27 → 247 Gbps). The WR rate jumped from 208K to 1.84M per NIC.
+With rails=1, each GPU has a dedicated NIC and UCX bypasses the multi-rail
+arbiter entirely. The TX bytes per WR dropped from 146 to 73 bytes, indicating
+that the RDMA READ request packets are smaller without multi-rail coordination
+headers. Despite both GPU-NIC pairs being cross-IIO, the elimination of rails
+splitting overhead alone is sufficient to recover near-wireline throughput.
+
+**Removing both factors (nixl-s9)** produced a **9.6x** throughput
+improvement (27 → 260 Gbps). The WR rate reached 1.9M per NIC, and per-NIC
+RX throughput hit 250.8 Gbps consistently. This represents the best-case
+decode-side configuration: each GPU has a dedicated same-IIO NIC with no
+multi-rail overhead.
+
+**Comparing all three isolation experiments:**
+
+| Scenario | Factor(s) Removed | Speedup | Per-NIC WR Rate | Per-NIC RX (Gbps) |
+|----------|-------------------|---------|-----------------|-------------------|
+| nixl-s7 | Cross-IIO only | 7.5x | 1.42M | ~187 |
+| nixl-s8 | Rails splitting only | 9.1x | 1.84M | ~242 |
+| nixl-s9 | Both | 9.6x | 1.90M | ~251 |
+
+The key insight is in the progression: nixl-s8 and nixl-s9 are nearly
+identical in throughput (247 vs 260 Gbps, ~5% difference), while both are
+dramatically faster than nixl-s7 (203 Gbps). This reveals that once rails
+splitting is removed, the remaining cross-IIO penalty is modest (~5%). But
+when rails splitting is *present*, the cross-IIO latency amplifies the
+multi-rail arbitration overhead -- each additional microsecond of
+completion latency from the mesh crossing means more time the arbiter
+spends waiting, compounding the per-descriptor overhead.
+
+The prefill side remains cross-IIO in all three experiments, giving a
+wireline ceiling of ~252 Gbps (from `ib_read_bw`). nixl-s9's per-NIC
+throughput of ~251 Gbps essentially **saturates this ceiling**, confirming
+that the decode-side software path is no longer the bottleneck when both
+factors are eliminated.
 
 ---
 
@@ -1018,13 +1092,24 @@ parameters (Send Queue depth, doorbell batching, CQ moderation, `max_rd_atomic`)
 NIXL throughput remains at ~27 Gbps. The constraint is above the transport
 layer, in how descriptors are posted and how progress is driven.
 
-The asymmetric IIO experiment (nixl-s7) provided the definitive confirmation:
-moving only the **decode pod** to same-IIO NICs (while keeping prefill cross-IIO)
-increased the decode NIC request rate from **208K to 1.42M WRs/sec** and NIXL
-transfer throughput from **27 Gbps to 203 Gbps per rank** -- a **7.5x speedup**.
-This proves that the decode-side cross-IIO completion latency was throttling
-UCX's WR reposting loop, and that reducing this latency is sufficient to
-recover most of the hardware's capability.
+By isolating two confounding factors on the decode pod -- cross-IIO latency
+and UCX multi-rail splitting -- we identified their individual and combined
+contributions:
+
+- **Removing cross-IIO** (nixl-s7, rails=2): 7.5x speedup → 203 Gbps, 1.42M WRs/sec per NIC
+- **Removing rails splitting** (nixl-s8, rails=1): 9.1x speedup → 247 Gbps, 1.84M WRs/sec per NIC
+- **Removing both** (nixl-s9, same-IIO + rails=1): 9.6x speedup → 260 Gbps, 1.90M WRs/sec per NIC
+
+Each factor individually degrades throughput, but together they are
+**crippling**: the baseline nixl-s6 (both factors present) achieves only
+27 Gbps -- far worse than either factor alone would predict. Cross-IIO
+latency amplifies the multi-rail arbitration overhead because each
+additional microsecond of mesh-crossing completion latency compounds the
+time the arbiter spends waiting per descriptor.
+
+nixl-s9 **saturated the wireline ceiling** (~251 Gbps per NIC vs 252 Gbps
+from `ib_read_bw`), confirming that the decode-side software path is no
+longer the bottleneck when both factors are eliminated.
 
 ### What We Ruled Out
 
@@ -1043,21 +1128,39 @@ recover most of the hardware's capability.
 
 ### Key Takeaway
 
-**The hardware path is not the bottleneck.** The NIC, GPU memory system, IIO
-stacks, and CPU mesh can all support ~137 Gbps of scattered 16 KB RDMA READs
-in the cross-IIO configuration. The 5.5x gap is entirely due to the NIXL/UCX
-software stack not loading the pipeline with enough outstanding read requests
-to fill the bandwidth-delay product.
+**The hardware path is not the bottleneck.** The 9.6x throughput gap between
+the baseline NIXL configuration (27 Gbps) and the best-case nixl-s9 (260 Gbps)
+is caused by two software/configuration factors on the decode pod that
+**compound when both are present**:
+
+1. **UCX multi-rail splitting**: with `rails=2`, UCX's arbiter adds
+   per-descriptor overhead for NIC selection and cross-rail coordination.
+   Removing this alone (nixl-s8) recovers 96% of the wireline ceiling.
+
+2. **Cross-IIO completion latency**: the CPU mesh crossing increases
+   per-completion round-trip time, slowing UCX's poll-and-repost loop.
+   Removing this alone (nixl-s7) recovers 80% of the wireline ceiling.
+
+Either factor in isolation causes moderate degradation, but together they
+are crippling: cross-IIO latency amplifies the per-descriptor overhead of
+the multi-rail arbiter, and the arbiter's slower dispatch rate in turn
+increases the sensitivity to completion latency. Removing both (nixl-s9)
+saturates the wireline ceiling at ~251 Gbps per NIC.
+
+The hardware -- NIC, GPU memory, IIO stacks, and CPU mesh -- can sustain
+~251 Gbps of scattered 16 KB RDMA READs per NIC when the software pipeline
+is efficient (rails=1, dedicated same-IIO NIC per GPU).
 
 ### Areas for Further Investigation
 
 | Area | Rationale |
 |------|-----------|
+| **Single-rail with topology-aware NIC binding** | nixl-s8 and nixl-s9 show rails=1 is dramatically faster. NIXL/UCX should detect GPU-NIC topology and assign one same-IIO NIC per rank, avoiding both multi-rail overhead and cross-IIO latency. |
 | **Interleaved posting with progress** | NIXL's burst-then-progress pattern leaves the NIC idle for ~3.8 ms during posting. Interleaving `ucp_worker_progress()` every N descriptors (e.g., every 256) would keep the pipeline fed during posting. |
 | **UCX arbiter dispatch limit** | UCX's `ucs_arbiter_dispatch(..., per_group=1)` drains only 1 pending per EP per progress call. Increasing `per_group` or bypassing the arbiter for bulk RMA operations could dramatically improve pipeline throughput. |
 | **Descriptor coalescing** | Sorting blocks by GPU address and merging adjacent 16 KB blocks into larger READs would reduce descriptor count (e.g., 4 adjacent blocks → one 64 KB READ), reducing both posting overhead and pending queue pressure. |
-| **Raw verbs backend for NIXL** | A `libibverbs`-based NIXL plugin (bypassing UCX entirely) could use a tight post/poll loop identical to `rdma_scatter_bench`, recovering the full ~137 Gbps hardware capability. |
-| **Same-IIO GPU-NIC placement** | Eliminates the mesh crossing entirely (355 Gbps observed), making the BDP constraint irrelevant. |
+| **Raw verbs backend for NIXL** | A `libibverbs`-based NIXL plugin (bypassing UCX entirely) could use a tight post/poll loop identical to `rdma_scatter_bench`, recovering the full hardware capability. |
+| **Same-IIO GPU-NIC placement** | nixl-s9 confirms same-IIO on the decode side saturates the wireline ceiling. Apply the same to the prefill side to eliminate the ~252 Gbps ceiling entirely (same-IIO `ib_read_bw` achieves 355 Gbps). |
 | **Topology-aware K8s scheduling** | Ensure GPU-NIC co-location when assigning SR-IOV VFs. |
 
 ### Open Questions

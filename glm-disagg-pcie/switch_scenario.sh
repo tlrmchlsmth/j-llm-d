@@ -5,7 +5,7 @@
 # on both prefill and decode deployments, triggering a Recreate rollout
 # (old pod dies → new pod starts on same node).
 #
-# Usage: ./switch_scenario.sh <1|2|3|2r2|3r2|nixl-s1..nixl-s8>
+# Usage: ./switch_scenario.sh <1|2|3|2r2|3r2|nixl-s1..nixl-s9>
 #        UCX_RC_MAX_RD_ATOMIC=16 ./switch_scenario.sh 2r2
 #
 # Scenarios (NIC pairs used for KV cache transfer):
@@ -24,21 +24,26 @@
 #   nixl-s6: mlx5_12, mlx5_13   rails=2  (TP=2, cross-IIO, rails overhead)
 #   nixl-s7: ASYMMETRIC -- decode=mlx5_10,mlx5_11 (same-IIO) / prefill=mlx5_12,mlx5_13 (cross-IIO)
 #            rails=2  (TP=2, proves request-side bottleneck is decode-side IIO latency)
-#   nixl-s8: CUDA_VISIBLE_DEVICES=0,3, mlx5_11,mlx5_12, rails=1
-#            (TP=2 on non-adjacent GPUs, cross-IIO, no rails splitting)
-#            GPU0(IIO0)→mlx5_11(IIO1), GPU3(IIO3)→mlx5_12(IIO2)
+#   nixl-s8: CUDA_VISIBLE_DEVICES=0,7, mlx5_11,mlx5_16, rails=1
+#            (TP=2 cross-NUMA GPUs, cross-IIO, no rails splitting)
+#            GPU0(NUMA0,IIO0)→mlx5_11(NUMA0,IIO1), GPU7(NUMA1,IIO7)→mlx5_16(NUMA1,IIO6)
+#            Cross-NUMA forces UCX to differentiate NIC distances.
+#   nixl-s9: ASYMMETRIC + per-pod CUDA_VISIBLE_DEVICES
+#            Decode:  GPUs 0,1 (default), mlx5_10,mlx5_11 (same-IIO), rails=1
+#            Prefill: GPUs 0,7 (CUDA_VIS=0,7), mlx5_11,mlx5_16 (cross-IIO), rails=1
+#            Removes both cross-IIO and rails-splitting on decode side.
 #
 # In scenarios 2r2/3r2, UCX_MAX_RMA_RAILS=2 forces each rank to use both
 # NICs (2 RMA lanes), working around UCX's greedy per-endpoint device
 # selection that otherwise assigns both ranks to the same NIC.
 #
 # GPUs are GPU 0 and GPU 1 (11:00.0, 2f:00.0) by default.
-# nixl-s8 overrides to GPU 0 and GPU 3 (11:00.0, 5d:00.0) via CUDA_VISIBLE_DEVICES.
+# nixl-s8 overrides to GPU 0 and GPU 7 (11:00.0, da:00.0) via CUDA_VISIBLE_DEVICES.
 
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <1|2|3|2r2|3r2|nixl-s1..nixl-s8>"
+    echo "Usage: $0 <1|2|3|2r2|3r2|nixl-s1..nixl-s9>"
     exit 1
 fi
 
@@ -50,6 +55,8 @@ NET_DEVICES=""
 DECODE_NET_DEVICES=""
 PREFILL_NET_DEVICES=""
 CUDA_VIS_DEVICES=""
+DECODE_CUDA_VIS=""
+PREFILL_CUDA_VIS=""
 
 case "$SCENARIO" in
     1)   NET_DEVICES="mlx5_10:1,mlx5_11:1" ;;
@@ -66,10 +73,15 @@ case "$SCENARIO" in
     nixl-s7) DECODE_NET_DEVICES="mlx5_10:1,mlx5_11:1"
              PREFILL_NET_DEVICES="mlx5_12:1,mlx5_13:1"
              RMA_RAILS="2" ;;
-    nixl-s8) NET_DEVICES="mlx5_11:1,mlx5_12:1"
+    nixl-s8) NET_DEVICES="mlx5_11:1,mlx5_16:1"
              RMA_RAILS="1"
-             CUDA_VIS_DEVICES="0,3" ;;
-    *)   echo "ERROR: Unknown scenario '$SCENARIO'. Use 1, 2, 3, 2r2, 3r2, or nixl-s1..nixl-s8."; exit 1 ;;
+             CUDA_VIS_DEVICES="0,7" ;;
+    nixl-s9) DECODE_NET_DEVICES="mlx5_10:1,mlx5_11:1"
+             PREFILL_NET_DEVICES="mlx5_11:1,mlx5_16:1"
+             RMA_RAILS="1"
+             DECODE_CUDA_VIS=""
+             PREFILL_CUDA_VIS="0,7" ;;
+    *)   echo "ERROR: Unknown scenario '$SCENARIO'. Use 1, 2, 3, 2r2, 3r2, or nixl-s1..nixl-s9."; exit 1 ;;
 esac
 
 # For asymmetric scenarios, resolve per-deployment NET_DEVICES.
@@ -89,7 +101,10 @@ echo "  UCX_MAX_RMA_RAILS=$RMA_RAILS"
 if [ -n "$RC_MAX_RD_ATOMIC" ]; then
     echo "  UCX_RC_MAX_RD_ATOMIC=$RC_MAX_RD_ATOMIC"
 fi
-if [ -n "$CUDA_VIS_DEVICES" ]; then
+if [ -n "$DECODE_CUDA_VIS" ] || [ -n "$PREFILL_CUDA_VIS" ]; then
+    echo "  Decode  CUDA_VISIBLE_DEVICES=${DECODE_CUDA_VIS:-(default)}"
+    echo "  Prefill CUDA_VISIBLE_DEVICES=${PREFILL_CUDA_VIS:-(default)}"
+elif [ -n "$CUDA_VIS_DEVICES" ]; then
     echo "  CUDA_VISIBLE_DEVICES=$CUDA_VIS_DEVICES"
 fi
 echo "=============================================="
@@ -123,17 +138,23 @@ MRA_EXTRA=""
 if [ -n "$RC_MAX_RD_ATOMIC" ]; then
     MRA_EXTRA="UCX_RC_MAX_RD_ATOMIC=$RC_MAX_RD_ATOMIC"
 fi
-CUDA_EXTRA=""
-if [ -n "$CUDA_VIS_DEVICES" ]; then
-    CUDA_EXTRA="CUDA_VISIBLE_DEVICES=$CUDA_VIS_DEVICES"
-else
-    CUDA_EXTRA="CUDA_VISIBLE_DEVICES-"
-fi
+# Per-pod CUDA_VISIBLE_DEVICES: if per-pod vars are set, use them; else fall back to shared CUDA_VIS_DEVICES.
+resolve_cuda_extra() {
+    local vis="$1"
+    if [ -n "$vis" ]; then
+        echo "CUDA_VISIBLE_DEVICES=$vis"
+    else
+        echo "CUDA_VISIBLE_DEVICES-"
+    fi
+}
+DECODE_CUDA_EXTRA=$(resolve_cuda_extra "${DECODE_CUDA_VIS:-$CUDA_VIS_DEVICES}")
+PREFILL_CUDA_EXTRA=$(resolve_cuda_extra "${PREFILL_CUDA_VIS:-$CUDA_VIS_DEVICES}")
+
 echo "Setting UCX env on decode (NET_DEVICES=$DECODE_NET_DEVICES) and prefill (NET_DEVICES=$PREFILL_NET_DEVICES)..."
 kubectl set env deployment/"$DECODE_DEPLOY" -n "$NAMESPACE" -c vllm \
-    UCX_NET_DEVICES="$DECODE_NET_DEVICES" UCX_MAX_RMA_RAILS="$RMA_RAILS" $MRA_EXTRA $CUDA_EXTRA
+    UCX_NET_DEVICES="$DECODE_NET_DEVICES" UCX_MAX_RMA_RAILS="$RMA_RAILS" $MRA_EXTRA $DECODE_CUDA_EXTRA
 kubectl set env deployment/"$PREFILL_DEPLOY" -n "$NAMESPACE" -c vllm \
-    UCX_NET_DEVICES="$PREFILL_NET_DEVICES" UCX_MAX_RMA_RAILS="$RMA_RAILS" $MRA_EXTRA $CUDA_EXTRA
+    UCX_NET_DEVICES="$PREFILL_NET_DEVICES" UCX_MAX_RMA_RAILS="$RMA_RAILS" $MRA_EXTRA $PREFILL_CUDA_EXTRA
 
 # Wait for rollout
 echo ""

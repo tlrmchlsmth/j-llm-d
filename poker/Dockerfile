@@ -37,11 +37,7 @@ RUN git clone --depth=1 --filter=blob:none https://github.com/tlrmchlsmth/dotfil
     && rm -rf .git
 
 # guidellm
-RUN git clone --depth=1 --filter=blob:none \
-      -b max_completion_tokens \
-      https://github.com/tlrmchlsmth/guidellm guidellm \
-    && cd guidellm \
-    && uv pip install .
+RUN uv pip install guidellm
 
 # lm_eval
 RUN uv venv .lm_eval -p 3.12

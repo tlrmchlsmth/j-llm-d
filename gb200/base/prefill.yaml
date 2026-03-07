@@ -4,17 +4,21 @@ metadata:
   name: wide-ep-prefill
   labels:
     llm-d.ai/inferenceServing: "true"
-    llm-d.ai/model: DeepSeek-R1-NVFP4
+    llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
     llm-d.ai/role: prefill
 spec:
   replicas: 2
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxUnavailable: 100%
   leaderWorkerTemplate:
     size: 1
     workerTemplate:
       metadata:
         labels:
           llm-d.ai/inferenceServing: "true"
-          llm-d.ai/model: DeepSeek-R1-NVFP4
+          llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
           llm-d.ai/role: prefill
       spec:
         serviceAccountName: wide-ep
@@ -26,6 +30,10 @@ spec:
           - name: lustre
             persistentVolumeClaim:
               claimName: lustre-pvc-vllm
+          - name: local-nvme
+            hostPath:
+              path: /mnt/numa0
+              type: Directory
         resourceClaims:
           - name: compute-domain-channel
             resourceClaimTemplateName: llm-d-dev-claim
@@ -87,7 +95,7 @@ spec:
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
                   CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
-                    nvidia/DeepSeek-R1-NVFP4 \
+                    nvidia/DeepSeek-R1-0528-NVFP4-v2 \
                     --port $((8000 + R)) \
                     --tensor-parallel-size $TP_SIZE \
                     --disable-uvicorn-access-log \
@@ -130,7 +138,7 @@ spec:
                     key: HF_TOKEN
                     optional: true
               - name: HF_HOME
-                value: /mnt/lustre/hf_cache
+                value: /mnt/local/hf_cache
 
               # Compile caches - persist across restarts for faster startup
               - name: VLLM_CACHE_ROOT
@@ -140,7 +148,7 @@ spec:
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
-                value: "4"
+                value: "1"
 
               - name: VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE
                 value: "1"
@@ -216,4 +224,6 @@ spec:
                 name: dshm
               - mountPath: /mnt/lustre
                 name: lustre
+              - mountPath: /mnt/local
+                name: local-nvme
             workingDir: /code

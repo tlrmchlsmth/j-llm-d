@@ -4,17 +4,21 @@ metadata:
   name: wide-ep-decode
   labels:
     llm-d.ai/inferenceServing: "true"
-    llm-d.ai/model: DeepSeek-R1-NVFP4
+    llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
     llm-d.ai/role: decode
 spec:
   replicas: 1
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 12
+    size: 8
     workerTemplate:
       metadata:
         labels:
           llm-d.ai/inferenceServing: "true"
-          llm-d.ai/model: DeepSeek-R1-NVFP4
+          llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
           llm-d.ai/role: decode
       spec:
         serviceAccountName: wide-ep
@@ -26,6 +30,10 @@ spec:
           - name: lustre
             persistentVolumeClaim:
               claimName: lustre-pvc-vllm
+          - name: local-nvme
+            hostPath:
+              path: /mnt/numa0
+              type: Directory
         resourceClaims:
           - name: compute-domain-channel
             resourceClaimTemplateName: llm-d-dev-claim
@@ -141,7 +149,7 @@ spec:
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
                   CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
-                    nvidia/DeepSeek-R1-NVFP4 \
+                    nvidia/DeepSeek-R1-0528-NVFP4-v2 \
                     --port $((8200 + R)) \
                     --tensor-parallel-size $TP_SIZE \
                     --disable-uvicorn-access-log \
@@ -159,12 +167,13 @@ spec:
                     --gpu-memory-utilization 0.75 \
                     --max-num-batched-tokens $MAX_TOKENS \
                     --max-num-seqs $MAX_TOKENS \
+                    --max-cudagraph-capture-size $MAX_TOKENS \
                     --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
-                    --max-cudagraph-capture-size 768 \
+                    --disable_cascade_attn \
                     --enable-eplb \
                     --eplb-config '{"window_size":"100",
                                     "step_interval":"1000",
-                                    "num_redundant_experts":"32",
+                                    "num_redundant_experts":"64",
                                     "log_balancedness":"True",
                                     "log_balancedness_interval":"100"}' \
                     --enable-force-include-usage &
@@ -208,7 +217,7 @@ spec:
                     key: HF_TOKEN
                     optional: true
               - name: HF_HOME
-                value: /mnt/lustre/hf_cache
+                value: /mnt/local/hf_cache
 
               # Compile caches - persist across restarts for faster startup
               - name: VLLM_CACHE_ROOT
@@ -301,4 +310,6 @@ spec:
                 name: dshm
               - mountPath: /mnt/lustre
                 name: lustre
+              - mountPath: /mnt/local
+                name: local-nvme
             workingDir: /code

@@ -10,6 +10,7 @@ KN := "kubectl -n " + NAMESPACE
 NAME_PREFIX := env("USER", "dev")
 DEPLOY_NAME := NAME_PREFIX + "-wide-ep"
 POKER_NAME := NAME_PREFIX + "-poker"
+DEV_POD_NAME := NAME_PREFIX + "-vllm-dev"
 
 GB200_DIR := "gb200"
 DEV_DIR := "dev"
@@ -93,9 +94,11 @@ parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_
     NUM_REQUESTS={{REQUESTS_PER_WORKER}} \
     INPUT_LEN={{INPUT_LEN}} \
     OUTPUT_LEN={{OUTPUT_LEN}} \
+    DEPLOY_NAME="{{DEPLOY_NAME}}" \
+    NAMESPACE="{{NAMESPACE}}" \
     OUTPUT_PATH="parallel-guidellm-$(date +%Y%m%d-%H%M%S)" \
-    envsubst '${N_WORKERS} ${MAX_CONCURRENCY} ${NUM_REQUESTS} ${INPUT_LEN} ${OUTPUT_LEN} ${OUTPUT_PATH}' \
-      < parallel-guidellm.yaml | kubectl apply -f -
+    envsubst '${N_WORKERS} ${MAX_CONCURRENCY} ${NUM_REQUESTS} ${INPUT_LEN} ${OUTPUT_LEN} ${OUTPUT_PATH} ${DEPLOY_NAME} ${NAMESPACE}' \
+      < parallel-guidellm.yaml | {{KN}} apply -f -
 
 # Run inference-perf benchmark (kubernetes-sigs/inference-perf)
 # Uses concurrent load type: each worker maintains WORKER_MAX_CONCURRENCY in-flight requests
@@ -138,8 +141,8 @@ deploy_inferencepool ROUTING='load-aware':
 
 VLLM_DEV_VENV := "/mnt/lustre/tms/vllm-venv"
 VLLM_DEV_SRC := "/mnt/lustre/tms/vllm-dev"
-VLLM_DEV_REMOTE := "https://github.com/tlrmchlsmth/vllm.git"
-VLLM_DEV_BRANCH := "gb200_working"
+VLLM_DEV_REMOTE := "https://github.com/vllm-project/vllm.git"
+VLLM_DEV_BRANCH := "main"
 VLLM_BUILD_JOBS := "16"
 
 start MODE='pd' ROUTING='load-aware' DEV='false':
@@ -190,27 +193,65 @@ restart MODE='pd' ROUTING='load-aware' DEV='false':
 
 # Deploy the persistent dev pod (CPU-only, for editing/compiling vLLM on Lustre)
 dev-start:
-  {{KN}} apply -f {{DEV_DIR}}/dev-pod.yaml
+  envsubst < {{DEV_DIR}}/dev-pod.yaml | {{KN}} apply -f -
+  {{KN}} wait --for=condition=Ready pod/{{DEV_POD_NAME}} --timeout=300s
 
 # Exec into the dev pod
 dev:
-  {{KN}} exec -it vllm-dev -- /bin/bash
+  {{KN}} exec -it {{DEV_POD_NAME}} -- /bin/zsh
 
 # Build vLLM from source on Lustre (runs in background, survives disconnects)
 dev-build REMOTE=VLLM_DEV_REMOTE BRANCH=VLLM_DEV_BRANCH JOBS=VLLM_BUILD_JOBS:
-  {{KN}} exec vllm-dev -- bash -c 'source {{VLLM_DEV_VENV}}/bin/activate && cd {{VLLM_DEV_SRC}} && git remote set-url origin {{REMOTE}} && git fetch origin && git checkout {{BRANCH}} && git reset --hard origin/{{BRANCH}} && MAX_JOBS={{JOBS}} nohup uv pip install --no-deps --no-build-isolation -e . > /mnt/lustre/tms/build.log 2>&1 & echo "Build started ({{REMOTE}} {{BRANCH}}, jobs={{JOBS}}), follow with: just dev-build-log"'
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{KN}} exec -i {{DEV_POD_NAME}} -- bash <<'EOF'
+  set -euo pipefail
+
+  # ensure venv python points to /usr/bin/python3.12 (works in both dev and runtime images)
+  VENV_PYTHON="{{VLLM_DEV_VENV}}/bin/python"
+  if [ "$(readlink "$VENV_PYTHON")" != "/usr/bin/python3.12" ]; then
+    echo "Repointing venv python: $(readlink "$VENV_PYTHON") -> /usr/bin/python3.12"
+    ln -sf /usr/bin/python3.12 "$VENV_PYTHON"
+  fi
+
+  source {{VLLM_DEV_VENV}}/bin/activate
+  cd {{VLLM_DEV_SRC}}
+
+  # fetch and reset to requested branch
+  git remote set-url origin {{REMOTE}}
+  git fetch origin
+  git checkout {{BRANCH}}
+  git reset --hard origin/{{BRANCH}}
+
+  # build in background
+  MAX_JOBS={{JOBS}} nohup uv pip install --no-deps --no-build-isolation -e . \
+    > /mnt/lustre/tms/build.log 2>&1 &
+
+  echo "Build started ({{REMOTE}} {{BRANCH}}, jobs={{JOBS}}), follow with: just dev-build-log"
+  EOF
 
 # Tail the dev build log
 dev-build-log:
-  {{KN}} exec vllm-dev -- tail -f /mnt/lustre/tms/build.log
+  {{KN}} exec {{DEV_POD_NAME}} -- tail -f /mnt/lustre/tms/build.log
 
 # Delete the dev pod
 dev-stop:
-  {{KN}} delete -f {{DEV_DIR}}/dev-pod.yaml --ignore-not-found=true
+  envsubst < {{DEV_DIR}}/dev-pod.yaml | {{KN}} delete -f - --ignore-not-found=true
+
+# Download model weights to local NVMe on all GPU nodes (apply, wait, cleanup)
+cache-model:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{KN}} delete daemonset model-cache --ignore-not-found=true
+  {{KN}} apply -f {{GB200_DIR}}/model-cache-ds.yaml
+  echo "Waiting for all nodes to finish downloading..."
+  {{KN}} rollout status daemonset/model-cache --timeout=30m
+  echo "All nodes cached. Cleaning up DaemonSet..."
+  {{KN}} delete daemonset model-cache
 
 # Flush vLLM/FlashInfer compile caches on Lustre (run after image or config changes)
 flush-cache:
-  {{KN}} exec vllm-dev -- bash -c 'rm -rf /mnt/lustre/tms/vllm_cache_extdp /mnt/lustre/tms/flashinfer_cache_extdp && echo "Compile caches flushed"'
+  {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/tms/vllm_cache_extdp /mnt/lustre/tms/flashinfer_cache_extdp && echo "Compile caches flushed"'
 
 # Profile all decode pods, copy traces, combine, fix, and open in Finder
 profile:

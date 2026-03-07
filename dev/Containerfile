@@ -1,20 +1,28 @@
-FROM vllm/vllm-openai:cu130-nightly
+FROM nvidia/cuda:13.0.0-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update -y \
-    && apt-get install -y --no-install-recommends ccache \
+    && apt-get install -y --no-install-recommends \
+       ccache git curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install uv and Python 3.12
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+RUN uv python install 3.12 \
+    && ln -s $(uv python find 3.12) /usr/local/bin/python3 \
+    && ln -s $(uv python find 3.12) /usr/bin/python3.12
 
 ENV TORCH_CUDA_ARCH_LIST="9.0a;10.0+PTX" \
     UV_LINK_MODE=copy \
     UV_HTTP_TIMEOUT=500
 
-# Install vLLM build requirements not present in the runtime image
-RUN uv pip install --system cmake ninja \
-    "setuptools>=77.0.3,<81.0.0" \
-    "setuptools-scm>=8" \
-    wheel "jinja2>=3.1.6" \
-    "grpcio-tools==1.78.0"
+# ccache: disable hash_dir since uv builds in random temp dirs
+RUN echo "hash_dir = false" > /etc/ccache.conf
+
+# Install dotfiles (zsh, tmux, neovim, fzf, etc.)
+RUN git clone https://github.com/tlrmchlsmth/dotfiles /root/.dotfiles \
+    && cd /root/.dotfiles && bash install.sh
 
 CMD ["sleep", "infinity"]

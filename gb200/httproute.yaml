@@ -18,7 +18,7 @@ spec:
     matches:
     - path:
         type: PathPrefix
-        value: /v1/
+        value: /
     timeouts:
       backendRequest: "0s"
       request: "0s"

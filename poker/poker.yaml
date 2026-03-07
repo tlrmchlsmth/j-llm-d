@@ -14,11 +14,11 @@ spec:
         - matchExpressions:
           - key: kubernetes.io/arch
             operator: In
-            values: ["amd64"]
+            values: ["arm64", "amd64"]
 
   containers:
     - name: poker
-      image: quay.io/tms/poker:0.0.14
+      image: quay.io/tms/poker:0.0.15
       imagePullPolicy: Always
       stdin: true
       tty: true

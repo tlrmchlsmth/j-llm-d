@@ -22,7 +22,7 @@ spec:
             - matchExpressions:
               - key: kubernetes.io/arch
                 operator: In
-                values: ["amd64"]
+                values: ["arm64", "amd64"]
       # Expand ephemeral port range (default 32768-60999 = ~28K ports) to ~64K
       # and enable reuse of TIME_WAIT ports for outbound connections.
       # Needed when running many workers with high concurrency against the
@@ -30,7 +30,7 @@ spec:
       # connections sit in TIME_WAIT for 60s.
       initContainers:
         - name: sysctl
-          image: quay.io/tms/poker:0.0.14
+          image: quay.io/tms/poker:0.0.15
           command: ["sh", "-c"]
           args:
             - |
@@ -40,7 +40,7 @@ spec:
             privileged: true
       containers:
         - name: poker
-          image: quay.io/tms/poker:0.0.14
+          image: quay.io/tms/poker:0.0.15
           imagePullPolicy: Always
           resources:
             limits:
@@ -52,15 +52,14 @@ spec:
             - |
               exec guidellm benchmark \
                 --target "http://${DEPLOY_NAME}-inference-gateway-istio.${NAMESPACE}.svc.cluster.local" \
-                --rate-type constant \
+                --rate-type concurrent \
+                --rate "${MAX_CONCURRENCY}" \
                 --max-requests "${NUM_REQUESTS}" \
-                --rate "4096" \
                 --rampup 30 \
-                --data '{"prompt_tokens": ${INPUT_LEN},
-                         "output_tokens": ${OUTPUT_LEN}}' \
+                --backend-kwargs '{"timeout": 900}' \
+                --data '{"prompt_tokens": ${INPUT_LEN}, "output_tokens": ${OUTPUT_LEN}}' \
                 --output-path "/tmp/guidellm-${JOB_COMPLETION_INDEX}.json" \
                 --output-sampling 500 \
-                --disable-console-outputs \
                 --disable-progress
 
           env:

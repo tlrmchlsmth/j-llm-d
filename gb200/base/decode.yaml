@@ -172,10 +172,10 @@ spec:
                     --disable_cascade_attn \
                     --enable-eplb \
                     --eplb-config '{"window_size":"100",
-                                    "step_interval":"1000",
-                                    "num_redundant_experts":"64",
+                                    "step_interval":"100",
+                                    "num_redundant_experts":"128",
                                     "log_balancedness":"True",
-                                    "log_balancedness_interval":"100"}' \
+                                    "log_balancedness_interval":"10"}' \
                     --enable-force-include-usage &
                 done
 

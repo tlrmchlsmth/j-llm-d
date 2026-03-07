@@ -187,7 +187,7 @@ After building, deploy with `just start pd load-aware true` to use the dev vLLM 
 - Deployment uses LeaderWorkerSet for multi-host inference coordination
 - Decode pods run 4 vLLM processes per pod (ports 8000-8003) with routing sidecars
 - vLLM API servers can take **7-10 minutes** to start up for large MoE models
-- The poker pod image (`quay.io/tms/poker:0.0.12`) includes vllm bench, GuideILM, lm_eval, and network tools
+- The poker pod image (`quay.io/tms/poker`) includes guidellm, lm_eval, and network tools. **It must be multi-arch (arm64 + amd64)** — always use `just release <version>` from `poker/` to build and push. Never do a single-arch `podman build && podman push`.
 - PyTorch profiling traces are stored in decode pods at `/traces` and copied locally to `./traces/` (gitignored)
 - Decode pod information is cached in `.tmp/decode_pods.txt` to avoid repeated kubectl queries
 - The `profiling/process_traces.py` script aligns traces across pods using deep_ep sync barriers and fixes Perfetto overlapping events

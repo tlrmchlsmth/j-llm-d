@@ -1,4 +1,6 @@
 # Lightweight utility pod for benchmarking and debugging
+# IMPORTANT: This image must be built for BOTH arm64 and amd64.
+# Always use `just release <version>` from this directory — never build/push a single arch.
 FROM ubuntu:24.04
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 WORKDIR /app
@@ -36,7 +38,8 @@ RUN git clone --depth=1 --filter=blob:none https://github.com/tlrmchlsmth/dotfil
     && PIP_BREAK_SYSTEM_PACKAGES=1 bash install.sh \
     && rm -rf .git
 
-# guidellm
+# guidellm (install CPU-only torch first to avoid pulling ~3GB of CUDA libraries)
+RUN uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 RUN uv pip install guidellm
 
 # lm_eval

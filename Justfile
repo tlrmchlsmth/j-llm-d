@@ -159,10 +159,10 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
 
   # Stamp pods with deploy timestamp (forces rollout + visible on pods)
   {{KN}} patch lws {{DEPLOY_NAME}}-decode --type=merge \
-    -p "{\"spec\":{\"leaderWorkerTemplate\":{\"workerTemplate\":{\"metadata\":{\"annotations\":{\"llm-d.ai/deploy-ts\":\"$DEPLOY_TS\"}}}}}}"
+    -p "{\"spec\":{\"leaderWorkerTemplate\":{\"workerTemplate\":{\"metadata\":{\"labels\":{\"llm-d.ai/deploy-ts\":\"$DEPLOY_TS\"}}}}}}"
   if [ "{{MODE}}" = "pd" ]; then
     {{KN}} patch lws {{DEPLOY_NAME}}-prefill --type=merge \
-      -p "{\"spec\":{\"leaderWorkerTemplate\":{\"workerTemplate\":{\"metadata\":{\"annotations\":{\"llm-d.ai/deploy-ts\":\"$DEPLOY_TS\"}}}}}}"
+      -p "{\"spec\":{\"leaderWorkerTemplate\":{\"workerTemplate\":{\"metadata\":{\"labels\":{\"llm-d.ai/deploy-ts\":\"$DEPLOY_TS\"}}}}}}"
   fi
 
   envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/gateway.yaml | {{KN}} apply -f -
@@ -216,6 +216,22 @@ restart MODE='pd' ROUTING='load-aware' DEV='false':
   {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-decode --timeout=30s 2>/dev/null || true
   {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-prefill --timeout=30s 2>/dev/null || true
   just start {{MODE}} {{ROUTING}} {{DEV}}
+
+# Wait for the full stack to be ready (pods + gateway serving)
+ready:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "Waiting for decode pods..."
+  {{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=decode,llm-d.ai/model=DeepSeek-R1-0528-NVFP4-v2 --timeout=600s
+  echo "Waiting for prefill pods..."
+  {{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=prefill,llm-d.ai/model=DeepSeek-R1-0528-NVFP4-v2 --timeout=600s 2>/dev/null || true
+  echo "Waiting for EPP..."
+  {{KN}} wait --for=condition=Ready pod -l inferencepool={{DEPLOY_NAME}}-infpool-epp --timeout=60s
+  echo "Checking gateway..."
+  until {{KN}} exec deploy/{{DEPLOY_NAME}}-infpool-epp -- wget -qO- --timeout=5 http://{{DEPLOY_NAME}}-inference-gateway-istio:80/v1/models 2>/dev/null | grep -q '"id"'; do
+    sleep 2
+  done
+  echo "Ready."
 
 # === Dev Environment ===
 
@@ -393,18 +409,16 @@ grafana:
 prometheus:
   kubectl port-forward -n {{NAMESPACE}} svc/prometheus-server 9090:80 > /dev/null 2>&1 &
 
-# Load llm-d Grafana dashboards
+# Load Grafana dashboards
 load-dashboards:
   #!/usr/bin/env bash
   set -euo pipefail
-  for DASHBOARD_DIR in "llm-d/docs/monitoring/grafana/dashboards" "{{MONITORING_DIR}}"; do
-    for f in "$DASHBOARD_DIR"/*.json; do
-      [ -f "$f" ] || continue
-      NAME=$(basename "$f" .json)
-      echo "Creating ConfigMap for dashboard: $NAME"
-      {{KN}} create configmap "grafana-dashboard-$NAME" --from-file="$NAME.json=$f" --dry-run=client -o yaml | \
-        {{KN}} label -f - --local -o yaml grafana_dashboard=1 | \
-        {{KN}} apply -f -
-    done
+  for f in "{{MONITORING_DIR}}"/*.json; do
+    [ -f "$f" ] || continue
+    NAME=$(basename "$f" .json)
+    echo "Creating ConfigMap for dashboard: $NAME"
+    {{KN}} create configmap "grafana-dashboard-$NAME" --from-file="$NAME.json=$f" --dry-run=client -o yaml | \
+      {{KN}} label -f - --local -o yaml grafana_dashboard=1 | \
+      {{KN}} apply -f -
   done
   echo "Dashboards loaded. Grafana will auto-discover them within 30 seconds."

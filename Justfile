@@ -149,12 +149,21 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
   #!/usr/bin/env bash
   set -euo pipefail
   export DEPLOY_NAME="{{DEPLOY_NAME}}"
+  DEPLOY_TS=$(date +%Y%m%d-%H%M%S)
 
   # Generate wrapper kustomization with user-specific namePrefix
   printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: {{NAME_PREFIX}}-\nresources:\n  - overlays/{{MODE}}\n' \
     > {{GB200_DIR}}/kustomization.yaml
   {{KN}} apply -k {{GB200_DIR}}
   rm -f {{GB200_DIR}}/kustomization.yaml
+
+  # Stamp pods with deploy timestamp (forces rollout + visible on pods)
+  {{KN}} patch lws {{DEPLOY_NAME}}-decode --type=merge \
+    -p "{\"spec\":{\"leaderWorkerTemplate\":{\"workerTemplate\":{\"metadata\":{\"annotations\":{\"llm-d.ai/deploy-ts\":\"$DEPLOY_TS\"}}}}}}"
+  if [ "{{MODE}}" = "pd" ]; then
+    {{KN}} patch lws {{DEPLOY_NAME}}-prefill --type=merge \
+      -p "{\"spec\":{\"leaderWorkerTemplate\":{\"workerTemplate\":{\"metadata\":{\"annotations\":{\"llm-d.ai/deploy-ts\":\"$DEPLOY_TS\"}}}}}}"
+  fi
 
   envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/gateway.yaml | {{KN}} apply -f -
   if [ "{{MODE}}" = "pd" ]; then
@@ -172,22 +181,41 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
         -p '[{"op":"replace","path":"/spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/0","value":{"name":"VLLM_DEV_VENV","value":"{{VLLM_DEV_VENV}}"}}]'
     fi
   fi
+  echo "Deployed $DEPLOY_TS"
 
-stop:
-  helm uninstall {{DEPLOY_NAME}}-infpool -n {{NAMESPACE}} 2>/dev/null || true \
-  && {{KN}} delete httproute {{DEPLOY_NAME}}-route --ignore-not-found=true \
-  && {{KN}} delete gateway {{DEPLOY_NAME}}-inference-gateway --ignore-not-found=true \
-  && {{KN}} delete configmap {{DEPLOY_NAME}}-gateway-options --ignore-not-found=true \
-  && {{KN}} delete service {{DEPLOY_NAME}}-inference-gateway-istio --ignore-not-found=true \
-  && {{KN}} delete lws {{DEPLOY_NAME}}-decode --ignore-not-found=true \
-  && {{KN}} delete lws {{DEPLOY_NAME}}-prefill --ignore-not-found=true \
-  && {{KN}} delete sa {{DEPLOY_NAME}} --ignore-not-found=true \
-  && {{KN}} delete job parallel-guidellm --ignore-not-found=true \
-  && {{KN}} delete job inference-perf --ignore-not-found=true \
-  && {{KN}} delete configmap inference-perf-config --ignore-not-found=true
+stop NOW='false':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  FORCE=""
+  if [ "{{NOW}}" = "true" ]; then
+    FORCE="--grace-period=0 --force"
+  fi
+  # Kill everything in parallel
+  {{KN}} delete lws {{DEPLOY_NAME}}-decode --ignore-not-found=true $FORCE &
+  {{KN}} delete lws {{DEPLOY_NAME}}-prefill --ignore-not-found=true $FORCE &
+  helm uninstall {{DEPLOY_NAME}}-infpool -n {{NAMESPACE}} 2>/dev/null || true &
+  {{KN}} delete httproute {{DEPLOY_NAME}}-route --ignore-not-found=true &
+  {{KN}} delete gateway {{DEPLOY_NAME}}-inference-gateway --ignore-not-found=true &
+  {{KN}} delete service {{DEPLOY_NAME}}-inference-gateway-istio --ignore-not-found=true &
+  {{KN}} delete configmap {{DEPLOY_NAME}}-gateway-options --ignore-not-found=true &
+  {{KN}} delete job parallel-guidellm --ignore-not-found=true $FORCE &
+  {{KN}} delete job inference-perf --ignore-not-found=true $FORCE &
+  {{KN}} delete configmap inference-perf-config --ignore-not-found=true &
+  wait
+  {{KN}} delete sa {{DEPLOY_NAME}} --ignore-not-found=true
 
 restart MODE='pd' ROUTING='load-aware' DEV='false':
-  just stop && just start {{MODE}} {{ROUTING}} {{DEV}}
+  #!/usr/bin/env bash
+  set -euo pipefail
+  # Force-delete LWS to kill pods immediately, then re-apply the full stack.
+  # Non-LWS resources (gateway, httproute, infpool) are updated in place by start.
+  {{KN}} delete lws {{DEPLOY_NAME}}-decode --ignore-not-found=true --grace-period=0 --force &
+  {{KN}} delete lws {{DEPLOY_NAME}}-prefill --ignore-not-found=true --grace-period=0 --force &
+  wait
+  # Ensure pods are actually gone before recreating (force-delete doesn't guarantee it)
+  {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-decode --timeout=30s 2>/dev/null || true
+  {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-prefill --timeout=30s 2>/dev/null || true
+  just start {{MODE}} {{ROUTING}} {{DEV}}
 
 # === Dev Environment ===
 

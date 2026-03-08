@@ -22,6 +22,7 @@ spec:
           llm-d.ai/role: decode
       spec:
         serviceAccountName: wide-ep
+        terminationGracePeriodSeconds: 0
         volumes:
           - name: dshm
             emptyDir:
@@ -184,6 +185,7 @@ spec:
                     #                    "ignore_frontend": "true",
                     #                    "delay_iterations": 5,
                     #                    "max_iterations": 3}' \
+                    #
 
 
                 # If any process exits, kill all and restart pod
@@ -288,11 +290,17 @@ spec:
                 name: vllm-rank3
                 protocol: TCP
             readinessProbe:
-              httpGet:
-                path: /health
-                port: 8000
+              exec:
+                command:
+                  - /bin/bash
+                  - -c
+                  - |
+                    for port in 8000 8001 8002 8003; do
+                      curl -sf http://localhost:$port/health || exit 1
+                    done
               initialDelaySeconds: 60
               periodSeconds: 10
+              failureThreshold: 24
             resources:
               claims:
                 - name: compute-domain-channel

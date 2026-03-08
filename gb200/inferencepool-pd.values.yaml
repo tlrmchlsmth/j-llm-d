@@ -44,7 +44,7 @@ inferenceExtension:
       - type: pd-profile-handler
       - type: weighted-random-picker
         parameters:
-          threshold: 0.9
+          threshold: 0.1
           hashBlockSize: 5
       schedulingProfiles:
       - name: prefill

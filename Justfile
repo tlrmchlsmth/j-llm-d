@@ -5,11 +5,16 @@ NAMESPACE := "vllm"
 HF_TOKEN := "$HF_TOKEN"
 GH_TOKEN := "$GH_TOKEN"
 
-
 KN := "kubectl -n " + NAMESPACE
 
-EXAMPLE_DIR := "llm-d/guides/wide-ep-lws"
-GATEWAY_DIR := "llm-d/guides/recipes/gateway"
+NAME_PREFIX := env("USER", "dev")
+DEPLOY_NAME := NAME_PREFIX + "-wide-ep"
+POKER_NAME := NAME_PREFIX + "-poker"
+DEV_POD_NAME := NAME_PREFIX + "-vllm-dev"
+
+GB200_DIR := "gb200"
+DEV_DIR := "dev"
+MONITORING_DIR := "monitoring"
 
 default:
   just --list
@@ -46,12 +51,16 @@ default:
 @cks-nodes:
   kubectl get nodes -o=custom-columns="NAME:metadata.name,IP:status.addresses[?(@.type=='InternalIP')].address,TYPE:metadata.labels['node\.coreweave\.cloud\/type'],LINK:metadata.labels['ethernet\.coreweave\.cloud/speed'],READY:status.conditions[?(@.type=='Ready')].status,CORDON:spec.unschedulable,TAINT:spec.taints[?(@.key=='qos.coreweave.cloud/interruptable')].effect,RELIABILITY:metadata.labels['node\.coreweave\.cloud\/reliability'],LG:metadata.labels['ib\.coreweave\.cloud\/leafgroup'],VERSION:metadata.labels['node\.coreweave\.cloud\/version'],IB:metadata.labels['ib\.coreweave\.cloud\/speed'],STATE:metadata.labels['node\.coreweave\.cloud\/state'],RESERVED:metadata.labels['node\.coreweave\.cloud\/reserved']"
 
+# Check InfiniBand port health on all GPU (arm64) nodes
+check-ib:
+  ./scripts/check-ib.sh
+
 create-secrets:
   kubectl create secret generic hf-secret --from-literal=HF_TOKEN={{HF_TOKEN}} -n {{NAMESPACE}} \
   && kubectl create secret generic gh-token-secret --from-literal=GH_TOKEN={{GH_TOKEN}} -n {{NAMESPACE}}
 
 start-poker:
-    {{KN}} apply -f poker/poker.yaml
+    POKER_NAME={{POKER_NAME}} envsubst '${POKER_NAME}' < poker/poker.yaml | {{KN}} apply -f -
 
 # Fetch decode pod names and IPs and cache them
 get-decode-pods:
@@ -69,12 +78,12 @@ poke:
   mkdir -p ./.tmp
 
   # Export variables for envsubst
-  export BASE_URL="http://llm-d-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
+  export BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local"
   export NAMESPACE="{{NAMESPACE}}"
 
   envsubst '${BASE_URL} ${NAMESPACE}' < Justfile.remote > .tmp/Justfile.remote.tmp
-  kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/poker:/app/Justfile
-  {{KN}} exec -it poker -- /bin/zsh
+  kubectl cp .tmp/Justfile.remote.tmp {{NAMESPACE}}/{{POKER_NAME}}:/app/Justfile
+  {{KN}} exec -it {{POKER_NAME}} -- /bin/zsh
 
 
 parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_LEN='128' OUTPUT_LEN='1000' N_WORKERS='4':
@@ -85,34 +94,250 @@ parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_
     NUM_REQUESTS={{REQUESTS_PER_WORKER}} \
     INPUT_LEN={{INPUT_LEN}} \
     OUTPUT_LEN={{OUTPUT_LEN}} \
+    DEPLOY_NAME="{{DEPLOY_NAME}}" \
+    NAMESPACE="{{NAMESPACE}}" \
     OUTPUT_PATH="parallel-guidellm-$(date +%Y%m%d-%H%M%S)" \
-    envsubst '${N_WORKERS} ${MAX_CONCURRENCY} ${NUM_REQUESTS} ${INPUT_LEN} ${OUTPUT_LEN} ${OUTPUT_PATH}' \
-      < parallel-guidellm.yaml | kubectl apply -f -
+    envsubst '${N_WORKERS} ${MAX_CONCURRENCY} ${NUM_REQUESTS} ${INPUT_LEN} ${OUTPUT_LEN} ${OUTPUT_PATH} ${DEPLOY_NAME} ${NAMESPACE}' \
+      < parallel-guidellm.yaml | {{KN}} apply -f -
 
-deploy_inferencepool:
-  cd {{EXAMPLE_DIR}} && \
-  helm install llm-d-infpool \
-    -n {{NAMESPACE}} \
-    -f manifests/inferencepool.values.yaml \
-    --set "provider.name=istio" \
-    --set "inferenceExtension.monitoring.prometheus.enabled=true" \
-    oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool --version v1.2.0
+# Run inference-perf benchmark (kubernetes-sigs/inference-perf)
+# Uses concurrent load type: each worker maintains WORKER_MAX_CONCURRENCY in-flight requests
+inference-perf NUM_REQUESTS='25000' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKERS='2' WORKER_MAX_CONCURRENCY='2048' WARMUP_CONCURRENCY='64' WARMUP_REQUESTS='256':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  INPUT_MEAN={{INPUT_LEN}}
+  OUTPUT_MEAN={{OUTPUT_LEN}}
+  export NUM_REQUESTS={{NUM_REQUESTS}}
+  export NUM_WORKERS={{NUM_WORKERS}}
+  export WORKER_MAX_CONCURRENCY={{WORKER_MAX_CONCURRENCY}}
+  export CONCURRENCY=$((NUM_WORKERS * WORKER_MAX_CONCURRENCY))
+  export WARMUP_CONCURRENCY={{WARMUP_CONCURRENCY}}
+  export WARMUP_REQUESTS={{WARMUP_REQUESTS}}
+  export DEPLOY_NAME="{{DEPLOY_NAME}}"
+  export INPUT_MEAN INPUT_MIN=$((INPUT_MEAN - INPUT_MEAN/5)) INPUT_MAX=$((INPUT_MEAN + INPUT_MEAN/5)) INPUT_STD=$((INPUT_MEAN/10))
+  export OUTPUT_MEAN OUTPUT_MIN=$((OUTPUT_MEAN - OUTPUT_MEAN/5)) OUTPUT_MAX=$((OUTPUT_MEAN + OUTPUT_MEAN/5)) OUTPUT_STD=$((OUTPUT_MEAN/10))
+  {{KN}} delete job inference-perf --ignore-not-found=true
+  {{KN}} delete configmap inference-perf-config --ignore-not-found=true
+  envsubst '${DEPLOY_NAME} ${NUM_REQUESTS} ${NUM_WORKERS} ${WORKER_MAX_CONCURRENCY} ${CONCURRENCY} ${WARMUP_CONCURRENCY} ${WARMUP_REQUESTS} ${INPUT_MEAN} ${INPUT_MIN} ${INPUT_MAX} ${INPUT_STD} ${OUTPUT_MEAN} ${OUTPUT_MIN} ${OUTPUT_MAX} ${OUTPUT_STD}' \
+    < inference-perf-job.yaml | {{KN}} apply -f -
+  echo "inference-perf job submitted (concurrent, workers=${NUM_WORKERS} concurrency=${CONCURRENCY} warmup=${WARMUP_CONCURRENCY}x${WARMUP_REQUESTS} requests=${NUM_REQUESTS} input=${INPUT_MEAN} output=${OUTPUT_MEAN})"
+  echo "  kubectl -n {{NAMESPACE}} logs -f job/inference-perf"
 
-start:
-  cd {{EXAMPLE_DIR}} \
-  && {{KN}} apply -k ./manifests/modelserver/coreweave \
-  && just deploy_inferencepool \
-  && {{KN}} apply -k ../../recipes/gateway/istio
+# Get inference-perf results
+inference-perf-logs:
+  {{KN}} logs -f job/inference-perf
 
-stop:
-  cd {{EXAMPLE_DIR}} \
-  && helm uninstall llm-d-infpool -n {{NAMESPACE}} --ignore-not-found=true \
-  && {{KN}} delete -k ./manifests/modelserver/coreweave --ignore-not-found=true \
-  && {{KN}} delete -k ../../recipes/gateway/istio --ignore-not-found=true \
-  && {{KN}} delete job parallel-guidellm --ignore-not-found=true
+deploy_inferencepool ROUTING='load-aware':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  mkdir -p ./.tmp
+  export DEPLOY_NAME="{{DEPLOY_NAME}}"
+  envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/inferencepool-{{ROUTING}}.values.yaml > .tmp/inferencepool-values.yaml
+  helm upgrade --install {{DEPLOY_NAME}}-infpool \
+    oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
+    --version v1.2.0 \
+    -f .tmp/inferencepool-values.yaml \
+    -n {{NAMESPACE}}
 
-restart:
-  just stop && just start
+VLLM_DEV_VENV := "/mnt/lustre/tms/vllm-venv"
+VLLM_DEV_SRC := "/mnt/lustre/tms/vllm-dev"
+VLLM_DEV_REMOTE := "https://github.com/vllm-project/vllm.git"
+VLLM_DEV_BRANCH := "main"
+VLLM_BUILD_JOBS := "16"
+
+start MODE='pd' ROUTING='load-aware' DEV='false':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  export DEPLOY_NAME="{{DEPLOY_NAME}}"
+  DEPLOY_TS=$(date +%Y%m%d-%H%M%S)
+
+  # Generate wrapper kustomization with user-specific namePrefix
+  printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: {{NAME_PREFIX}}-\nresources:\n  - overlays/{{MODE}}\n' \
+    > {{GB200_DIR}}/kustomization.yaml
+  {{KN}} apply -k {{GB200_DIR}}
+  rm -f {{GB200_DIR}}/kustomization.yaml
+
+  # Stamp pods with deploy timestamp (forces rollout + visible on pods)
+  {{KN}} patch lws {{DEPLOY_NAME}}-decode --type=merge \
+    -p "{\"spec\":{\"leaderWorkerTemplate\":{\"workerTemplate\":{\"metadata\":{\"labels\":{\"llm-d.ai/deploy-ts\":\"$DEPLOY_TS\"}}}}}}"
+  if [ "{{MODE}}" = "pd" ]; then
+    {{KN}} patch lws {{DEPLOY_NAME}}-prefill --type=merge \
+      -p "{\"spec\":{\"leaderWorkerTemplate\":{\"workerTemplate\":{\"metadata\":{\"labels\":{\"llm-d.ai/deploy-ts\":\"$DEPLOY_TS\"}}}}}}"
+  fi
+
+  envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/gateway.yaml | {{KN}} apply -f -
+  if [ "{{MODE}}" = "pd" ]; then
+    just deploy_inferencepool pd
+  else
+    just deploy_inferencepool {{ROUTING}}
+  fi
+  envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/httproute.yaml | {{KN}} apply -f -
+  if [ "{{DEV}}" = "true" ]; then
+    echo "Patching for dev mode (VLLM_DEV_VENV={{VLLM_DEV_VENV}})..."
+    {{KN}} patch lws {{DEPLOY_NAME}}-decode --type=json \
+      -p '[{"op":"replace","path":"/spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/0","value":{"name":"VLLM_DEV_VENV","value":"{{VLLM_DEV_VENV}}"}}]'
+    if [ "{{MODE}}" = "pd" ]; then
+      {{KN}} patch lws {{DEPLOY_NAME}}-prefill --type=json \
+        -p '[{"op":"replace","path":"/spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/0","value":{"name":"VLLM_DEV_VENV","value":"{{VLLM_DEV_VENV}}"}}]'
+    fi
+  fi
+  echo "Deployed $DEPLOY_TS"
+
+stop NOW='false':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  FORCE=""
+  if [ "{{NOW}}" = "true" ]; then
+    FORCE="--grace-period=0 --force"
+  fi
+  # Kill everything in parallel
+  {{KN}} delete lws {{DEPLOY_NAME}}-decode --ignore-not-found=true $FORCE &
+  {{KN}} delete lws {{DEPLOY_NAME}}-prefill --ignore-not-found=true $FORCE &
+  helm uninstall {{DEPLOY_NAME}}-infpool -n {{NAMESPACE}} 2>/dev/null || true &
+  {{KN}} delete httproute {{DEPLOY_NAME}}-route --ignore-not-found=true &
+  {{KN}} delete gateway {{DEPLOY_NAME}}-inference-gateway --ignore-not-found=true &
+  {{KN}} delete service {{DEPLOY_NAME}}-inference-gateway-istio --ignore-not-found=true &
+  {{KN}} delete configmap {{DEPLOY_NAME}}-gateway-options --ignore-not-found=true &
+  {{KN}} delete job parallel-guidellm --ignore-not-found=true $FORCE &
+  {{KN}} delete job inference-perf --ignore-not-found=true $FORCE &
+  {{KN}} delete configmap inference-perf-config --ignore-not-found=true &
+  wait
+  {{KN}} delete sa {{DEPLOY_NAME}} --ignore-not-found=true
+
+restart MODE='pd' ROUTING='load-aware' DEV='false':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  # Force-delete LWS to kill pods immediately, then re-apply the full stack.
+  # Non-LWS resources (gateway, httproute, infpool) are updated in place by start.
+  {{KN}} delete lws {{DEPLOY_NAME}}-decode --ignore-not-found=true --grace-period=0 --force &
+  {{KN}} delete lws {{DEPLOY_NAME}}-prefill --ignore-not-found=true --grace-period=0 --force &
+  wait
+  # Ensure pods are actually gone before recreating (force-delete doesn't guarantee it)
+  {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-decode --timeout=30s 2>/dev/null || true
+  {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-prefill --timeout=30s 2>/dev/null || true
+  just start {{MODE}} {{ROUTING}} {{DEV}}
+
+# Wait for the full stack to be ready (pods + gateway serving)
+ready:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "Waiting for decode pods..."
+  {{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=decode,llm-d.ai/model=DeepSeek-R1-0528-NVFP4-v2 --timeout=600s
+  echo "Waiting for prefill pods..."
+  {{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=prefill,llm-d.ai/model=DeepSeek-R1-0528-NVFP4-v2 --timeout=600s 2>/dev/null || true
+  echo "Waiting for EPP..."
+  {{KN}} wait --for=condition=Ready pod -l inferencepool={{DEPLOY_NAME}}-infpool-epp --timeout=60s
+  echo "Checking gateway..."
+  until {{KN}} exec deploy/{{DEPLOY_NAME}}-infpool-epp -- wget -qO- --timeout=5 http://{{DEPLOY_NAME}}-inference-gateway-istio:80/v1/models 2>/dev/null | grep -q '"id"'; do
+    sleep 2
+  done
+  echo "Ready."
+
+# === Dev Environment ===
+
+# Deploy the persistent dev pod (CPU-only, for editing/compiling vLLM on Lustre)
+dev-start:
+  envsubst < {{DEV_DIR}}/dev-pod.yaml | {{KN}} apply -f -
+  {{KN}} wait --for=condition=Ready pod/{{DEV_POD_NAME}} --timeout=300s
+
+# Exec into the dev pod
+dev:
+  {{KN}} exec -it {{DEV_POD_NAME}} -- /bin/zsh
+
+# Build vLLM from source on Lustre (runs in background, survives disconnects)
+dev-build REMOTE=VLLM_DEV_REMOTE BRANCH=VLLM_DEV_BRANCH JOBS=VLLM_BUILD_JOBS:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{KN}} exec -i {{DEV_POD_NAME}} -- bash <<'EOF'
+  set -euo pipefail
+
+  # ensure venv python points to /usr/bin/python3.12 (works in both dev and runtime images)
+  VENV_PYTHON="{{VLLM_DEV_VENV}}/bin/python"
+  if [ "$(readlink "$VENV_PYTHON")" != "/usr/bin/python3.12" ]; then
+    echo "Repointing venv python: $(readlink "$VENV_PYTHON") -> /usr/bin/python3.12"
+    ln -sf /usr/bin/python3.12 "$VENV_PYTHON"
+  fi
+
+  source {{VLLM_DEV_VENV}}/bin/activate
+  cd {{VLLM_DEV_SRC}}
+
+  # fetch and reset to requested branch
+  git remote set-url origin {{REMOTE}}
+  git fetch origin
+  git checkout {{BRANCH}}
+  git reset --hard origin/{{BRANCH}}
+
+  # build in background
+  MAX_JOBS={{JOBS}} nohup uv pip install --no-deps --no-build-isolation -e . \
+    > /mnt/lustre/tms/build.log 2>&1 &
+
+  echo "Build started ({{REMOTE}} {{BRANCH}}, jobs={{JOBS}}), follow with: just dev-build-log"
+  EOF
+
+# Tail the dev build log
+dev-build-log:
+  {{KN}} exec {{DEV_POD_NAME}} -- tail -f /mnt/lustre/tms/build.log
+
+# Delete the dev pod
+dev-stop:
+  envsubst < {{DEV_DIR}}/dev-pod.yaml | {{KN}} delete -f - --ignore-not-found=true
+
+# Download model weights to local NVMe on all GPU nodes (apply, wait, cleanup)
+cache-model:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{KN}} delete daemonset model-cache --ignore-not-found=true
+  {{KN}} apply -f {{GB200_DIR}}/model-cache-ds.yaml
+  echo "Waiting for all nodes to finish downloading..."
+  {{KN}} rollout status daemonset/model-cache --timeout=30m
+  echo "All nodes cached. Cleaning up DaemonSet..."
+  {{KN}} delete daemonset model-cache
+
+# Flush vLLM/FlashInfer compile caches on Lustre (run after image or config changes)
+flush-cache:
+  {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/tms/vllm_cache_extdp /mnt/lustre/tms/flashinfer_cache_extdp && echo "Compile caches flushed"'
+
+# Profile all decode pods, copy traces, combine, fix, and open in Finder
+profile:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  # Get decode pod IPs
+  DECODE_IPS=$({{KN}} get pods -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | .status.podIP' | tr '\n' ' ')
+  if [[ -z "$DECODE_IPS" ]]; then
+    echo "No decode pods found"
+    exit 1
+  fi
+  PORTS="8200 8201 8202 8203"
+
+  echo "Starting profile on all decode ranks..."
+  {{KN}} exec {{POKER_NAME}} -- bash -c "
+    for IP in $DECODE_IPS; do
+      for PORT in $PORTS; do
+        curl -s -X POST http://\$IP:\$PORT/start_profile &
+      done
+    done
+    wait
+  "
+
+  echo "Waiting for profiles to complete..."
+  {{KN}} exec {{POKER_NAME}} -- bash -c "
+    for IP in $DECODE_IPS; do
+      for PORT in $PORTS; do
+        echo \"  Stopping \$IP:\$PORT...\"
+        curl -s -X POST http://\$IP:\$PORT/stop_profile
+      done
+    done
+  "
+
+  echo "Copying and processing traces..."
+  just get-decode-pods
+  just copy-traces
+  TRACE_DIR=$(ls -d ./traces/[0-9]* 2>/dev/null | sort -t/ -k3 -n | tail -1)
+  N=$(basename "$TRACE_DIR")
+  just process-traces "$N"
+  echo "Opening $TRACE_DIR"
+  open "$TRACE_DIR"
 
 # Copy PyTorch traces from all decode pods to local ./traces/N directory
 copy-traces:
@@ -121,7 +346,6 @@ copy-traces:
 
   # Ensure we have fresh pod info
   if [ ! -f .tmp/decode_pods.txt ]; then
-    echo "Pod info not cached, fetching..."
     just get-decode-pods
   fi
 
@@ -143,7 +367,58 @@ copy-traces:
     {{KN}} cp "$POD_NAME:/traces" "$POD_DIR" 2>/dev/null || echo "  No traces found in $POD_NAME or copy failed"
   done < .tmp/decode_pods.txt
 
+  # Remove empty pod directories (pods that had no traces)
+  find "$TRACE_DIR" -maxdepth 1 -type d -empty -delete 2>/dev/null || true
+
   echo "Traces copied to $TRACE_DIR"
   if [ -d "$TRACE_DIR" ]; then
     echo "Total size: $(du -sh $TRACE_DIR | cut -f1)"
   fi
+  echo "Run 'just process-traces $N' to combine and fix for Perfetto"
+
+# Combine per-rank traces and fix Perfetto overlaps
+process-traces N='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  N="{{N}}"
+  if [ -z "$N" ]; then
+    N=$(ls -d ./traces/[0-9]* 2>/dev/null | sort -t/ -k3 -n | tail -1 | xargs basename 2>/dev/null)
+    if [ -z "$N" ]; then
+      echo "No trace directories found in ./traces/"
+      exit 1
+    fi
+  fi
+  echo "Processing traces/$N ..."
+  python3 profiling/process_traces.py "traces/$N"
+
+# === Monitoring ===
+
+# Install Prometheus and Grafana (namespace-scoped, no cluster permissions needed)
+start-monitoring:
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update && helm repo add grafana https://grafana.github.io/helm-charts --force-update && helm repo update && kubectl apply -f {{MONITORING_DIR}}/prometheus-rbac.yaml && kubectl apply -f {{MONITORING_DIR}}/grafana-rbac.yaml && helm upgrade --install prometheus prometheus-community/prometheus -n {{NAMESPACE}} -f {{MONITORING_DIR}}/prometheus-values.yaml --set rbac.create=false --set serviceAccounts.server.create=false && helm upgrade --install grafana grafana/grafana -n {{NAMESPACE}} -f {{MONITORING_DIR}}/grafana-values.yaml --set rbac.create=false
+
+# Uninstall monitoring stack
+stop-monitoring:
+  helm uninstall prometheus -n {{NAMESPACE}} --ignore-not-found && helm uninstall grafana -n {{NAMESPACE}} --ignore-not-found && kubectl delete -f {{MONITORING_DIR}}/prometheus-rbac.yaml --ignore-not-found && kubectl delete -f {{MONITORING_DIR}}/grafana-rbac.yaml --ignore-not-found
+
+# Port-forward Grafana to localhost:3000 (background)
+grafana:
+  kubectl port-forward -n {{NAMESPACE}} svc/grafana 3000:80 > /dev/null 2>&1 &
+
+# Port-forward Prometheus to localhost:9090 (background)
+prometheus:
+  kubectl port-forward -n {{NAMESPACE}} svc/prometheus-server 9090:80 > /dev/null 2>&1 &
+
+# Load Grafana dashboards
+load-dashboards:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  for f in "{{MONITORING_DIR}}"/*.json; do
+    [ -f "$f" ] || continue
+    NAME=$(basename "$f" .json)
+    echo "Creating ConfigMap for dashboard: $NAME"
+    {{KN}} create configmap "grafana-dashboard-$NAME" --from-file="$NAME.json=$f" --dry-run=client -o yaml | \
+      {{KN}} label -f - --local -o yaml grafana_dashboard=1 | \
+      {{KN}} apply -f -
+  done
+  echo "Dashboards loaded. Grafana will auto-discover them within 30 seconds."

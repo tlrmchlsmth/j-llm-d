@@ -15,51 +15,51 @@ spec:
         app: poker
     spec:
       restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values: ["arm64", "amd64"]
+      # Expand ephemeral port range (default 32768-60999 = ~28K ports) to ~64K
+      # and enable reuse of TIME_WAIT ports for outbound connections.
+      # Needed when running many workers with high concurrency against the
+      # same gateway — each connection holds an ephemeral port, and closed
+      # connections sit in TIME_WAIT for 60s.
+      initContainers:
+        - name: sysctl
+          image: quay.io/tms/poker:0.0.15
+          command: ["sh", "-c"]
+          args:
+            - |
+              sysctl -w net.ipv4.ip_local_port_range='1024 65535'
+              sysctl -w net.ipv4.tcp_tw_reuse=1
+          securityContext:
+            privileged: true
       containers:
         - name: poker
-          image: quay.io/tms/poker:0.0.10
+          image: quay.io/tms/poker:0.0.15
           imagePullPolicy: Always
           resources:
             limits:
-              cpu: "16"
-              memory: "64Gi"
+              cpu: "4"
+              memory: "24Gi"
 
           command: ["/bin/bash","-c"]
           args:
             - |
-              # These are poorly behaved.
-              #  --warmup-percent "0.20" \
-              #  --cooldown-percent "0.20" \
-              
-              mkdir -p /guide-llm/${OUTPUT_PATH}
-
-              # For experiment tracking
-              echo "GUIDELLM__MAX_CONCURRENCY=${GUIDELLM__MAX_CONCURRENCY}" > /guide-llm/${OUTPUT_PATH}/cmd
-              echo "GUIDELLM__REQUEST_TIMEOUT=${GUIDELLM__REQUEST_TIMEOUT}" >> /guide-llm/${OUTPUT_PATH}/cmd
-              echo "exec guidellm benchmark \
-                --target "http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local" \
-                --rate-type constant \
-                --max-requests "${NUM_REQUESTS}" \
-                --rate "1024" \
-                --data '{"prompt_tokens": ${INPUT_LEN}, 
-                         "output_tokens": ${OUTPUT_LEN}}' \
-                --output-path "/guide-llm/${OUTPUT_PATH}/${JOB_COMPLETION_INDEX}.json" \
-                --output-sampling 500 \
-                --disable-console-outputs \
-                --disable-progress" >> /guide-llm/${OUTPUT_PATH}/cmd
-
-
-              
               exec guidellm benchmark \
-                --target "http://wide-ep-inference-gateway-istio.tms-llm-d-wide-ep.svc.cluster.local" \
-                --rate-type constant \
+                --target "http://${DEPLOY_NAME}-inference-gateway-istio.${NAMESPACE}.svc.cluster.local" \
+                --rate-type concurrent \
+                --rate "${MAX_CONCURRENCY}" \
                 --max-requests "${NUM_REQUESTS}" \
-                --rate "1024" \
-                --data '{"prompt_tokens": ${INPUT_LEN}, 
-                         "output_tokens": ${OUTPUT_LEN}}' \
-                --output-path "/guide-llm/${OUTPUT_PATH}/${JOB_COMPLETION_INDEX}.json" \
+                --rampup 30 \
+                --backend-kwargs '{"timeout": 900}' \
+                --data '{"prompt_tokens": ${INPUT_LEN}, "output_tokens": ${OUTPUT_LEN}}' \
+                --output-path "/tmp/guidellm-${JOB_COMPLETION_INDEX}.json" \
                 --output-sampling 500 \
-                --disable-console-outputs \
                 --disable-progress
 
           env:
@@ -73,11 +73,4 @@ spec:
                   name: hf-secret
                   key: HF_TOKEN
                   optional: true
-          volumeMounts:
-            - name: guide-llm
-              mountPath: /guide-llm
 
-      volumes:
-        - name: guide-llm
-          persistentVolumeClaim:
-            claimName: guide-llm

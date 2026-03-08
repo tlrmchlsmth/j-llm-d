@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: model-cache
+spec:
+  selector:
+    matchLabels:
+      app: model-cache
+  template:
+    metadata:
+      labels:
+        app: model-cache
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      initContainers:
+        - name: download
+          image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          command: ["/bin/sh", "-c"]
+          args:
+            - huggingface-cli download nvidia/DeepSeek-R1-0528-NVFP4-v2
+          env:
+            - name: HF_HOME
+              value: /mnt/local/hf_cache
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-secret
+                  key: HF_TOKEN
+                  optional: true
+          volumeMounts:
+            - mountPath: /mnt/local
+              name: local-nvme
+          resources:
+            requests:
+              cpu: 2
+              memory: 4Gi
+            limits:
+              cpu: 2
+              memory: 4Gi
+      containers:
+        - name: idle
+          image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              cpu: 1m
+              memory: 16Mi
+            limits:
+              cpu: 1m
+              memory: 16Mi
+      volumes:
+        - name: local-nvme
+          hostPath:
+            path: /mnt/numa0
+            type: Directory

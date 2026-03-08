@@ -1,0 +1,73 @@
+# ConfigMap for customizing the Istio-generated gateway deployment.
+# Istio reconciles the deployment from the Gateway resource, so direct
+# kubectl patches get overwritten. parametersRef is the stable way to
+# inject resource limits, affinity, etc.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ${DEPLOY_NAME}-gateway-options
+data:
+  deployment: |
+    spec:
+      template:
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: ["amd64"]
+          containers:
+          - name: istio-proxy
+            resources:
+              requests:
+                cpu: "8"
+                memory: 16Gi
+              limits:
+                cpu: "8"
+                memory: 16Gi
+---
+# Gateway for GB200 decode-bench deployment
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ${DEPLOY_NAME}-inference-gateway
+  labels:
+    istio.io/enable-inference-extproc: "true"
+spec:
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: ${DEPLOY_NAME}-gateway-options
+  gatewayClassName: istio
+  listeners:
+  - name: default
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Same
+---
+# Service for the gateway (Istio doesn't always auto-create this)
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${DEPLOY_NAME}-inference-gateway-istio
+  labels:
+    gateway.networking.k8s.io/gateway-name: ${DEPLOY_NAME}-inference-gateway
+    istio.io/enable-inference-extproc: "true"
+spec:
+  selector:
+    gateway.networking.k8s.io/gateway-name: ${DEPLOY_NAME}-inference-gateway
+  ports:
+  - name: status-port
+    port: 15021
+    protocol: TCP
+    targetPort: 15021
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: 8080

@@ -13,7 +13,7 @@ spec:
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 8
+    size: 4
     workerTemplate:
       metadata:
         labels:
@@ -176,7 +176,7 @@ spec:
                                     "step_interval":"100",
                                     "num_redundant_experts":"128",
                                     "log_balancedness":"True",
-                                    "log_balancedness_interval":"10"}' \
+                                    "log_balancedness_interval":"100"}' \
                     --enable-force-include-usage &
                 done
 
@@ -296,11 +296,10 @@ spec:
                   - -c
                   - |
                     for port in 8000 8001 8002 8003; do
-                      curl -sf http://localhost:$port/health || exit 1
+                      curl -sf http://localhost:$port/v1/models | grep -q '"id"' || exit 1
                     done
-              initialDelaySeconds: 60
-              periodSeconds: 10
-              failureThreshold: 24
+              periodSeconds: 5
+              failureThreshold: 60
             resources:
               claims:
                 - name: compute-domain-channel

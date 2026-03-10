@@ -41,3 +41,7 @@ build/
 # Logs
 *.log
 logs/
+
+# Trace files
+decode_only_trace/
+*.trace.json.gz

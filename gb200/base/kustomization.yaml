@@ -7,9 +7,10 @@ resources:
 configurations:
   - kustomize-config.yaml
 
-configMapGenerator:
-  - name: jit-build-scripts
-    options:
-      disableNameSuffixHash: true
-    files:
-      - jit_mla_rope_quant.py
+#configMapGenerator:
+#  - name: jit-build-scripts
+#    options:
+#      disableNameSuffixHash: true
+#    files:
+#      - jit_mla_rope_quant.py
+#      - jit_mla_absorption_bmm.py

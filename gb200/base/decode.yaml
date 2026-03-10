@@ -9,7 +9,7 @@ metadata:
 spec:
   replicas: 1
   leaderWorkerTemplate:
-    size: 4
+    size: 8
     workerTemplate:
       metadata:
         labels:
@@ -99,8 +99,7 @@ spec:
               allowPrivilegeEscalation: false
         containers:
           - name: vllm
-            #image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
-            image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
+            image: quay.io/rh-ee-ecrncevi/llm-dev-cuda13:v0.5.0-arm64-upstream-941e52c29813ed75b3382f2a0d74ad5f168fc046
             securityContext:
               capabilities:
                 add:
@@ -114,54 +113,94 @@ spec:
               - -c
             args:
               - |-
+                set -e
                 #################
-                # RUN vLLM with external DP load balancing
-                # TP_SIZE controls tensor parallelism (GPUs per DP rank)
-                # DP_SIZE_LOCAL is derived: 4 GPUs / TP_SIZE
+                # RUN vLLM decode-bench with external DP load balancing
+                # Launches 4 independent vLLM processes (one per GPU)
                 # Routing sidecar maps port 800X -> localhost:820X
                 #################
-                # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
-                if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
-                  echo "Using dev venv at ${VLLM_DEV_VENV}"
-                  source "${VLLM_DEV_VENV}/bin/activate"
-                else
-                  source /opt/vllm/bin/activate
-                fi
+                START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
 
+                # Forward logs to Lustre for crash debugging
+                LOG_DIR="/mnt/lustre/vllm-vlm-elvircrn/logs/decode-bench"
+                mkdir -p $LOG_DIR
+                LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d_%H%M%S).log"
+                exec > >(tee -a "$LOG_FILE") 2>&1
+                echo "=== Decode-bench worker starting at $(date) ==="
+                source /opt/vllm/bin/activate
                 uv pip uninstall pplx-kernels
 
-                # Cherry-pick NVFP4 EPLB contiguity fix (https://github.com/vllm-project/vllm/pull/34646)
+                # Cherry-pick NVFP4 EPLB contiguity fix
                 cd /opt/vllm-source
-                git remote add elvircrn https://github.com/elvircrn/vllm.git 2>/dev/null || true
+                git remote add elvircrn https://github.com/elvircrn/vllm.git
                 git fetch elvircrn fix-eplb-nvfp4-contiguous
                 git fetch elvircrn mla-fused-concat-quant
                 git fetch elvircrn gb200_fused_op
                 git fetch elvircrn gb200_working_fused_rope
                 git fetch elvircrn gb200_working
                 git fetch elvircrn gemm2-combine-overlap
-                # git cherry-pick --no-commit 00a944ef8e
-
-                # Q_b proj PR
-                git cherry-pick --no-commit 24ae04cb7a
+                git remote add centml https://github.com/CentML/vllm.git
+                git fetch centml wzhao/moe-a2a
                 
-                # GEMM Overlap
-                git cherry-pick --no-commit 8a30cbc503
+                # Disabled for now
+                # git fetch elvircrn eplb-fix-outdated
+                # git cherry-pick --no-commit 00a944ef8e
+                # git cherry-pick --no-commit a0b972fd1
+                
+                # Q_b proj PR
+                # Needs rebase
+                # git cherry-pick --no-commit 24ae04cb7a
+                
+                # GEMM2-combine two-stream overlap (single squashed commit)
+                # git cherry-pick --no-commit 7cb5e86cba
 
                 # Yank ropequant from FlashInfer into vLLM tree
-                git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
-                git cherry-pick --no-commit 782ef44e4a1512297f05314eb85f18c1573307f2
-                git cherry-pick --no-commit 8af5bb313d8efed3d1fc0ff501ea723813313470
-                # Fused RoPE+FP8 quant + KV cache scatter-write (split 2K)
-                git cherry-pick --no-commit 13b2949ac4
-                # Dual-stream: aux_stream() singleton for cudagraph compat
-                git cherry-pick --no-commit b16ecc1647
-                echo "=== JIT-compiling mla_rope_quant at $(date) ==="
-                python tools/jit_mla_rope_quant.py
-                sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py
-                sed -i 's/torch\.ops\._C\.mla_rope_quantize_fp8/mla_rope_quant_ext.mla_rope_quantize_fp8/g' vllm/_custom_ops.py
-                sed -i 's/torch\.ops\._C\.mla_fused_cache_/mla_rope_quant_ext.mla_fused_cache_/g' vllm/_custom_ops.py
-                export PYTHONPATH=/tmp/jit_build/mla_rope_quant:${PYTHONPATH:-}
-                echo "=== JIT build complete at $(date) ==="
+                # git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
+                # git cherry-pick --no-commit 782ef44e4a1512297f05314eb85f18c1573307f2
+                # git cherry-pick --no-commit 8af5bb313d8efed3d1fc0ff501ea723813313470
+                # # Fused RoPE+FP8 quant + KV cache scatter-write (split 2K)
+                # git cherry-pick --no-commit 13b2949ac4
+                # # Dual-stream: aux_stream() singleton for cudagraph compat
+                # git cherry-pick --no-commit b16ecc1647
+                
+                
+                
+                
+                
+                # BF16×BF16→FP8 CUTLASS absorption BMM (strided TMA, rope+nope overlap)
+                # git cherry-pick --no-commit f21c694a27
+                
+                
+                
+                
+                # FlashInfer MoE A2A kernel (PR #36022)
+                git cherry-pick --no-commit 1897f159f2
+                git cherry-pick --no-commit 3e26d15acb
+                git cherry-pick --no-commit 6ebc00ea5d
+                git cherry-pick --no-commit 2661092a11
+                git cherry-pick --no-commit b74eaa332c
+                git cherry-pick --no-commit 8c11d32152
+                git cherry-pick --no-commit eec985e8f3
+                git cherry-pick --no-commit 7506131783
+                # Fix int64 -> int32 dtype mismatch for tokenSelectedExperts
+                sed -i 's/token_selected_experts=topk_ids,/token_selected_experts=topk_ids.to(torch.int32),/' \
+                  vllm/model_executor/layers/fused_moe/prepare_finalize/flashinfer_moe_a2a.py
+
+
+                # echo "=== JIT-compiling mla_rope_quant at $(date) ==="
+                # python tools/jit_mla_rope_quant.py
+                # sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py
+                # sed -i 's/torch\.ops\._C\.mla_rope_quantize_fp8/mla_rope_quant_ext.mla_rope_quantize_fp8/g' vllm/_custom_ops.py
+                # sed -i 's/torch\.ops\._C\.mla_fused_cache_/mla_rope_quant_ext.mla_fused_cache_/g' vllm/_custom_ops.py
+                # export PYTHONPATH=/tmp/jit_build/mla_rope_quant:${PYTHONPATH:-}
+                # echo "=== JIT rope_quant build complete at $(date) ==="
+
+                # echo "=== JIT-compiling mla_absorption_bmm at $(date) ==="
+                # python tools/jit_mla_absorption_bmm.py
+                # sed -i '1s/^/import mla_absorption_bmm_ext\n/' vllm/_custom_ops.py
+                # sed -i 's/torch\.ops\._C\.mla_absorption_bmm_bf16/mla_absorption_bmm_ext.mla_absorption_bmm_bf16/g' vllm/_custom_ops.py
+                # export PYTHONPATH=/tmp/jit_build/mla_absorption_bmm:${PYTHONPATH:-}
+                # echo "=== JIT absorption_bmm build complete at $(date) ==="
 
                 # Derive batch-size-dependent env vars from MAX_TOKENS
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
@@ -191,10 +230,11 @@ spec:
                     --async-scheduling \
                     --max-cudagraph-capture-size 8192 \
                     --max-num-batched-tokens 8192 \
-                    --all2all-backend "deepep_low_latency" \
+                    --all2all-backend "flashinfer_moe_a2a" \
                     --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
                     --enable-force-include-usage &
                 done
+                
 
                 # If any process exits, kill all and restart pod
                 wait -n
@@ -218,6 +258,18 @@ spec:
               # Enable on-demand profiling via /start_profile and /stop_profile
               - name: VLLM_TORCH_PROFILER_DIR
                 value: "/traces"
+
+              # JIT build parallelism
+              - name: MAX_JOBS
+                value: "64"
+              - name: CMAKE_BUILD_PARALLEL_LEVEL
+                value: "64"
+              - name: MAKEFLAGS
+                value: "-j64"
+              - name: NVCC_THREADS
+                value: "64"
+              - name: CUDA_HOME
+                value: "/usr/local/cuda-13"
 
               # HuggingFace token and cache location
               - name: HF_TOKEN
@@ -250,6 +302,9 @@ spec:
                 value: "1"
 
               - name: VLLM_MLA_FUSED_ROPE_CACHE
+                value: "1"
+
+              - name: VLLM_MLA_FUSED_ABSORPTION
                 value: "1"
 
               - name: VLLM_DEEPEP_COMBINE_GEMM2_OVERLAP
@@ -334,8 +389,12 @@ spec:
                 name: dshm
               - mountPath: /mnt/lustre/vllm-vlm-elvircrn
                 name: lustre
-              - name: jit-build-scripts
-                mountPath: /opt/vllm-source/tools/jit_mla_rope_quant.py
-                subPath: jit_mla_rope_quant.py
-                readOnly: true
+              # - name: jit-build-scripts
+              #   mountPath: /opt/vllm-source/tools/jit_mla_rope_quant.py
+              #   subPath: jit_mla_rope_quant.py
+              #   readOnly: true
+              # - name: jit-build-scripts
+              #   mountPath: /opt/vllm-source/tools/jit_mla_absorption_bmm.py
+              #   subPath: jit_mla_absorption_bmm.py
+              #   readOnly: true
             workingDir: /code

@@ -110,7 +110,7 @@ spec:
 
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
+            image: quay.io/rh-ee-ecrncevi/llm-dev-cuda13:v0.5.0-arm64-upstream-106ff69c4eb4921d33341a96b9c3d6db9d12ba76
             securityContext:
               capabilities:
                 add:
@@ -139,7 +139,6 @@ spec:
                 exec > >(tee -a "$LOG_FILE") 2>&1
                 echo "=== Decode-bench worker starting at $(date) ==="
                 source /opt/vllm/bin/activate
-                uv pip uninstall pplx-kernels
 
                 # Cherry-pick NVFP4 EPLB contiguity fix
                 cd /opt/vllm-source
@@ -150,41 +149,55 @@ spec:
                 git fetch elvircrn gb200_working_fused_rope
                 git fetch elvircrn gb200_working
                 git fetch elvircrn gemm2-combine-overlap
-                # git cherry-pick --no-commit 00a944ef8e
-
-                # MLA torch.concat optimization
-                # git cherry-pick --no-commit e93799b752
+                git remote add centml https://github.com/CentML/vllm.git
+                git fetch centml wzhao/moe-a2a
                 
+                
+                # FlashInfer MoE A2A kernel (PR #36022)
+                git cherry-pick --no-commit 1897f159f2
+                git cherry-pick --no-commit 3e26d15acb
+                git cherry-pick --no-commit 6ebc00ea5d
+                git cherry-pick --no-commit 2661092a11
+                git cherry-pick --no-commit b74eaa332c
+                git cherry-pick --no-commit 8c11d32152
+                git cherry-pick --no-commit eec985e8f3
+                git cherry-pick --no-commit 7506131783
+                # Fix int64 -> int32 dtype mismatch for tokenSelectedExperts
+                sed -i 's/token_selected_experts=topk_ids,/token_selected_experts=topk_ids.to(torch.int32),/' \
+                  vllm/model_executor/layers/fused_moe/prepare_finalize/flashinfer_moe_a2a.py
+
                 # Q_b proj PR
-                git cherry-pick --no-commit 24ae04cb7a
+                # git cherry-pick --no-commit 24ae04cb7a
                 
                 # GEMM2-combine two-stream overlap (single squashed commit)
-                git cherry-pick --no-commit 7cb5e86cba
+                # git cherry-pick --no-commit 7cb5e86cba
 
                 # Yank ropequant from FlashInfer into vLLM tree
-                git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
-                git cherry-pick --no-commit 782ef44e4a1512297f05314eb85f18c1573307f2
-                git cherry-pick --no-commit 8af5bb313d8efed3d1fc0ff501ea723813313470
+                # git cherry-pick --no-commit e68d131b39d9b46cc402dda1f35009f55e924b1d
+                # git cherry-pick --no-commit 782ef44e4a1512297f05314eb85f18c1573307f2
+                # git cherry-pick --no-commit 8af5bb313d8efed3d1fc0ff501ea723813313470
                 # Fused RoPE+FP8 quant + KV cache scatter-write (split 2K)
-                git cherry-pick --no-commit 13b2949ac4
+                # git cherry-pick --no-commit 13b2949ac4
                 # Dual-stream: aux_stream() singleton for cudagraph compat
-                git cherry-pick --no-commit b16ecc1647
-                # BF16×BF16→FP8 CUTLASS absorption BMM
-                git cherry-pick --no-commit 2ed1e3b0e8
-                echo "=== JIT-compiling mla_rope_quant at $(date) ==="
-                python tools/jit_mla_rope_quant.py
-                sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py
-                sed -i 's/torch\.ops\._C\.mla_rope_quantize_fp8/mla_rope_quant_ext.mla_rope_quantize_fp8/g' vllm/_custom_ops.py
-                sed -i 's/torch\.ops\._C\.mla_fused_cache_/mla_rope_quant_ext.mla_fused_cache_/g' vllm/_custom_ops.py
-                export PYTHONPATH=/tmp/jit_build/mla_rope_quant:${PYTHONPATH:-}
-                echo "=== JIT rope_quant build complete at $(date) ==="
+                # git cherry-pick --no-commit b16ecc1647
+                # BF16×BF16→FP8 CUTLASS absorption BMM (strided TMA, rope+nope overlap)
+                # git cherry-pick --no-commit f21c694a27
+                
+                
+                # echo "=== JIT-compiling mla_rope_quant at $(date) ==="
+                # python tools/jit_mla_rope_quant.py
+                # sed -i '1s/^/import mla_rope_quant_ext\n/' vllm/_custom_ops.py
+                # sed -i 's/torch\.ops\._C\.mla_rope_quantize_fp8/mla_rope_quant_ext.mla_rope_quantize_fp8/g' vllm/_custom_ops.py
+                # sed -i 's/torch\.ops\._C\.mla_fused_cache_/mla_rope_quant_ext.mla_fused_cache_/g' vllm/_custom_ops.py
+                # export PYTHONPATH=/tmp/jit_build/mla_rope_quant:${PYTHONPATH:-}
+                # echo "=== JIT rope_quant build complete at $(date) ==="
 
-                echo "=== JIT-compiling mla_absorption_bmm at $(date) ==="
-                python tools/jit_mla_absorption_bmm.py
-                sed -i '1s/^/import mla_absorption_bmm_ext\n/' vllm/_custom_ops.py
-                sed -i 's/torch\.ops\._C\.mla_absorption_bmm_bf16/mla_absorption_bmm_ext.mla_absorption_bmm_bf16/g' vllm/_custom_ops.py
-                export PYTHONPATH=/tmp/jit_build/mla_absorption_bmm:${PYTHONPATH:-}
-                echo "=== JIT absorption_bmm build complete at $(date) ==="
+                # echo "=== JIT-compiling mla_absorption_bmm at $(date) ==="
+                # python tools/jit_mla_absorption_bmm.py
+                # sed -i '1s/^/import mla_absorption_bmm_ext\n/' vllm/_custom_ops.py
+                # sed -i 's/torch\.ops\._C\.mla_absorption_bmm_bf16/mla_absorption_bmm_ext.mla_absorption_bmm_bf16/g' vllm/_custom_ops.py
+                # export PYTHONPATH=/tmp/jit_build/mla_absorption_bmm:${PYTHONPATH:-}
+                # echo "=== JIT absorption_bmm build complete at $(date) ==="
 
                 PROFILER_ARGS=""
                 NSYS_PREFIX=""
@@ -228,7 +241,7 @@ spec:
                                              "fill_std": 0.0
                                            }}' \
                     --async-scheduling \
-                    --all2all-backend "deepep_low_latency" \
+                    --all2all-backend "flashinfer_moe_a2a" \
                     --max-num-seqs $VLLM_MOE_DP_CHUNK_SIZE \
                     --max-cudagraph-capture-size 32768 \
                     --max-num-batched-tokens 32768 \
@@ -274,12 +287,6 @@ spec:
               - name: DP_SIZE_LOCAL
                 value: "4"
 
-              # NVFP4 dispatch + masked_gemm required for NVFP4 with DeepEP low-latency
-              - name: VLLM_DEEPEPLL_NVFP4_DISPATCH
-                value: "1"
-              - name: VLLM_FLASHINFER_MOE_BACKEND
-                value: "masked_gemm"
-
               # Needed for reasonable balancedness when using the DecodeBenchConnector
               - name: VLLM_MOE_ROUTING_SIMULATION_STRATEGY
                 value: "uniform_random"
@@ -289,12 +296,6 @@ spec:
                 value: "2048"
               - name: VLLM_MOE_DP_CHUNK_SIZE
                 value: "1024"
-
-              # DeepEP configuration
-              - name: VLLM_DEEPEP_LOW_LATENCY_ALLOW_NVLINK
-                value: "1"
-              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
-                value: "1"
 
               - name: VLLM_MLA_FP8_PROJ
                 value: "1"
@@ -308,14 +309,6 @@ spec:
                 value: "1"
               - name: NVIDIA_GDRCOPY
                 value: enabled
-
-              # Use fabric handles for NVSHMEM symmetric heap (MNNVL)
-              - name: NVSHMEM_CUMEM_HANDLE_TYPE
-                value: FABRIC
-
-              # Override container default that disables VMM
-              - name: NVSHMEM_DISABLE_CUDA_VMM
-                value: "0"
 
               # NIXL side channel for KV cache coordination
               - name: VLLM_NIXL_SIDE_CHANNEL_HOST
@@ -352,18 +345,13 @@ spec:
               - name: VLLM_MLA_FUSED_ROPE_CACHE
                 value: "1"
 
-              - name: VLLM_DEEPEP_COMBINE_GEMM2_OVERLAP
-                value: "1"
-
-              - name: VLLM_DEEPEP_COMBINE_COMM_SMS
-                value: "32"
 
               - name: VLLM_MLA_FUSED_ABSORPTION
                 value: "1"
 
               # Profiling (set ENABLE_PROFILING=1 to enable)
               - name: ENABLE_PROFILING
-                value: "1"
+                value: "0"
               - name: PROFILER_TYPE
                 value: "cuda"  # "nsys" or "cuda"
               # nsys profiling options

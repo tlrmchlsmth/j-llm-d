@@ -31,7 +31,7 @@ spec:
             resourceClaimTemplateName: llm-d-dev-claim
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
+            image: quay.io/rh-ee-ecrncevi/llm-dev-cuda13:v0.5.0-arm64-upstream-941e52c29813ed75b3382f2a0d74ad5f168fc046
             securityContext:
               capabilities:
                 add:

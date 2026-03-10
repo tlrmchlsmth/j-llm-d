@@ -138,6 +138,8 @@ deploy_inferencepool ROUTING='load-aware':
     --version v1.2.0 \
     -f .tmp/inferencepool-values.yaml \
     -n {{NAMESPACE}}
+  # Restart EPP pod to pick up config changes (it reads config at startup)
+  {{KN}} delete pod -l inferencepool={{DEPLOY_NAME}}-infpool-epp --ignore-not-found=true
 
 VLLM_DEV_VENV := "/mnt/lustre/tms/vllm-venv"
 VLLM_DEV_SRC := "/mnt/lustre/tms/vllm-dev"
@@ -154,33 +156,31 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
   # Generate wrapper kustomization with user-specific namePrefix
   printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: {{NAME_PREFIX}}-\nresources:\n  - overlays/{{MODE}}\n' \
     > {{GB200_DIR}}/kustomization.yaml
-  {{KN}} apply -k {{GB200_DIR}}
-  rm -f {{GB200_DIR}}/kustomization.yaml
-
-  # Stamp pods with deploy timestamp (forces rollout + visible on pods)
-  {{KN}} patch lws {{DEPLOY_NAME}}-decode --type=merge \
-    -p "{\"spec\":{\"leaderWorkerTemplate\":{\"workerTemplate\":{\"metadata\":{\"labels\":{\"llm-d.ai/deploy-ts\":\"$DEPLOY_TS\"}}}}}}"
-  if [ "{{MODE}}" = "pd" ]; then
-    {{KN}} patch lws {{DEPLOY_NAME}}-prefill --type=merge \
-      -p "{\"spec\":{\"leaderWorkerTemplate\":{\"workerTemplate\":{\"metadata\":{\"labels\":{\"llm-d.ai/deploy-ts\":\"$DEPLOY_TS\"}}}}}}"
+  # Render kustomize, substitute placeholders, apply in one shot (no double rollout)
+  DEV_VENV=""
+  if [ "{{DEV}}" = "true" ]; then
+    DEV_VENV="{{VLLM_DEV_VENV}}"
+    echo "Dev mode: VLLM_DEV_VENV=$DEV_VENV"
   fi
+  kubectl kustomize {{GB200_DIR}} \
+    | sed -e "s/DEPLOY_TS_PLACEHOLDER/$DEPLOY_TS/g" \
+          -e "s|VLLM_DEV_VENV_PLACEHOLDER|$DEV_VENV|g" \
+    | {{KN}} apply -f -
+  rm -f {{GB200_DIR}}/kustomization.yaml
 
   envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/gateway.yaml | {{KN}} apply -f -
   if [ "{{MODE}}" = "pd" ]; then
     just deploy_inferencepool pd
+  elif [ "{{MODE}}" = "agg" ]; then
+    if [ "{{ROUTING}}" = "load-aware" ]; then
+      just deploy_inferencepool agg
+    else
+      just deploy_inferencepool agg-{{ROUTING}}
+    fi
   else
     just deploy_inferencepool {{ROUTING}}
   fi
   envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/httproute.yaml | {{KN}} apply -f -
-  if [ "{{DEV}}" = "true" ]; then
-    echo "Patching for dev mode (VLLM_DEV_VENV={{VLLM_DEV_VENV}})..."
-    {{KN}} patch lws {{DEPLOY_NAME}}-decode --type=json \
-      -p '[{"op":"replace","path":"/spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/0","value":{"name":"VLLM_DEV_VENV","value":"{{VLLM_DEV_VENV}}"}}]'
-    if [ "{{MODE}}" = "pd" ]; then
-      {{KN}} patch lws {{DEPLOY_NAME}}-prefill --type=json \
-        -p '[{"op":"replace","path":"/spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/0","value":{"name":"VLLM_DEV_VENV","value":"{{VLLM_DEV_VENV}}"}}]'
-    fi
-  fi
   echo "Deployed $DEPLOY_TS"
 
 stop NOW='false':
@@ -209,12 +209,15 @@ restart MODE='pd' ROUTING='load-aware' DEV='false':
   set -euo pipefail
   # Force-delete LWS to kill pods immediately, then re-apply the full stack.
   # Non-LWS resources (gateway, httproute, infpool) are updated in place by start.
+  # Delete LWS and orphaned pods
   {{KN}} delete lws {{DEPLOY_NAME}}-decode --ignore-not-found=true --grace-period=0 --force &
   {{KN}} delete lws {{DEPLOY_NAME}}-prefill --ignore-not-found=true --grace-period=0 --force &
+  {{KN}} delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-decode --ignore-not-found=true --grace-period=0 --force &
+  {{KN}} delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-prefill --ignore-not-found=true --grace-period=0 --force &
   wait
-  # Ensure pods are actually gone before recreating (force-delete doesn't guarantee it)
-  {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-decode --timeout=30s 2>/dev/null || true
-  {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-prefill --timeout=30s 2>/dev/null || true
+  # Wait for everything to be fully gone
+  {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-decode --timeout=60s 2>/dev/null || true
+  {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-prefill --timeout=60s 2>/dev/null || true
   just start {{MODE}} {{ROUTING}} {{DEV}}
 
 # Wait for the full stack to be ready (pods + gateway serving)
@@ -232,6 +235,47 @@ ready:
     sleep 2
   done
   echo "Ready."
+
+# Show persisted logs from Lustre (survives LWS pod recreation)
+# Usage: just logs decode, just logs prefill, just logs decode -f (follow latest)
+logs ROLE='decode' *ARGS='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  LOG_DIR="/mnt/lustre/tms/logs/{{ROLE}}"
+  if [[ "{{ARGS}}" == *"-f"* ]]; then
+    # Follow the latest log file
+    LATEST=$({{KN}} exec {{DEV_POD_NAME}} -- bash -c "ls -t $LOG_DIR/*.log 2>/dev/null | head -1")
+    if [ -z "$LATEST" ]; then
+      echo "No logs found in $LOG_DIR"
+      exit 1
+    fi
+    echo "Following $LATEST"
+    {{KN}} exec {{DEV_POD_NAME}} -- tail -f "$LATEST"
+  else
+    # List recent log files with size and last line
+    {{KN}} exec {{DEV_POD_NAME}} -- bash -c "
+      ls -lt $LOG_DIR/*.log 2>/dev/null | head -20 || echo 'No logs found in $LOG_DIR'
+    "
+  fi
+
+# Clean up old persisted logs from Lustre
+logs-clean ROLE='decode' KEEP='5':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  LOG_DIR="/mnt/lustre/tms/logs/{{ROLE}}"
+  {{KN}} exec {{DEV_POD_NAME}} -- bash -c "
+    cd $LOG_DIR 2>/dev/null || { echo 'No logs directory'; exit 0; }
+    FILES=(\$(ls -t *.log 2>/dev/null))
+    if [ \${#FILES[@]} -le {{KEEP}} ]; then
+      echo 'Nothing to clean ({{KEEP}} or fewer logs)'
+      exit 0
+    fi
+    echo \"Removing \$((\${#FILES[@]} - {{KEEP}})) old logs (keeping {{KEEP}})...\"
+    for f in \"\${FILES[@]:{{KEEP}}}\"; do
+      echo \"  rm \$f\"
+      rm \"\$f\"
+    done
+  "
 
 # === Dev Environment ===
 

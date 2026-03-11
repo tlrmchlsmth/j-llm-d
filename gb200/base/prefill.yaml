@@ -17,6 +17,7 @@ spec:
     workerTemplate:
       metadata:
         labels:
+          llm-d.ai/deploy-ts: DEPLOY_TS_PLACEHOLDER
           llm-d.ai/inferenceServing: "true"
           llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
           llm-d.ai/role: prefill
@@ -61,6 +62,13 @@ spec:
                 # DP_SIZE_LOCAL is derived: 4 GPUs / TP_SIZE
                 # No routing sidecar - serves directly on ports 8000+
                 #################
+                # Persist logs to Lustre so they survive LWS pod recreation
+                LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/prefill
+                mkdir -p "$LOG_DIR"
+                LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
+                exec > >(tee -a "$LOG_FILE") 2>&1
+                echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+
                 # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
                   echo "Using dev venv at ${VLLM_DEV_VENV}"
@@ -97,17 +105,18 @@ spec:
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
                   CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
                     nvidia/DeepSeek-R1-0528-NVFP4-v2 \
+                    --disable-uvicorn-access-log \
                     --port $((8000 + R)) \
                     --tensor-parallel-size $TP_SIZE \
-                    --disable-uvicorn-access-log \
                     --enable-expert-parallel \
                     $DP_FLAGS $RANK_FLAGS \
                     --trust-remote-code \
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
+                    --gpu-memory-utilization 0.85 \
+                    --all2all-backend "deepep_high_throughput" \
+                    --no-enable-prefix-caching \
                     --async-scheduling \
                     --kv-cache-dtype fp8 \
-                    --all2all-backend "deepep_high_throughput" \
-                    --gpu-memory-utilization 0.85 \
                     --enable-force-include-usage &
                 done
 
@@ -123,9 +132,12 @@ spec:
                 exit 1
 
             env:
-              # Set to a Lustre venv path to override baked-in vLLM (e.g. /mnt/lustre/tms/vllm-venv)
+              - name: TQDM_DISABLE
+                value: "1"
+
+              # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)
               - name: VLLM_DEV_VENV
-                value: ""
+                value: VLLM_DEV_VENV_PLACEHOLDER
 
               # Enable on-demand profiling via /start_profile and /stop_profile
               - name: VLLM_TORCH_PROFILER_DIR
@@ -143,9 +155,9 @@ spec:
 
               # Compile caches - persist across restarts for faster startup
               - name: VLLM_CACHE_ROOT
-                value: /mnt/lustre/tms/vllm_cache_extdp
+                value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_extdp
               - name: FLASHINFER_CACHE_DIR
-                value: /mnt/lustre/tms/flashinfer_cache_extdp
+                value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_extdp
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
@@ -158,8 +170,6 @@ spec:
               - name: TRITON_LIBCUDA_PATH
                 value: /usr/lib64
               - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
-                value: "1"
-              - name: VLLM_USE_DEEP_GEMM
                 value: "1"
               - name: NVIDIA_GDRCOPY
                 value: enabled

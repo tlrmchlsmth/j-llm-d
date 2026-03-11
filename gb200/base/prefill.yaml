@@ -63,7 +63,7 @@ spec:
                 # No routing sidecar - serves directly on ports 8000+
                 #################
                 # Persist logs to Lustre so they survive LWS pod recreation
-                LOG_DIR=/mnt/lustre/tms/logs/prefill
+                LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/prefill
                 mkdir -p "$LOG_DIR"
                 LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
                 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -135,7 +135,7 @@ spec:
               - name: TQDM_DISABLE
                 value: "1"
 
-              # Set to a Lustre venv path to override baked-in vLLM (e.g. /mnt/lustre/tms/vllm-venv)
+              # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)
               - name: VLLM_DEV_VENV
                 value: VLLM_DEV_VENV_PLACEHOLDER
 
@@ -155,9 +155,9 @@ spec:
 
               # Compile caches - persist across restarts for faster startup
               - name: VLLM_CACHE_ROOT
-                value: /mnt/lustre/tms/vllm_cache_extdp
+                value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_extdp
               - name: FLASHINFER_CACHE_DIR
-                value: /mnt/lustre/tms/flashinfer_cache_extdp
+                value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_extdp
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE

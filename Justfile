@@ -141,8 +141,8 @@ deploy_inferencepool ROUTING='load-aware':
   # Restart EPP pod to pick up config changes (it reads config at startup)
   {{KN}} delete pod -l inferencepool={{DEPLOY_NAME}}-infpool-epp --ignore-not-found=true
 
-VLLM_DEV_VENV := "/mnt/lustre/tms/vllm-venv"
-VLLM_DEV_SRC := "/mnt/lustre/tms/vllm-dev"
+VLLM_DEV_VENV := "/mnt/lustre/{{NAME_PREFIX}}/vllm-venv"
+VLLM_DEV_SRC := "/mnt/lustre/{{NAME_PREFIX}}/vllm-dev"
 VLLM_DEV_REMOTE := "https://github.com/vllm-project/vllm.git"
 VLLM_DEV_BRANCH := "main"
 VLLM_BUILD_JOBS := "16"
@@ -165,6 +165,7 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
   kubectl kustomize {{GB200_DIR}} \
     | sed -e "s/DEPLOY_TS_PLACEHOLDER/$DEPLOY_TS/g" \
           -e "s|VLLM_DEV_VENV_PLACEHOLDER|$DEV_VENV|g" \
+          -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/{{NAME_PREFIX}}|g" \
     | {{KN}} apply -f -
   rm -f {{GB200_DIR}}/kustomization.yaml
 
@@ -241,7 +242,7 @@ ready:
 logs ROLE='decode' *ARGS='':
   #!/usr/bin/env bash
   set -euo pipefail
-  LOG_DIR="/mnt/lustre/tms/logs/{{ROLE}}"
+  LOG_DIR="/mnt/lustre/{{NAME_PREFIX}}/logs/{{ROLE}}"
   if [[ "{{ARGS}}" == *"-f"* ]]; then
     # Follow the latest log file
     LATEST=$({{KN}} exec {{DEV_POD_NAME}} -- bash -c "ls -t $LOG_DIR/*.log 2>/dev/null | head -1")
@@ -262,7 +263,7 @@ logs ROLE='decode' *ARGS='':
 logs-clean ROLE='decode' KEEP='5':
   #!/usr/bin/env bash
   set -euo pipefail
-  LOG_DIR="/mnt/lustre/tms/logs/{{ROLE}}"
+  LOG_DIR="/mnt/lustre/{{NAME_PREFIX}}/logs/{{ROLE}}"
   {{KN}} exec {{DEV_POD_NAME}} -- bash -c "
     cd $LOG_DIR 2>/dev/null || { echo 'No logs directory'; exit 0; }
     FILES=(\$(ls -t *.log 2>/dev/null))
@@ -313,14 +314,14 @@ dev-build REMOTE=VLLM_DEV_REMOTE BRANCH=VLLM_DEV_BRANCH JOBS=VLLM_BUILD_JOBS:
 
   # build in background
   MAX_JOBS={{JOBS}} nohup uv pip install --no-deps --no-build-isolation -e . \
-    > /mnt/lustre/tms/build.log 2>&1 &
+    > /mnt/lustre/{{NAME_PREFIX}}/build.log 2>&1 &
 
   echo "Build started ({{REMOTE}} {{BRANCH}}, jobs={{JOBS}}), follow with: just dev-build-log"
   EOF
 
 # Tail the dev build log
 dev-build-log:
-  {{KN}} exec {{DEV_POD_NAME}} -- tail -f /mnt/lustre/tms/build.log
+  {{KN}} exec {{DEV_POD_NAME}} -- tail -f /mnt/lustre/{{NAME_PREFIX}}/build.log
 
 # Delete the dev pod
 dev-stop:
@@ -339,7 +340,7 @@ cache-model:
 
 # Flush vLLM/FlashInfer compile caches on Lustre (run after image or config changes)
 flush-cache:
-  {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/tms/vllm_cache_extdp /mnt/lustre/tms/flashinfer_cache_extdp && echo "Compile caches flushed"'
+  {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/{{NAME_PREFIX}}/vllm_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/flashinfer_cache_extdp && echo "Compile caches flushed"'
 
 # Profile all decode pods, copy traces, combine, fix, and open in Finder
 profile:

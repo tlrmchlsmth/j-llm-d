@@ -40,8 +40,8 @@ build/
 *~
 
 # Logs
-*.log
-logs/
+# *.log
+# logs/
 
 # Local scripts (may contain IPs, credentials, etc.)
 local/

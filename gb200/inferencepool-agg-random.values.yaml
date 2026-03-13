@@ -58,6 +58,7 @@ inferencePool:
       llm-d.ai/inferenceServing: "true"
       llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
       llm-d.ai/deployment: agg
+      llm-d.ai/owner: ${OWNER}
 
 provider:
   name: istio

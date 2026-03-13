@@ -132,7 +132,8 @@ deploy_inferencepool ROUTING='load-aware':
   set -euo pipefail
   mkdir -p ./.tmp
   export DEPLOY_NAME="{{DEPLOY_NAME}}"
-  envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/inferencepool-{{ROUTING}}.values.yaml > .tmp/inferencepool-values.yaml
+  export OWNER="{{NAME_PREFIX}}"
+  envsubst '${DEPLOY_NAME} ${OWNER}' < {{GB200_DIR}}/inferencepool-{{ROUTING}}.values.yaml > .tmp/inferencepool-values.yaml
   helm upgrade --install {{DEPLOY_NAME}}-infpool \
     oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
     --version v1.2.0 \
@@ -141,8 +142,8 @@ deploy_inferencepool ROUTING='load-aware':
   # Restart EPP pod to pick up config changes (it reads config at startup)
   {{KN}} delete pod -l inferencepool={{DEPLOY_NAME}}-infpool-epp --ignore-not-found=true
 
-VLLM_DEV_VENV := "/mnt/lustre/{{NAME_PREFIX}}/vllm-venv"
-VLLM_DEV_SRC := "/mnt/lustre/{{NAME_PREFIX}}/vllm-dev"
+VLLM_DEV_VENV := "/mnt/lustre/" + NAME_PREFIX + "/vllm-venv"
+VLLM_DEV_SRC := "/mnt/lustre/" + NAME_PREFIX + "/vllm-dev"
 VLLM_DEV_REMOTE := "https://github.com/vllm-project/vllm.git"
 VLLM_DEV_BRANCH := "main"
 VLLM_BUILD_JOBS := "16"
@@ -164,6 +165,7 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
   fi
   kubectl kustomize {{GB200_DIR}} \
     | sed -e "s/DEPLOY_TS_PLACEHOLDER/$DEPLOY_TS/g" \
+          -e "s/OWNER_PLACEHOLDER/{{NAME_PREFIX}}/g" \
           -e "s|VLLM_DEV_VENV_PLACEHOLDER|$DEV_VENV|g" \
           -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/{{NAME_PREFIX}}|g" \
     | {{KN}} apply -f -

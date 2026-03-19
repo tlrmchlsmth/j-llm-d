@@ -227,8 +227,8 @@ restart MODE='pd' ROUTING='load-aware' DEV='false':
 ready:
   #!/usr/bin/env bash
   set -euo pipefail
-  {{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=decode,llm-d.ai/model=DeepSeek-R1-0528-NVFP4-v2 --timeout=1200s &
-  ({{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=prefill,llm-d.ai/model=DeepSeek-R1-0528-NVFP4-v2 --timeout=1200s 2>/dev/null || true) &
+  {{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=decode,llm-d.ai/owner={{NAME_PREFIX}} --timeout=1200s &
+  ({{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=prefill,llm-d.ai/owner={{NAME_PREFIX}} --timeout=1200s 2>/dev/null || true) &
   {{KN}} wait --for=condition=Ready pod -l inferencepool={{DEPLOY_NAME}}-infpool-epp --timeout=120s &
   echo "Waiting for decode, prefill, and EPP pods..."
   wait

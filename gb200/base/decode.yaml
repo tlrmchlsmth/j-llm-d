@@ -197,7 +197,6 @@ spec:
                     #                    "max_iterations": 3}' \
                     #
                     #
-                    #--compilation-config '{"cudagraph_mode": "NONE"}' \
 
                 # If any process exits, kill all and restart pod
                 wait -n
@@ -205,8 +204,6 @@ spec:
                 exit 1
 
             env:
-              - name: VLLM_NAN_DETECT
-                value: "1"
               - name: TQDM_DISABLE
                 value: "1"
 
@@ -270,8 +267,6 @@ spec:
               # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
               - name: UCX_NET_DEVICES
                 value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
-              # Some ports are down on a couple of nodes.
-              #  value: "mlx5_0:1,mlx5_1:1"
 
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S

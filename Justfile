@@ -464,7 +464,7 @@ stop-nyann:
 
 # Tail nyann_poker job logs
 nyann-logs NAME:
-  {{KN}} logs -l app={{NAME}} -c nyann-poker --tail=50 -f
+  {{KN}} logs -l app={{NAME}} -c nyann-poker --tail=50 -f --max-log-requests=20
 
 # === Monitoring ===
 

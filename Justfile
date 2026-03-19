@@ -456,6 +456,12 @@ benchmark-nyann:
   wait
   echo "nyann_poker jobs submitted. Use 'just nyann-logs sharegpt-load' or 'just nyann-logs poker-eval' to follow."
 
+# Stop nyann_poker benchmark jobs
+stop-nyann:
+  {{KN}} delete job -l app=sharegpt-load --ignore-not-found=true &
+  {{KN}} delete job -l app=poker-eval --ignore-not-found=true &
+  wait
+
 # Tail nyann_poker job logs
 nyann-logs NAME:
   {{KN}} logs -l app={{NAME}} -c nyann-poker --tail=50 -f

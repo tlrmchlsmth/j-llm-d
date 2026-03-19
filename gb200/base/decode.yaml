@@ -17,8 +17,10 @@ spec:
     workerTemplate:
       metadata:
         labels:
+          llm-d.ai/deploy-ts: DEPLOY_TS_PLACEHOLDER
           llm-d.ai/inferenceServing: "true"
           llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+          llm-d.ai/owner: OWNER_PLACEHOLDER
           llm-d.ai/role: decode
       spec:
         serviceAccountName: wide-ep
@@ -105,8 +107,7 @@ spec:
               allowPrivilegeEscalation: false
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
-            #image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
+            image: quay.io/tms/llm-d-cuda-dev:be441ac-v1
             securityContext:
               capabilities:
                 add:
@@ -126,6 +127,13 @@ spec:
                 # DP_SIZE_LOCAL is derived: 4 GPUs / TP_SIZE
                 # Routing sidecar maps port 800X -> localhost:820X
                 #################
+                # Persist logs to Lustre so they survive LWS pod recreation
+                LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/decode
+                mkdir -p "$LOG_DIR"
+                LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
+                exec > >(tee -a "$LOG_FILE") 2>&1
+                echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+
                 # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
                   echo "Using dev venv at ${VLLM_DEV_VENV}"
@@ -138,7 +146,8 @@ spec:
 
                 # Derive batch-size-dependent env vars from MAX_TOKENS
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
-                export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2))  # should be >= 2 * VLLM_MOE_DP_CHUNK_SIZE
+                # NVSHMEM_QP_DEPTH only needed for DeepEP
+                export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2))
 
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
@@ -151,9 +160,9 @@ spec:
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
                   CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
                     nvidia/DeepSeek-R1-0528-NVFP4-v2 \
+                    --disable-uvicorn-access-log \
                     --port $((8200 + R)) \
                     --tensor-parallel-size $TP_SIZE \
-                    --disable-uvicorn-access-log \
                     --enable-expert-parallel \
                     --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
                     --data-parallel-rank $((START_RANK + R)) \
@@ -162,21 +171,22 @@ spec:
                     --data-parallel-rpc-port 5555 \
                     --trust-remote-code \
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
-                    --async-scheduling \
-                    --kv-cache-dtype fp8 \
-                    --all2all-backend "deepep_low_latency" \
                     --gpu-memory-utilization 0.75 \
                     --max-num-batched-tokens $MAX_TOKENS \
                     --max-num-seqs $MAX_TOKENS \
+                    --disable_cascade_attn \
                     --max-cudagraph-capture-size $MAX_TOKENS \
                     --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
-                    --disable_cascade_attn \
+                    --all2all-backend "deepep_low_latency" \
+                    --no-enable-prefix-caching \
                     --enable-eplb \
+                    --async-scheduling \
+                    --kv-cache-dtype fp8 \
                     --eplb-config '{"window_size":"100",
-                                    "step_interval":"100",
-                                    "num_redundant_experts":"128",
+                                    "step_interval":"10000",
+                                    "num_redundant_experts":"32",
                                     "log_balancedness":"True",
-                                    "log_balancedness_interval":"10"}' \
+                                    "log_balancedness_interval":"1000"}' \
                     --enable-force-include-usage &
                 done
 
@@ -186,7 +196,7 @@ spec:
                     #                    "delay_iterations": 5,
                     #                    "max_iterations": 3}' \
                     #
-
+                    #
 
                 # If any process exits, kill all and restart pod
                 wait -n
@@ -194,11 +204,14 @@ spec:
                 exit 1
 
             env:
-              # Set to a Lustre venv path to override baked-in vLLM (e.g. /mnt/lustre/tms/vllm-venv)
-              - name: VLLM_DEV_VENV
-                value: ""
+              - name: TQDM_DISABLE
+                value: "1"
 
-              # Use NVFP4 dispatch, and then masked_gemm is required to avoid crashes
+              # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)
+              - name: VLLM_DEV_VENV
+                value: VLLM_DEV_VENV_PLACEHOLDER
+
+              # DeepEP low-latency only: NVFP4 dispatch + masked_gemm
               - name: VLLM_DEEPEPLL_NVFP4_DISPATCH
                 value: "1"
               - name: VLLM_FLASHINFER_MOE_BACKEND
@@ -223,9 +236,9 @@ spec:
 
               # Compile caches - persist across restarts for faster startup
               - name: VLLM_CACHE_ROOT
-                value: /mnt/lustre/tms/vllm_cache_extdp
+                value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_extdp
               - name: FLASHINFER_CACHE_DIR
-                value: /mnt/lustre/tms/flashinfer_cache_extdp
+                value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_extdp
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
@@ -244,23 +257,16 @@ spec:
               - name: NVIDIA_GDRCOPY
                 value: enabled
 
-              # Use fabric handles for NVSHMEM symmetric heap (MNNVL)
-              # Without this, NVSHMEM defaults to FILE_DESCRIPTOR (IPC handles)
-              # and falls back to ibrc transport instead of NVLink fabric
+              # NVSHMEM config (DeepEP only, not needed for flashinfer_moe_a2a)
               - name: NVSHMEM_CUMEM_HANDLE_TYPE
                 value: FABRIC
-
-              # Override container default that disables VMM
-              # VMM is required for fabric memory / MNNVL cross-pod communication
               - name: NVSHMEM_DISABLE_CUDA_VMM
                 value: "0"
 
               # UCX configuration for NIXL - use only working InfiniBand devices
               # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
               - name: UCX_NET_DEVICES
-              #  value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
-              # Some ports are down on a couple of nodes.
-                value: "mlx5_0:1,mlx5_1:1"
+                value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
 
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S
@@ -296,11 +302,10 @@ spec:
                   - -c
                   - |
                     for port in 8000 8001 8002 8003; do
-                      curl -sf http://localhost:$port/health || exit 1
+                      curl -sf http://localhost:$port/v1/models | grep -q '"id"' || exit 1
                     done
-              initialDelaySeconds: 60
-              periodSeconds: 10
-              failureThreshold: 24
+              periodSeconds: 5
+              failureThreshold: 60
             resources:
               claims:
                 - name: compute-domain-channel

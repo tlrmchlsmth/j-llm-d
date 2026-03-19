@@ -133,7 +133,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:generation_tokens_total{pod=~\"${deployment}-.*\"}[1m]))",
+          "expr": "sum(rate(vllm:generation_tokens_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[3s]))",
           "instant": false,
           "legendFormat": "Generation Throughput",
           "range": true,
@@ -336,7 +336,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:prompt_tokens_total{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[1m]))",
+          "expr": "sum(rate(vllm:prompt_tokens_total{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[3s]))",
           "instant": false,
           "legendFormat": "Total Prefill Prompt Throughput",
           "range": true,
@@ -451,7 +451,19 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.10, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+          "instant": false,
+          "legendFormat": "p10",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -463,7 +475,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -475,7 +487,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -577,7 +589,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(vllm:prompt_tokens_total{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[1m])",
+          "expr": "rate(vllm:prompt_tokens_total{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[3s])",
           "instant": false,
           "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
@@ -1005,7 +1017,19 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.10, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+          "instant": false,
+          "legendFormat": "p10",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -1017,7 +1041,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -1029,7 +1053,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -1131,7 +1155,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(vllm:generation_tokens_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[1m])",
+          "expr": "rate(vllm:generation_tokens_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[3s])",
           "instant": false,
           "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
@@ -1462,6 +1486,762 @@
         "x": 0,
         "y": 76
       },
+      "id": 350,
+      "panels": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "Per-iteration token count distribution across decode pods (p10/p50/p99)",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "never",
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 77
+          },
+          "id": 351,
+          "options": {
+            "legend": {
+              "calcs": ["lastNotNull"],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p10",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p50",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p99",
+              "range": true,
+              "refId": "C"
+            }
+          ],
+          "title": "Decode Iteration Tokens (p10/p50/p99)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "Per-iteration token count distribution across prefill pods (p10/p50/p99)",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "never",
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 77
+          },
+          "id": 352,
+          "options": {
+            "legend": {
+              "calcs": ["lastNotNull"],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p10",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p50",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p99",
+              "range": true,
+              "refId": "C"
+            }
+          ],
+          "title": "Prefill Iteration Tokens (p10/p50/p99)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "Input Sequence Length — prompt token count per request (p10/p50/p99)",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "never",
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 85
+          },
+          "id": 353,
+          "options": {
+            "legend": {
+              "calcs": ["lastNotNull"],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_prompt_tokens_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p10",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prompt_tokens_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p50",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prompt_tokens_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p99",
+              "range": true,
+              "refId": "C"
+            }
+          ],
+          "title": "ISL — Input Sequence Length (p10/p50/p99)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "Output Sequence Length — generation token count per request (p10/p50/p99)",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "never",
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 85
+          },
+          "id": 354,
+          "options": {
+            "legend": {
+              "calcs": ["lastNotNull"],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_generation_tokens_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p10",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_generation_tokens_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p50",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_generation_tokens_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p99",
+              "range": true,
+              "refId": "C"
+            }
+          ],
+          "title": "OSL — Output Sequence Length (p10/p50/p99)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "Time spent in prefill phase per request (p10/p50/p99)",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "never",
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 93
+          },
+          "id": 355,
+          "options": {
+            "legend": {
+              "calcs": ["lastNotNull"],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p10",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p50",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p99",
+              "range": true,
+              "refId": "C"
+            }
+          ],
+          "title": "Prefill Phase Time (p10/p50/p99)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "Time spent in decode phase per request (p10/p50/p99)",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "never",
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 93
+          },
+          "id": 356,
+          "options": {
+            "legend": {
+              "calcs": ["lastNotNull"],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_decode_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p10",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_decode_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p50",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_decode_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p99",
+              "range": true,
+              "refId": "C"
+            }
+          ],
+          "title": "Decode Phase Time (p10/p50/p99)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "KV tokens computed during prefill (not served from cache). Compare with ISL to gauge prefix cache efficiency.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "never",
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 93
+          },
+          "id": 357,
+          "options": {
+            "legend": {
+              "calcs": ["lastNotNull"],
+              "displayMode": "table",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_prefill_kv_computed_tokens_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p10",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prefill_kv_computed_tokens_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p50",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prefill_kv_computed_tokens_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p99",
+              "range": true,
+              "refId": "C"
+            }
+          ],
+          "title": "Prefill KV Computed Tokens (p10/p50/p99)",
+          "type": "timeseries"
+        }
+      ],
+      "title": "Per-Request & Iteration Metrics",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 101
+      },
       "id": 400,
       "panels": [
         {
@@ -1583,7 +2363,19 @@
                 "uid": "${DS_PROMETHEUS}"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p10",
+              "range": true,
+              "refId": "D"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -1595,7 +2387,7 @@
                 "uid": "${DS_PROMETHEUS}"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.95, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
               "instant": false,
               "legendFormat": "p95",
               "range": true,
@@ -1607,7 +2399,7 @@
                 "uid": "${DS_PROMETHEUS}"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -1709,7 +2501,19 @@
                 "uid": "${DS_PROMETHEUS}"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p10",
+              "range": true,
+              "refId": "D"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -1721,7 +2525,7 @@
                 "uid": "${DS_PROMETHEUS}"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.95, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
               "instant": false,
               "legendFormat": "p95",
               "range": true,
@@ -1733,7 +2537,7 @@
                 "uid": "${DS_PROMETHEUS}"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -1843,7 +2647,7 @@
                 "uid": "${DS_PROMETHEUS}"
               },
               "editorMode": "code",
-              "expr": "(sum(rate(vllm:time_to_first_token_seconds_sum{pod=~\"${deployment}-.*\"}[1m])) by (pod) / sum(rate(vllm:time_to_first_token_seconds_count{pod=~\"${deployment}-.*\"}[1m])) by (pod)) - (sum(rate(vllm:request_queue_time_seconds_sum{pod=~\"${deployment}-.*\"}[1m])) by (pod) / sum(rate(vllm:request_queue_time_seconds_count{pod=~\"${deployment}-.*\"}[1m])) by (pod)) - (sum(rate(vllm:request_prefill_time_seconds_sum{pod=~\"${deployment}-.*\"}[1m])) by (pod) / sum(rate(vllm:request_prefill_time_seconds_count{pod=~\"${deployment}-.*\"}[1m])) by (pod))",
+              "expr": "(sum(rate(vllm:time_to_first_token_seconds_sum{pod=~\"${deployment}-.*\"}[3s])) by (pod) / sum(rate(vllm:time_to_first_token_seconds_count{pod=~\"${deployment}-.*\"}[3s])) by (pod)) - (sum(rate(vllm:request_queue_time_seconds_sum{pod=~\"${deployment}-.*\"}[3s])) by (pod) / sum(rate(vllm:request_queue_time_seconds_count{pod=~\"${deployment}-.*\"}[3s])) by (pod)) - (sum(rate(vllm:request_prefill_time_seconds_sum{pod=~\"${deployment}-.*\"}[3s])) by (pod) / sum(rate(vllm:request_prefill_time_seconds_count{pod=~\"${deployment}-.*\"}[3s])) by (pod))",
               "instant": false,
               "legendFormat": "{{pod}}-r{{rank}}",
               "range": true,
@@ -1945,7 +2749,19 @@
                 "uid": "${DS_PROMETHEUS}"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+              "instant": false,
+              "legendFormat": "p10",
+              "range": true,
+              "refId": "D"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -1957,7 +2773,7 @@
                 "uid": "${DS_PROMETHEUS}"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
               "instant": false,
               "legendFormat": "p95",
               "range": true,
@@ -1969,7 +2785,7 @@
                 "uid": "${DS_PROMETHEUS}"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -2087,7 +2903,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(nyann_eval_correct[1m]) / rate(nyann_eval_total[1m])",
+          "expr": "rate(nyann_eval_correct[3s]) / rate(nyann_eval_total[3s])",
           "instant": false,
           "legendFormat": "{{workload}} ({{pod}})",
           "range": true,
@@ -2216,7 +3032,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (workload) (rate(nyann_eval_correct[1m]))",
+          "expr": "sum by (workload) (rate(nyann_eval_correct[3s]))",
           "instant": false,
           "legendFormat": "{{workload}} correct",
           "range": true,
@@ -2228,7 +3044,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (workload) (rate(nyann_eval_incorrect[1m]))",
+          "expr": "sum by (workload) (rate(nyann_eval_incorrect[3s]))",
           "instant": false,
           "legendFormat": "{{workload}} incorrect",
           "range": true,
@@ -2327,7 +3143,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(nyann_requests_total[1m]))",
+          "expr": "sum(rate(nyann_requests_total[3s]))",
           "instant": false,
           "legendFormat": "total req/s",
           "range": true,
@@ -2339,7 +3155,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(nyann_requests_total{status=\"error\"}[1m]))",
+          "expr": "sum(rate(nyann_requests_total{status=\"error\"}[3s]))",
           "instant": false,
           "legendFormat": "errors/s",
           "range": true,
@@ -2440,7 +3256,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(nyann_ttft_seconds_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(nyann_ttft_seconds_bucket[3s])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -2452,7 +3268,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(nyann_ttft_seconds_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(nyann_ttft_seconds_bucket[3s])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -2464,7 +3280,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(nyann_ttft_seconds_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(nyann_ttft_seconds_bucket[3s])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -2565,7 +3381,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(nyann_itl_seconds_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(nyann_itl_seconds_bucket[3s])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -2577,7 +3393,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(nyann_itl_seconds_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(nyann_itl_seconds_bucket[3s])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -2589,7 +3405,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(nyann_itl_seconds_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(nyann_itl_seconds_bucket[3s])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -2814,7 +3630,19 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.10, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+          "instant": false,
+          "legendFormat": "p10",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -2826,7 +3654,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -2838,7 +3666,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -2940,7 +3768,19 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.10, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
+          "instant": false,
+          "legendFormat": "p10",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -2952,7 +3792,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -2964,7 +3804,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}-.*\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -3083,7 +3923,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:nixl_bytes_transferred_sum{pod=~\"${deployment}-.*\"}[1m]))",
+          "expr": "sum(rate(vllm:nixl_bytes_transferred_sum{pod=~\"${deployment}-.*\"}[3s]))",
           "instant": false,
           "legendFormat": "Bytes/s",
           "range": true,
@@ -3095,7 +3935,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:nixl_bytes_transferred_count{pod=~\"${deployment}-.*\"}[1m]))",
+          "expr": "sum(rate(vllm:nixl_bytes_transferred_count{pod=~\"${deployment}-.*\"}[3s]))",
           "instant": false,
           "legendFormat": "Transfers/s",
           "range": true,
@@ -3243,7 +4083,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:nixl_num_failed_transfers_total{pod=~\"${deployment}-.*\"}[1m]))",
+          "expr": "sum(rate(vllm:nixl_num_failed_transfers_total{pod=~\"${deployment}-.*\"}[3s]))",
           "instant": false,
           "legendFormat": "Failed Transfers",
           "range": true,
@@ -3255,7 +4095,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:nixl_num_failed_notifications_total{pod=~\"${deployment}-.*\"}[1m]))",
+          "expr": "sum(rate(vllm:nixl_num_failed_notifications_total{pod=~\"${deployment}-.*\"}[3s]))",
           "instant": false,
           "legendFormat": "Failed Notifications",
           "range": true,
@@ -3267,7 +4107,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:nixl_num_kv_expired_reqs_total{pod=~\"${deployment}-.*\"}[1m]))",
+          "expr": "sum(rate(vllm:nixl_num_kv_expired_reqs_total{pod=~\"${deployment}-.*\"}[3s]))",
           "instant": false,
           "legendFormat": "Expired KV Reqs",
           "range": true,
@@ -3276,6 +4116,970 @@
       ],
       "title": "NIXL Errors",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 119
+      },
+      "id": 700,
+      "panels": [],
+      "title": "EPP (Endpoint Picker)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Number of ready pods seen by the EPP",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 8
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 120
+      },
+      "id": 701,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "title": "Ready Pods",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "inference_pool_ready_pods{name=~\"${deployment}-.*infpool\"}",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Fraction of scheduling attempts that succeed (vs InferencePoolResourceExhausted)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "percentunit",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 0.9
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 120
+      },
+      "id": 702,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "title": "Scheduler Success Rate",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "rate(inference_extension_scheduler_attempts_total{status=\"success\", pod=~\"${deployment}-.*\"}[3s]) / (rate(inference_extension_scheduler_attempts_total{status=\"success\", pod=~\"${deployment}-.*\"}[3s]) + rate(inference_extension_scheduler_attempts_total{status=\"failure\", pod=~\"${deployment}-.*\"}[3s]))",
+          "legendFormat": "Success Rate",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Total in-flight requests tracked by EPP",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 20000
+              },
+              {
+                "color": "red",
+                "value": 30000
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 120
+      },
+      "id": 703,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "title": "EPP Running Requests",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "inference_objective_running_requests{model_name=\"nvidia/DeepSeek-R1-0528-NVFP4-v2\"}",
+          "legendFormat": "Running",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Average KV cache utilization as seen by the EPP across all pool endpoints",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "percentunit",
+          "decimals": 1,
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 0.7
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 120
+      },
+      "id": 704,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "title": "Avg KV Cache Util (EPP)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "inference_pool_average_kv_cache_utilization{name=~\"${deployment}-.*infpool\"}",
+          "legendFormat": "KV Cache",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Average queue size across all endpoints as seen by EPP",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 200
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 120
+      },
+      "id": 705,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "title": "Avg Queue Size (EPP)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "inference_pool_average_queue_size{name=~\"${deployment}-.*infpool\"}",
+          "legendFormat": "Avg Queue",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Rate of prefill-decode disaggregation decisions per second",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "reqps",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 120
+      },
+      "id": 706,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "title": "P/D Decision Rate",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(llm_d_inference_scheduler_pd_decision_total[3s]))",
+          "legendFormat": "P/D decisions/s",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Queue depth per endpoint as seen by EPP. Large imbalances indicate the scorer/picker is not distributing load evenly.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 124
+      },
+      "id": 707,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "sortBy": "Max",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Per-Endpoint Queue Size (EPP)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "inference_pool_per_pod_queue_size{name=~\"${deployment}-.*infpool\"}",
+          "legendFormat": "{{model_server_pod}}",
+          "range": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Rate of scheduling attempts (success vs failure). Failures are typically InferencePoolResourceExhausted (all endpoints at capacity).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failure"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "success"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 124
+      },
+      "id": 708,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Scheduler Attempts Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "rate(inference_extension_scheduler_attempts_total{status=\"success\", pod=~\"${deployment}-.*\"}[3s])",
+          "legendFormat": "success",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "rate(inference_extension_scheduler_attempts_total{status=\"failure\", pod=~\"${deployment}-.*\"}[3s])",
+          "legendFormat": "failure",
+          "range": true,
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "End-to-end scheduling latency (time from request arrival to endpoint selection)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 132
+      },
+      "id": 709,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Scheduler E2E Latency",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, rate(inference_extension_scheduler_e2e_duration_seconds_bucket{pod=~\"${deployment}-.*\"}[3s]))",
+          "legendFormat": "p50",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, rate(inference_extension_scheduler_e2e_duration_seconds_bucket{pod=~\"${deployment}-.*\"}[3s]))",
+          "legendFormat": "p99",
+          "range": true,
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "p99 latency of each EPP plugin (scorer, filter, picker, handler). High active-request-scorer latency may indicate the EPP is blocking on vLLM metrics scraping.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 132
+      },
+      "id": 710,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "sortBy": "Max",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Plugin Latency (p99)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le, plugin_name) (rate(inference_extension_plugin_duration_seconds_bucket{pod=~\"${deployment}-.*\"}[3s])))",
+          "legendFormat": "{{plugin_name}}",
+          "range": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Rate of request errors by error code. InferencePoolResourceExhausted means all endpoints were at capacity.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 132
+      },
+      "id": 711,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "EPP Request Errors",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "rate(inference_objective_request_error_total[3s])",
+          "legendFormat": "{{error_code}}",
+          "range": true,
+          "refId": "A"
+        }
+      ]
     }
   ],
   "preload": false,

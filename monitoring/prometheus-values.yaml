@@ -37,7 +37,7 @@ extraScrapeConfigs: |
         regex: '820(.)'
         target_label: rank
         replacement: '${1}'
-    scrape_interval: 15s
+    scrape_interval: 500ms
     metrics_path: /metrics
 
   - job_name: 'vllm-prefill'
@@ -66,7 +66,7 @@ extraScrapeConfigs: |
         regex: '800(.)'
         target_label: rank
         replacement: '${1}'
-    scrape_interval: 15s
+    scrape_interval: 500ms
     metrics_path: /metrics
 
   - job_name: 'nyann-poker'

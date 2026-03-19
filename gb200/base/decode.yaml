@@ -107,8 +107,7 @@ spec:
               allowPrivilegeEscalation: false
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
-            #image: quay.io/tms/llm-d-cuda-dev:gb200_working-6a3214a31
+            image: quay.io/tms/llm-d-cuda-dev:be441ac-v1
             securityContext:
               capabilities:
                 add:
@@ -148,7 +147,7 @@ spec:
                 # Derive batch-size-dependent env vars from MAX_TOKENS
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
                 # NVSHMEM_QP_DEPTH only needed for DeepEP
-                #export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2))
+                export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2))
 
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
@@ -178,16 +177,16 @@ spec:
                     --disable_cascade_attn \
                     --max-cudagraph-capture-size $MAX_TOKENS \
                     --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
-                    --all2all-backend "flashinfer_moe_a2a" \
+                    --all2all-backend "deepep_low_latency" \
                     --no-enable-prefix-caching \
                     --enable-eplb \
                     --async-scheduling \
                     --kv-cache-dtype fp8 \
                     --eplb-config '{"window_size":"100",
-                                    "step_interval":"100",
-                                    "num_redundant_experts":"128",
+                                    "step_interval":"10000",
+                                    "num_redundant_experts":"32",
                                     "log_balancedness":"True",
-                                    "log_balancedness_interval":"100"}' \
+                                    "log_balancedness_interval":"1000"}' \
                     --enable-force-include-usage &
                 done
 
@@ -206,6 +205,8 @@ spec:
                 exit 1
 
             env:
+              - name: VLLM_NAN_DETECT
+                value: "1"
               - name: TQDM_DISABLE
                 value: "1"
 
@@ -214,10 +215,10 @@ spec:
                 value: VLLM_DEV_VENV_PLACEHOLDER
 
               # DeepEP low-latency only: NVFP4 dispatch + masked_gemm
-              #- name: VLLM_DEEPEPLL_NVFP4_DISPATCH
-              #  value: "1"
-              #- name: VLLM_FLASHINFER_MOE_BACKEND
-              #  value: "masked_gemm"
+              - name: VLLM_DEEPEPLL_NVFP4_DISPATCH
+                value: "1"
+              - name: VLLM_FLASHINFER_MOE_BACKEND
+                value: "masked_gemm"
 
               - name: MAX_TOKENS
                 value: "1024"
@@ -246,29 +247,31 @@ spec:
               - name: TP_SIZE
                 value: "1"
 
-              #- name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
-              #  value: "1"
+              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
+                value: "1"
 
               # Common vLLM settings
               - name: TRITON_LIBCUDA_PATH
                 value: /usr/lib64
               - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
                 value: "1"
+              - name: VLLM_USE_DEEP_GEMM
+                value: "1"
               - name: NVIDIA_GDRCOPY
                 value: enabled
 
               # NVSHMEM config (DeepEP only, not needed for flashinfer_moe_a2a)
-              #- name: NVSHMEM_CUMEM_HANDLE_TYPE
-              #  value: FABRIC
-              #- name: NVSHMEM_DISABLE_CUDA_VMM
-              #  value: "0"
+              - name: NVSHMEM_CUMEM_HANDLE_TYPE
+                value: FABRIC
+              - name: NVSHMEM_DISABLE_CUDA_VMM
+                value: "0"
 
               # UCX configuration for NIXL - use only working InfiniBand devices
               # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
               - name: UCX_NET_DEVICES
-              #  value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+                value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
               # Some ports are down on a couple of nodes.
-                value: "mlx5_0:1,mlx5_1:1"
+              #  value: "mlx5_0:1,mlx5_1:1"
 
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S

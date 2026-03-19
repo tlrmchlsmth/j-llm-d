@@ -227,14 +227,14 @@ restart MODE='pd' ROUTING='load-aware' DEV='false':
 ready:
   #!/usr/bin/env bash
   set -euo pipefail
-  echo "Waiting for decode pods..."
-  {{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=decode,llm-d.ai/model=DeepSeek-R1-0528-NVFP4-v2 --timeout=600s
-  echo "Waiting for prefill pods..."
-  {{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=prefill,llm-d.ai/model=DeepSeek-R1-0528-NVFP4-v2 --timeout=600s 2>/dev/null || true
-  echo "Waiting for EPP..."
-  {{KN}} wait --for=condition=Ready pod -l inferencepool={{DEPLOY_NAME}}-infpool-epp --timeout=60s
+  {{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=decode,llm-d.ai/model=DeepSeek-R1-0528-NVFP4-v2 --timeout=1200s &
+  ({{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=prefill,llm-d.ai/model=DeepSeek-R1-0528-NVFP4-v2 --timeout=1200s 2>/dev/null || true) &
+  {{KN}} wait --for=condition=Ready pod -l inferencepool={{DEPLOY_NAME}}-infpool-epp --timeout=120s &
+  echo "Waiting for decode, prefill, and EPP pods..."
+  wait
   echo "Checking gateway..."
-  until {{KN}} exec deploy/{{DEPLOY_NAME}}-infpool-epp -- wget -qO- --timeout=5 http://{{DEPLOY_NAME}}-inference-gateway-istio:80/v1/models 2>/dev/null | grep -q '"id"'; do
+  until {{KN}} exec deploy/{{DEPLOY_NAME}}-infpool-epp -- curl -sf --max-time 5 http://{{DEPLOY_NAME}}-inference-gateway-istio:80/v1/models 2>/dev/null | grep -q '"id"'
+  do
     sleep 2
   done
   echo "Ready."
@@ -437,6 +437,28 @@ process-traces N='':
   fi
   echo "Processing traces/$N ..."
   python3 profiling/process_traces.py "traces/$N"
+
+NYANN_POKER_DIR := env("NYANN_POKER_DIR", "/Users/tms/code/gb200_benchmarking_project/nyann_poker")
+
+# Wait for stack readiness, then launch nyann_poker load + eval jobs
+benchmark-nyann:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  just ready
+  BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
+  cd "{{NYANN_POKER_DIR}}"
+  just deploy sharegpt-load "$BASE_URL" \
+    '{"load":{"concurrency":1900,"rampup":"3m","duration":"3600s"},"workload":{"type":"corpus","corpus_path":"/mnt/lustre/tms/corpus/sharegpt.txt","isl":100,"osl":1500,"turns":1}}' \
+    16 {{NAMESPACE}} arm64 lustre &
+  just deploy poker-eval "$BASE_URL" \
+    '{"load":{"concurrency":64,"duration":"3600s"},"warmup":{"concurrency":16,"duration":"60s"},"workload":{"type":"gsm8k","gsm8k_path":"/mnt/lustre/tms/gsm8k_test.jsonl","gsm8k_train_path":"/mnt/lustre/tms/gsm8k_train.jsonl"}}' \
+    1 {{NAMESPACE}} arm64 lustre &
+  wait
+  echo "nyann_poker jobs submitted. Use 'just nyann-logs sharegpt-load' or 'just nyann-logs poker-eval' to follow."
+
+# Tail nyann_poker job logs
+nyann-logs NAME:
+  {{KN}} logs -l app={{NAME}} -c nyann-poker --tail=50 -f
 
 # === Monitoring ===
 

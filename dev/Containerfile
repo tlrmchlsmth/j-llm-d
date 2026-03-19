@@ -1,22 +1,12 @@
-FROM nvidia/cuda:13.0.0-devel-ubuntu22.04
+FROM quay.io/tms/llm-d-cuda-dev:ef2c4f7
+
+USER root
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update -y \
-    && apt-get install -y --no-install-recommends \
-       ccache git curl \
+    && apt-get install -y --no-install-recommends ccache \
     && rm -rf /var/lib/apt/lists/*
-
-# Install uv and Python 3.12
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
-RUN uv python install 3.12 \
-    && ln -s $(uv python find 3.12) /usr/local/bin/python3 \
-    && ln -s $(uv python find 3.12) /usr/bin/python3.12
-
-ENV TORCH_CUDA_ARCH_LIST="9.0a;10.0+PTX" \
-    UV_LINK_MODE=copy \
-    UV_HTTP_TIMEOUT=500
 
 # ccache: disable hash_dir since uv builds in random temp dirs
 RUN echo "hash_dir = false" > /etc/ccache.conf
@@ -24,5 +14,9 @@ RUN echo "hash_dir = false" > /etc/ccache.conf
 # Install dotfiles (zsh, tmux, neovim, fzf, etc.)
 RUN git clone https://github.com/tlrmchlsmth/dotfiles /root/.dotfiles \
     && cd /root/.dotfiles && bash install.sh
+
+ENV TORCH_CUDA_ARCH_LIST="9.0a;10.0+PTX" \
+    UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=500
 
 CMD ["sleep", "infinity"]

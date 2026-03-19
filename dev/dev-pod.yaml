@@ -18,7 +18,7 @@ spec:
     runAsGroup: 0
   containers:
     - name: dev
-      image: quay.io/tms/vllm-dev:cu130
+      image: quay.io/tms/vllm-dev:ef2c4f7
       imagePullPolicy: Always
       command: ["sleep", "infinity"]
       resources:

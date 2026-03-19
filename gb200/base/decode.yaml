@@ -13,7 +13,7 @@ spec:
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 8
+    size: 2
     workerTemplate:
       metadata:
         labels:
@@ -107,7 +107,7 @@ spec:
               allowPrivilegeEscalation: false
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:be441ac-v1
+            image: quay.io/tms/llm-d-cuda-dev:ef2c4f7
             securityContext:
               capabilities:
                 add:
@@ -184,7 +184,7 @@ spec:
                     --kv-cache-dtype fp8 \
                     --eplb-config '{"window_size":"100",
                                     "step_interval":"10000",
-                                    "num_redundant_experts":"32",
+                                    "num_redundant_experts":"16",
                                     "log_balancedness":"True",
                                     "log_balancedness_interval":"1000"}' \
                     --enable-force-include-usage &

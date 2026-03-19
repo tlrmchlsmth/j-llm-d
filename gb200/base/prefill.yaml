@@ -7,7 +7,7 @@ metadata:
     llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
     llm-d.ai/role: prefill
 spec:
-  replicas: 2
+  replicas: 1
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:
@@ -42,7 +42,7 @@ spec:
             resourceClaimTemplateName: llm-d-dev-claim
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:be441ac-v1
+            image: quay.io/tms/llm-d-cuda-dev:ef2c4f7
             securityContext:
               capabilities:
                 add:

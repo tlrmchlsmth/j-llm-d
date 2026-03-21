@@ -152,13 +152,32 @@ spec:
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
 
+                PROFILER_ARGS=""
+                NSYS_PREFIX=""
+                NVTX_TRACING_ARG=""
+                if [ "${ENABLE_PROFILING:-0}" = "1" ]; then
+                  echo "Profiling enabled, installing profiling tools..."
+                  uv pip install nvtx
+                  mkdir -p /trace
+                  apt-get update && apt-get install -y --no-install-recommends nsight-systems-cli 2>/dev/null || \
+                  uv pip install nvidia-nsight-systems 2>/dev/null || \
+                  (echo "ERROR: Could not install nsys. Add nsight-systems to your container image." && exit 1)
+
+                  if [ "${PROFILER_TYPE:-nsys}" = "nsys" ]; then
+                    NSYS_PREFIX="nsys profile --cuda-graph-trace=graph --trace=cuda,nvtx --delay=${PROFILER_DELAY_SECS:-120} --duration=${PROFILER_DURATION_SECS:-10} -o /trace/decode_rank_${START_RANK}"
+                    NVTX_TRACING_ARG="--enable-layerwise-nvtx-tracing"
+                  else
+                    PROFILER_ARGS="--profiler-config {\"profiler\":\"torch\",\"max_iterations\":${PROFILER_MAX_ITERS:-32},\"torch_profiler_dir\":\"/trace\"}"
+                  fi
+                fi
+
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
                   GPU_START=$((R * TP_SIZE))
                   GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
 
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
-                  CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
+                  CUDA_VISIBLE_DEVICES=$GPUS $NSYS_PREFIX vllm serve $PROFILER_ARGS \
                     nvidia/DeepSeek-R1-0528-NVFP4-v2 \
                     --disable-uvicorn-access-log \
                     --port $((8200 + R)) \

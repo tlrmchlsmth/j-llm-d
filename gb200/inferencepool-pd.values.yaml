@@ -43,9 +43,12 @@ inferenceExtension:
       - type: queue-scorer
       - type: pd-profile-handler
       - type: weighted-random-picker
+        name: prefill-picker
         parameters:
           threshold: 0.1
           hashBlockSize: 5
+      - type: max-score-picker
+        name: decode-picker
       schedulingProfiles:
       - name: prefill
         plugins:
@@ -56,13 +59,13 @@ inferenceExtension:
           weight: 2
         - pluginRef: queue-scorer
           weight: 2
-        - pluginRef: weighted-random-picker
+        - pluginRef: prefill-picker
       - name: decode
         plugins:
         - pluginRef: decode-filter
         - pluginRef: active-request-scorer
-          weight: 1
-        - pluginRef: weighted-random-picker
+          weight: 2
+        - pluginRef: decode-picker
 
 inferencePool:
   name: ${DEPLOY_NAME}-infpool

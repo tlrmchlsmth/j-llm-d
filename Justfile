@@ -143,8 +143,16 @@ deploy_inferencepool ROUTING='load-aware':
   {{KN}} delete pod -l inferencepool={{DEPLOY_NAME}}-infpool-epp --ignore-not-found=true
   # Apply DestinationRule for the backend infpool-ip service (prevents envoy OOM
   # from stale connection accumulation). The service name has a dynamic hash suffix
-  # so we discover it via label.
-  INFPOOL_IP_SVC=$({{KN}} get svc -l istio.io/inferencepool-name={{DEPLOY_NAME}}-infpool -o jsonpath='{.items[0].metadata.name}')
+  # so we discover it via label. Wait for the controller to create it.
+  for i in $(seq 1 30); do
+    INFPOOL_IP_SVC=$({{KN}} get svc -l istio.io/inferencepool-name={{DEPLOY_NAME}}-infpool -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) && [ -n "$INFPOOL_IP_SVC" ] && break
+    echo "Waiting for infpool-ip service... ($i/30)"
+    sleep 2
+  done
+  if [ -z "${INFPOOL_IP_SVC:-}" ]; then
+    echo "ERROR: infpool-ip service not found after 60s"
+    exit 1
+  fi
   export DEPLOY_NAME INFPOOL_IP_SVC
   envsubst '${DEPLOY_NAME} ${INFPOOL_IP_SVC}' < {{GB200_DIR}}/infpool-backend-dr.yaml | {{KN}} apply -f -
 

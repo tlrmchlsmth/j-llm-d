@@ -141,6 +141,12 @@ deploy_inferencepool ROUTING='load-aware':
     -n {{NAMESPACE}}
   # Restart EPP pod to pick up config changes (it reads config at startup)
   {{KN}} delete pod -l inferencepool={{DEPLOY_NAME}}-infpool-epp --ignore-not-found=true
+  # Apply DestinationRule for the backend infpool-ip service (prevents envoy OOM
+  # from stale connection accumulation). The service name has a dynamic hash suffix
+  # so we discover it via label.
+  INFPOOL_IP_SVC=$({{KN}} get svc -l istio.io/inferencepool-name={{DEPLOY_NAME}}-infpool -o jsonpath='{.items[0].metadata.name}')
+  export DEPLOY_NAME INFPOOL_IP_SVC
+  envsubst '${DEPLOY_NAME} ${INFPOOL_IP_SVC}' < {{GB200_DIR}}/infpool-backend-dr.yaml | {{KN}} apply -f -
 
 VLLM_DEV_VENV := "/mnt/lustre/" + NAME_PREFIX + "/vllm-venv"
 VLLM_DEV_SRC := "/mnt/lustre/" + NAME_PREFIX + "/vllm-dev"
@@ -201,6 +207,7 @@ stop NOW='false':
   {{KN}} delete gateway {{DEPLOY_NAME}}-inference-gateway --ignore-not-found=true &
   {{KN}} delete service {{DEPLOY_NAME}}-inference-gateway-istio --ignore-not-found=true &
   {{KN}} delete configmap {{DEPLOY_NAME}}-gateway-options --ignore-not-found=true &
+  {{KN}} delete destinationrule {{DEPLOY_NAME}}-infpool-backend --ignore-not-found=true &
   {{KN}} delete job parallel-guidellm --ignore-not-found=true $FORCE &
   {{KN}} delete job inference-perf --ignore-not-found=true $FORCE &
   {{KN}} delete configmap inference-perf-config --ignore-not-found=true &

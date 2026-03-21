@@ -25,10 +25,10 @@ data:
             resources:
               requests:
                 cpu: "8"
-                memory: 16Gi
+                memory: 64Gi
               limits:
                 cpu: "8"
-                memory: 16Gi
+                memory: 64Gi
 ---
 # Gateway for GB200 decode-bench deployment
 apiVersion: gateway.networking.k8s.io/v1

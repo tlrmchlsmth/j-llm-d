@@ -7,7 +7,7 @@ metadata:
     llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
     llm-d.ai/role: prefill
 spec:
-  replicas: 1
+  replicas: 2
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:
@@ -78,6 +78,7 @@ spec:
                 fi
 
                 uv pip uninstall pplx-kernels
+                uv pip install --upgrade mistral_common
 
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))
@@ -115,6 +116,7 @@ spec:
                     --gpu-memory-utilization 0.85 \
                     --all2all-backend "deepep_high_throughput" \
                     --no-enable-prefix-caching \
+                    --api-server-count 4 \
                     --async-scheduling \
                     --kv-cache-dtype fp8 \
                     --enable-force-include-usage &

@@ -6,12 +6,10 @@ inferenceExtension:
   image:
     name: llm-d-inference-scheduler
     hub: ghcr.io/llm-d
-    tag: v0.5.0
+    tag: v0.6.0
   extProcPort: 9002
   monitoring:
     interval: "10s"
-    secret:
-      name: ${DEPLOY_NAME}-sa-metrics-reader-secret
     prometheus:
       enabled: false
   affinity:
@@ -41,14 +39,20 @@ inferenceExtension:
       - type: prefix-cache-scorer
       - type: active-request-scorer
       - type: queue-scorer
+      - type: always-disagg-pd-decider
       - type: pd-profile-handler
+        parameters:
+          threshold: 0
+          hashBlockSize: 5
       - type: weighted-random-picker
         name: prefill-picker
         parameters:
           threshold: 0.1
           hashBlockSize: 5
-      - type: max-score-picker
+      - type: weighted-random-picker
         name: decode-picker
+        parameters:
+          threshold: 0.1
       schedulingProfiles:
       - name: prefill
         plugins:

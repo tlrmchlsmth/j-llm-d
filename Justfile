@@ -478,11 +478,11 @@ benchmark-nyann:
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_POKER_DIR}}"
     just deploy sharegpt-load "$BASE_URL" \
-      '{"load":{"concurrency":1900,"duration":"3600s"},"warmup":{"auto":true},"workload":{"type":"corpus","corpus_path":"/mnt/lustre/tms/corpus/sharegpt.txt","isl":100,"osl":1500,"turns":1}}' \
-      8 {{NAMESPACE}} arm64 lustre pr-24 &
+      '{"load":{"concurrency":1900,"duration":"3600s"},"warmup":{},"workload":{"type":"corpus","corpus_path":"/mnt/lustre/tms/corpus/sharegpt.txt","isl":100,"osl":1500,"turns":1}}' \
+      8 {{NAMESPACE}} arm64 lustre &
     just deploy poker-eval "$BASE_URL" \
       '{"load":{"concurrency":64,"duration":"3600s"},"workload":{"type":"gsm8k","gsm8k_path":"/mnt/lustre/tms/gsm8k_test.jsonl","gsm8k_train_path":"/mnt/lustre/tms/gsm8k_train.jsonl"}}' \
-      1 {{NAMESPACE}} arm64 lustre pr-24 &
+      1 {{NAMESPACE}} arm64 lustre &
     wait
     echo "nyann_poker jobs submitted. Use 'just nyann-logs sharegpt-load' or 'just nyann-logs poker-eval' to follow."
 

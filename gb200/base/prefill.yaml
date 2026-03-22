@@ -119,6 +119,7 @@ spec:
                     --api-server-count 4 \
                     --async-scheduling \
                     --kv-cache-dtype fp8 \
+                    --attention_backend "CUTLASS_MLA" \
                     --enable-force-include-usage &
                 done
 

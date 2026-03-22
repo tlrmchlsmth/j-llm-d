@@ -136,25 +136,40 @@ deploy_inferencepool ROUTING='load-aware':
   envsubst '${DEPLOY_NAME} ${OWNER}' < {{GB200_DIR}}/inferencepool-{{ROUTING}}.values.yaml > .tmp/inferencepool-values.yaml
   helm upgrade --install {{DEPLOY_NAME}}-infpool \
     oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
-    --version v1.2.0 \
+    --version v1.3.0 \
     -f .tmp/inferencepool-values.yaml \
     -n {{NAMESPACE}}
   # Restart EPP pod to pick up config changes (it reads config at startup)
   {{KN}} delete pod -l inferencepool={{DEPLOY_NAME}}-infpool-epp --ignore-not-found=true
   # Apply DestinationRule for the backend infpool-ip service (prevents envoy OOM
   # from stale connection accumulation). The service name has a dynamic hash suffix
-  # so we discover it via label. Wait for the controller to create it.
+  # so we discover it via label. Wait for the Istio controller to create it.
+  INFPOOL_IP_SVC=""
   for i in $(seq 1 30); do
     INFPOOL_IP_SVC=$({{KN}} get svc -l istio.io/inferencepool-name={{DEPLOY_NAME}}-infpool -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) && [ -n "$INFPOOL_IP_SVC" ] && break
     echo "Waiting for infpool-ip service... ($i/30)"
     sleep 2
   done
-  if [ -z "${INFPOOL_IP_SVC:-}" ]; then
-    echo "ERROR: infpool-ip service not found after 60s"
+  if [ -z "$INFPOOL_IP_SVC" ]; then
+    echo "WARNING: infpool-ip service not found after 60s — skipping DestinationRule (envoy OOM fix)."
+    echo "         Apply manually later with: just apply-infpool-dr"
+  else
+    export DEPLOY_NAME INFPOOL_IP_SVC
+    envsubst '${DEPLOY_NAME} ${INFPOOL_IP_SVC}' < {{GB200_DIR}}/infpool-backend-dr.yaml | {{KN}} apply -f -
+  fi
+
+# Apply the infpool-ip DestinationRule (envoy OOM fix) if it was skipped during deploy
+apply-infpool-dr:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  INFPOOL_IP_SVC=$({{KN}} get svc -l istio.io/inferencepool-name={{DEPLOY_NAME}}-infpool -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [ -z "$INFPOOL_IP_SVC" ]; then
+    echo "ERROR: infpool-ip service still not found. Is the Istio controller running?"
     exit 1
   fi
-  export DEPLOY_NAME INFPOOL_IP_SVC
+  export DEPLOY_NAME="{{DEPLOY_NAME}}" INFPOOL_IP_SVC
   envsubst '${DEPLOY_NAME} ${INFPOOL_IP_SVC}' < {{GB200_DIR}}/infpool-backend-dr.yaml | {{KN}} apply -f -
+  echo "DestinationRule applied for $INFPOOL_IP_SVC"
 
 VLLM_DEV_VENV := "/mnt/lustre/" + NAME_PREFIX + "/vllm-venv"
 VLLM_DEV_SRC := "/mnt/lustre/" + NAME_PREFIX + "/vllm-dev"
@@ -457,19 +472,19 @@ NYANN_POKER_DIR := env("NYANN_POKER_DIR", "/Users/tms/code/gb200_benchmarking_pr
 
 # Wait for stack readiness, then launch nyann_poker load + eval jobs
 benchmark-nyann:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  just ready
-  BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
-  cd "{{NYANN_POKER_DIR}}"
-  just deploy sharegpt-load "$BASE_URL" \
-    '{"load":{"concurrency":1900,"rampup":"3m","duration":"3600s"},"workload":{"type":"corpus","corpus_path":"/mnt/lustre/tms/corpus/sharegpt.txt","isl":100,"osl":1500,"turns":1}}' \
-    16 {{NAMESPACE}} arm64 lustre &
-  just deploy poker-eval "$BASE_URL" \
-    '{"load":{"concurrency":64,"duration":"3600s"},"warmup":{"concurrency":16,"duration":"60s"},"workload":{"type":"gsm8k","gsm8k_path":"/mnt/lustre/tms/gsm8k_test.jsonl","gsm8k_train_path":"/mnt/lustre/tms/gsm8k_train.jsonl"}}' \
-    1 {{NAMESPACE}} arm64 lustre &
-  wait
-  echo "nyann_poker jobs submitted. Use 'just nyann-logs sharegpt-load' or 'just nyann-logs poker-eval' to follow."
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just ready
+    BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
+    cd "{{NYANN_POKER_DIR}}"
+    just deploy sharegpt-load "$BASE_URL" \
+      '{"load":{"concurrency":1900,"duration":"3600s"},"warmup":{"auto":true},"workload":{"type":"corpus","corpus_path":"/mnt/lustre/tms/corpus/sharegpt.txt","isl":100,"osl":1500,"turns":1}}' \
+      8 {{NAMESPACE}} arm64 lustre pr-24 &
+    just deploy poker-eval "$BASE_URL" \
+      '{"load":{"concurrency":64,"duration":"3600s"},"workload":{"type":"gsm8k","gsm8k_path":"/mnt/lustre/tms/gsm8k_test.jsonl","gsm8k_train_path":"/mnt/lustre/tms/gsm8k_train.jsonl"}}' \
+      1 {{NAMESPACE}} arm64 lustre pr-24 &
+    wait
+    echo "nyann_poker jobs submitted. Use 'just nyann-logs sharegpt-load' or 'just nyann-logs poker-eval' to follow."
 
 # Stop nyann_poker benchmark jobs
 stop-nyann:

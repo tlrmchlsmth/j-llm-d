@@ -203,6 +203,7 @@ spec:
                     --async-scheduling \
                     --api-server-count 4 \
                     --kv-cache-dtype fp8 \
+                    --attention_backend "CUTLASS_MLA" \
                     --enable-eplb \
                     --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
                     --eplb-config '{"window_size":"100",
@@ -235,6 +236,10 @@ spec:
             env:
               - name: TQDM_DISABLE
                 value: "1"
+
+              # NaN detection v2: track real vs padding NaN separately
+              #- name: VLLM_NAN_DETECT
+              #  value: "1"
 
               # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)
               - name: VLLM_DEV_VENV

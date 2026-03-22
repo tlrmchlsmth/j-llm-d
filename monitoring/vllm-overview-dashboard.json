@@ -1579,6 +1579,107 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Average prompt tokens computed locally per successful decode request. Non-zero values indicate decode instances are computing prefills themselves instead of receiving KV caches from prefill instances.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 76
+      },
+      "id": 302,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by(job)(rate(vllm:prompt_tokens_by_source_total{job=\"vllm-decode\", source=\"local_compute\", pod=~\"${deployment}-.*\"}[5m]))\n/\nsum by(job)(rate(vllm:request_success_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[5m]))",
+          "instant": false,
+          "legendFormat": "prompt tokens/req (local compute)",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Decode Local Prompt Tokens / Request",
+      "type": "timeseries"
+    },
+    {
       "collapsed": true,
       "gridPos": {
         "h": 1,
@@ -4433,7 +4534,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "inference_objective_running_requests{model_name=\"nvidia/DeepSeek-R1-0528-NVFP4-v2\"}",
+          "expr": "inference_objective_running_requests{model_name=\"nvidia/DeepSeek-R1-0528-NVFP4-v2\", pod=~\"${deployment}-.*\"}",
           "legendFormat": "Running",
           "refId": "A"
         }
@@ -4638,7 +4739,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(llm_d_inference_scheduler_pd_decision_total[10s]))",
+          "expr": "sum(rate(llm_d_inference_scheduler_pd_decision_total{pod=~\"${deployment}-.*\"}[10s]))",
           "legendFormat": "P/D decisions/s",
           "refId": "A"
         }
@@ -5174,7 +5275,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(inference_objective_request_error_total[10s])",
+          "expr": "rate(inference_objective_request_error_total{pod=~\"${deployment}-.*\"}[10s])",
           "legendFormat": "{{error_code}}",
           "range": true,
           "refId": "A"

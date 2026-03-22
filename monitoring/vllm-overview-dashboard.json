@@ -3003,7 +3003,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(nyann_eval_correct[10s]) / rate(nyann_eval_total[10s])",
+          "expr": "rate(nyann_eval_correct[5m]) / rate(nyann_eval_total[5m])",
           "instant": false,
           "legendFormat": "{{workload}} ({{pod}})",
           "range": true,

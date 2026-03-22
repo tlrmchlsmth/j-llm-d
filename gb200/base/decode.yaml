@@ -13,7 +13,7 @@ spec:
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 2
+    size: 4
     workerTemplate:
       metadata:
         labels:
@@ -41,8 +41,10 @@ spec:
           - name: compute-domain-channel
             resourceClaimTemplateName: llm-d-dev-claim
         initContainers:
+          # Sidecar image from https://github.com/llm-d/llm-d-inference-scheduler/pull/746
+          # (hot-path perf optimizations: connection pooling, LRU cache, alloc reduction)
           - name: routing-proxy-rank0
-            image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.5.0
+            image: quay.io/tms/llm-d-routing-sidecar:perf
             imagePullPolicy: Always
             args:
               - --port=8000
@@ -58,7 +60,7 @@ spec:
             securityContext:
               allowPrivilegeEscalation: false
           - name: routing-proxy-rank1
-            image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.5.0
+            image: quay.io/tms/llm-d-routing-sidecar:perf
             imagePullPolicy: Always
             args:
               - --port=8001
@@ -74,7 +76,7 @@ spec:
             securityContext:
               allowPrivilegeEscalation: false
           - name: routing-proxy-rank2
-            image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.5.0
+            image: quay.io/tms/llm-d-routing-sidecar:perf
             imagePullPolicy: Always
             args:
               - --port=8002
@@ -90,7 +92,7 @@ spec:
             securityContext:
               allowPrivilegeEscalation: false
           - name: routing-proxy-rank3
-            image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.5.0
+            image: quay.io/tms/llm-d-routing-sidecar:perf
             imagePullPolicy: Always
             args:
               - --port=8003
@@ -143,6 +145,7 @@ spec:
                 fi
 
                 uv pip uninstall pplx-kernels
+                uv pip install --upgrade mistral_common
 
                 # Derive batch-size-dependent env vars from MAX_TOKENS
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
@@ -195,20 +198,27 @@ spec:
                     --max-num-seqs $MAX_TOKENS \
                     --disable_cascade_attn \
                     --max-cudagraph-capture-size $MAX_TOKENS \
-                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
                     --all2all-backend "deepep_low_latency" \
                     --no-enable-prefix-caching \
-                    --enable-eplb \
                     --async-scheduling \
+                    --api-server-count 4 \
                     --kv-cache-dtype fp8 \
+                    --enable-eplb \
+                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
                     --eplb-config '{"window_size":"100",
-                                    "step_interval":"10000",
+                                    "step_interval":"3000",
                                     "num_redundant_experts":"16",
-                                    "log_balancedness":"True",
+                                    "log_balancedness":"False",
                                     "log_balancedness_interval":"1000"}' \
                     --enable-force-include-usage &
                 done
 
+                    ########
+                    # TODO: try
+                    #--speculative-config '{"method":"mtp","num_speculative_tokens":1}' \
+                    #--compilation_config '{"cudagraph_mode": "FULL_AND_PIECEWISE"}' \
+                    ########
+                    
                     #--profiler-config '{"profiler": "torch",
                     #                    "torch_profiler_dir": "/traces",
                     #                    "ignore_frontend": "true",

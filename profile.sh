@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Defaults (override with flags)
-NAMESPACE="tms-llm-d-wide-ep"
+NAMESPACE="${NAMESPACE:-${USER}-llm-d-wide-ep}"
 PREFIX="wide-ep-llm-d"
 DECODE_PORT="8200"
 PREFILL_PORT="8000"

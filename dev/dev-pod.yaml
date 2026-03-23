@@ -38,13 +38,13 @@ spec:
         - name: HF_HOME
           value: /mnt/lustre/hf_cache
         - name: VLLM_CACHE_ROOT
-          value: /mnt/lustre/tms/vllm_cache_extdp
+          value: /mnt/lustre/${USER}/vllm_cache_extdp
         - name: FLASHINFER_CACHE_DIR
-          value: /mnt/lustre/tms/flashinfer_cache_extdp
+          value: /mnt/lustre/${USER}/flashinfer_cache_extdp
         - name: TORCH_CUDA_ARCH_LIST
           value: "9.0a;10.0+PTX"
         - name: CCACHE_DIR
-          value: /mnt/lustre/tms/ccache
+          value: /mnt/lustre/${USER}/ccache
         - name: CMAKE_CXX_COMPILER_LAUNCHER
           value: ccache
         - name: CMAKE_C_COMPILER_LAUNCHER
@@ -54,7 +54,7 @@ spec:
           name: lustre
         - mountPath: /dev/shm
           name: dshm
-      workingDir: /mnt/lustre/tms/vllm-dev
+      workingDir: /mnt/lustre/${USER}/vllm-dev
   volumes:
     - name: lustre
       persistentVolumeClaim:

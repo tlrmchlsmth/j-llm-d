@@ -468,28 +468,33 @@ process-traces N='':
   echo "Processing traces/$N ..."
   python3 profiling/process_traces.py "traces/$N"
 
-NYANN_POKER_DIR := env("NYANN_POKER_DIR", "/Users/tms/code/gb200_benchmarking_project/nyann_poker")
+NYANN_POKER_DIR := env("NYANN_POKER_DIR", "")
 
 # Wait for stack readiness, then launch nyann_poker load + eval jobs
 benchmark-nyann:
     #!/usr/bin/env bash
     set -euo pipefail
+    if [ -z "{{NYANN_POKER_DIR}}" ]; then
+      echo "Error: NYANN_POKER_DIR is not set. Add it to .env or export it." >&2
+      exit 1
+    fi
     just ready
+    LUSTRE="/mnt/lustre/{{NAME_PREFIX}}"
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_POKER_DIR}}"
-    just deploy sharegpt-load "$BASE_URL" \
-      '{"load":{"concurrency":1900,"duration":"3600s"},"warmup":{},"workload":{"type":"corpus","corpus_path":"/mnt/lustre/tms/corpus/sharegpt.txt","isl":100,"osl":1500,"turns":1}}' \
+    just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
+      "{\"load\":{\"concurrency\":1900,\"duration\":\"3600s\"},\"warmup\":{},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":100,\"osl\":1500,\"turns\":1}}" \
       8 {{NAMESPACE}} arm64 lustre &
-    just deploy poker-eval "$BASE_URL" \
-      '{"load":{"concurrency":64,"duration":"3600s"},"workload":{"type":"gsm8k","gsm8k_path":"/mnt/lustre/tms/gsm8k_test.jsonl","gsm8k_train_path":"/mnt/lustre/tms/gsm8k_train.jsonl"}}' \
+    just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
+      "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
       1 {{NAMESPACE}} arm64 lustre &
     wait
-    echo "nyann_poker jobs submitted. Use 'just nyann-logs sharegpt-load' or 'just nyann-logs poker-eval' to follow."
+    echo "nyann_poker jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
 
 # Stop nyann_poker benchmark jobs
 stop-nyann:
-  {{KN}} delete job -l app=sharegpt-load --ignore-not-found=true &
-  {{KN}} delete job -l app=poker-eval --ignore-not-found=true &
+  {{KN}} delete job -l app={{NAME_PREFIX}}-sharegpt-load --ignore-not-found=true &
+  {{KN}} delete job -l app={{NAME_PREFIX}}-poker-eval --ignore-not-found=true &
   wait
 
 # Tail nyann_poker job logs

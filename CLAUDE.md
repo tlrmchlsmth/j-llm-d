@@ -44,7 +44,7 @@ Key components:
 - **Model**: `nvidia/DeepSeek-R1-NVFP4` (FP4 quantized)
 - **Topology**: Prefill LWS + Decode LWS (4 vLLM processes per pod)
 - **Namespace**: `vllm` (configurable)
-- **Naming**: All resources prefixed with `$USER-wide-ep` (e.g., `tms-wide-ep-decode`)
+- **Naming**: All resources prefixed with `$USER-wide-ep` (e.g., `$USER-wide-ep-decode`)
 - **Storage**: Lustre PVC (`lustre-pvc-vllm`) for shared vLLM builds and caches
 
 ## Decode vs Prefill Architecture

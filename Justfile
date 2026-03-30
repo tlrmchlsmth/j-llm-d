@@ -483,7 +483,7 @@ benchmark-nyann:
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_POKER_DIR}}"
     just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
-      "{\"load\":{\"concurrency\":1900,\"duration\":\"3600s\"},\"warmup\":{},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":100,\"osl\":1500,\"turns\":1}}" \
+      "{\"load\":{\"concurrency\":1900,\"duration\":\"3600s\"},\"warmup\":[{\"duration\":\"120s\",\"stagger\":true}],\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":100,\"osl\":1500,\"turns\":1}}" \
       8 {{NAMESPACE}} arm64 lustre &
     just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
       "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \

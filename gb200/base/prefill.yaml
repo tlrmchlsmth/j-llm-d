@@ -7,13 +7,13 @@ metadata:
     llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
     llm-d.ai/role: prefill
 spec:
-  replicas: 2
+  replicas: 1
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 1
+    size: 2
     workerTemplate:
       metadata:
         labels:
@@ -42,7 +42,7 @@ spec:
             resourceClaimTemplateName: llm-d-dev-claim
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:ef2c4f7
+            image: ghcr.io/tlrmchlsmth/llm-d-cuda-dev:c6b5108
             securityContext:
               capabilities:
                 add:
@@ -63,11 +63,11 @@ spec:
                 # No routing sidecar - serves directly on ports 8000+
                 #################
                 # Persist logs to Lustre so they survive LWS pod recreation
-                LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/prefill
-                mkdir -p "$LOG_DIR"
-                LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
-                exec > >(tee -a "$LOG_FILE") 2>&1
-                echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+                # LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/prefill
+                # mkdir -p "$LOG_DIR"
+                # LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
+                # exec > >(tee -a "$LOG_FILE") 2>&1
+                # echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
 
                 # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
@@ -77,7 +77,6 @@ spec:
                   source /opt/vllm/bin/activate
                 fi
 
-                uv pip uninstall pplx-kernels
                 uv pip install --upgrade mistral_common
 
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
@@ -114,15 +113,18 @@ spec:
                     --trust-remote-code \
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
                     --gpu-memory-utilization 0.85 \
-                    --all2all-backend "deepep_high_throughput" \
+                    --all2all-backend "flashinfer_nvlink_one_sided" \
                     --no-enable-prefix-caching \
                     --api-server-count 4 \
+                    -ac.use_trtllm_ragged_deepseek_prefill=true \
                     --async-scheduling \
+                    --compilation_config '{"custom_ops": ["none", "+rms_norm"]}' \
                     --kv-cache-dtype fp8 \
-                    --attention_backend "CUTLASS_MLA" \
                     --enable-force-include-usage &
                 done
 
+                    #--all2all-backend "deepep_high_throughput" \
+                    # --attention_backend "CUTLASS_MLA" \
                     #--profiler-config '{"profiler": "torch",
                     #                    "torch_profiler_dir": "/traces",
                     #                    "ignore_frontend": "true",
@@ -136,6 +138,11 @@ spec:
 
             env:
               - name: TQDM_DISABLE
+                value: "1"
+
+              - name: VLLM_NAN_DETECT
+                value: "1"
+              - name: VLLM_NIXL_NAN_DETECT
                 value: "1"
 
               # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)

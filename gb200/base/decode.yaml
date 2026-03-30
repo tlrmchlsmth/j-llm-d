@@ -44,7 +44,7 @@ spec:
           # Sidecar image from https://github.com/llm-d/llm-d-inference-scheduler/pull/746
           # (hot-path perf optimizations: connection pooling, LRU cache, alloc reduction)
           - name: routing-proxy-rank0
-            image: quay.io/tms/llm-d-routing-sidecar:perf
+            image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
             imagePullPolicy: Always
             args:
               - --port=8000
@@ -60,7 +60,7 @@ spec:
             securityContext:
               allowPrivilegeEscalation: false
           - name: routing-proxy-rank1
-            image: quay.io/tms/llm-d-routing-sidecar:perf
+            image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
             imagePullPolicy: Always
             args:
               - --port=8001
@@ -76,7 +76,7 @@ spec:
             securityContext:
               allowPrivilegeEscalation: false
           - name: routing-proxy-rank2
-            image: quay.io/tms/llm-d-routing-sidecar:perf
+            image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
             imagePullPolicy: Always
             args:
               - --port=8002
@@ -92,7 +92,7 @@ spec:
             securityContext:
               allowPrivilegeEscalation: false
           - name: routing-proxy-rank3
-            image: quay.io/tms/llm-d-routing-sidecar:perf
+            image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
             imagePullPolicy: Always
             args:
               - --port=8003
@@ -109,7 +109,7 @@ spec:
               allowPrivilegeEscalation: false
         containers:
           - name: vllm
-            image: quay.io/tms/llm-d-cuda-dev:ef2c4f7
+            image: ghcr.io/tlrmchlsmth/llm-d-cuda-dev:c6b5108
             securityContext:
               capabilities:
                 add:
@@ -130,11 +130,11 @@ spec:
                 # Routing sidecar maps port 800X -> localhost:820X
                 #################
                 # Persist logs to Lustre so they survive LWS pod recreation
-                LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/decode
-                mkdir -p "$LOG_DIR"
-                LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
-                exec > >(tee -a "$LOG_FILE") 2>&1
-                echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+                #LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/decode
+                #mkdir -p "$LOG_DIR"
+                #LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
+                #exec > >(tee -a "$LOG_FILE") 2>&1
+                #echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
 
                 # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
@@ -144,7 +144,6 @@ spec:
                   source /opt/vllm/bin/activate
                 fi
 
-                uv pip uninstall pplx-kernels
                 uv pip install --upgrade mistral_common
 
                 # Derive batch-size-dependent env vars from MAX_TOKENS
@@ -198,28 +197,29 @@ spec:
                     --max-num-seqs $MAX_TOKENS \
                     --disable_cascade_attn \
                     --max-cudagraph-capture-size $MAX_TOKENS \
-                    --all2all-backend "deepep_low_latency" \
+                    --all2all-backend "flashinfer_nvlink_one_sided" \
                     --no-enable-prefix-caching \
                     --async-scheduling \
                     --api-server-count 4 \
-                    --kv-cache-dtype fp8 \
-                    --attention_backend "CUTLASS_MLA" \
                     --enable-eplb \
-                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
                     --eplb-config '{"window_size":"100",
                                     "step_interval":"3000",
                                     "num_redundant_experts":"16",
                                     "log_balancedness":"False",
                                     "log_balancedness_interval":"1000"}' \
+                    --kv-cache-dtype fp8 \
+                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY", "custom_ops": ["none", "+rms_norm"]}' \
                     --enable-force-include-usage &
                 done
 
+                    #--all2all-backend "deepep_low_latency" \
                     ########
                     # TODO: try
                     #--speculative-config '{"method":"mtp","num_speculative_tokens":1}' \
                     #--compilation_config '{"cudagraph_mode": "FULL_AND_PIECEWISE"}' \
                     ########
                     
+                    # --attention_backend "CUTLASS_MLA" \
                     #--profiler-config '{"profiler": "torch",
                     #                    "torch_profiler_dir": "/traces",
                     #                    "ignore_frontend": "true",
@@ -238,18 +238,20 @@ spec:
                 value: "1"
 
               # NaN detection v2: track real vs padding NaN separately
-              #- name: VLLM_NAN_DETECT
-              #  value: "1"
+              - name: VLLM_NAN_DETECT
+                value: "1"
+              - name: VLLM_NIXL_NAN_DETECT
+                value: "1"
 
               # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)
               - name: VLLM_DEV_VENV
                 value: VLLM_DEV_VENV_PLACEHOLDER
 
               # DeepEP low-latency only: NVFP4 dispatch + masked_gemm
-              - name: VLLM_DEEPEPLL_NVFP4_DISPATCH
-                value: "1"
-              - name: VLLM_FLASHINFER_MOE_BACKEND
-                value: "masked_gemm"
+              #- name: VLLM_DEEPEPLL_NVFP4_DISPATCH
+              #  value: "1"
+              #- name: VLLM_FLASHINFER_MOE_BACKEND
+              #  value: "masked_gemm"
 
               - name: MAX_TOKENS
                 value: "1024"

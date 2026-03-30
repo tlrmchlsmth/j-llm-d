@@ -24,10 +24,10 @@ spec:
       resources:
         requests:
           cpu: "32"
-          memory: 64Gi
+          memory: 512Gi
         limits:
           cpu: "32"
-          memory: 64Gi
+          memory: 512Gi
       env:
         - name: HF_TOKEN
           valueFrom:

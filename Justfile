@@ -312,6 +312,10 @@ logs-clean ROLE='decode' KEEP='5':
 
 # === Dev Environment ===
 
+# Note: tmp command, don't commit
+update-dev-env:
+  kubectl exec tms-vllm-dev -- bash -c "cd /mnt/lustre/tms/vllm-dev && git fetch tms && git reset --hard tms/cutedsl-moe-nvfp4 && find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null"
+
 # Deploy the persistent dev pod (CPU-only, for editing/compiling vLLM on Lustre)
 dev-start:
   envsubst < {{DEV_DIR}}/dev-pod.yaml | {{KN}} apply -f -
@@ -532,3 +536,59 @@ load-dashboards:
       {{KN}} apply -f -
   done
   echo "Dashboards loaded. Grafana will auto-discover them within 30 seconds."
+
+# === KV Cache Sweep ===
+
+KV_SWEEP_IMAGE := "quay.io/tms/llm-d-cuda-dev:ef2c4f7"
+KV_SWEEP_MODEL := "nvidia/DeepSeek-R1-0528-NVFP4-v2"
+KV_SWEEP_PRIORITY := "low-priority"
+KV_SWEEP_GPU_MEM_UTIL := "0.75"
+KV_SWEEP_MAX_TOKENS := "1024"
+
+# (internal) Render KV sweep Job YAML for a single DP size
+_kv-sweep-job-yaml DP_SIZE:
+  #!/usr/bin/env bash
+  echo "---"
+  env \
+    JOB_NAME="{{NAME_PREFIX}}-kv-sweep-dp{{DP_SIZE}}" \
+    MODEL="{{KV_SWEEP_MODEL}}" \
+    VLLM_IMAGE="{{KV_SWEEP_IMAGE}}" \
+    DP_SIZE={{DP_SIZE}} \
+    GPU_MEM_UTIL={{KV_SWEEP_GPU_MEM_UTIL}} \
+    MAX_TOKENS={{KV_SWEEP_MAX_TOKENS}} \
+    LUSTRE_PREFIX="/mnt/lustre/{{NAME_PREFIX}}" \
+    PRIORITY_CLASS="{{KV_SWEEP_PRIORITY}}" \
+    envsubst '${JOB_NAME} ${MODEL} ${VLLM_IMAGE} ${DP_SIZE} ${GPU_MEM_UTIL} ${MAX_TOKENS} ${LUSTRE_PREFIX} ${PRIORITY_CLASS}' \
+      < kv-sweep-job.yaml
+
+# Sweep KV cache capacity across DP sizes (DP=1,2,4 on 4 GPUs with pure EP)
+kv-sweep DP_SIZES='1 2 4':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  YAML=""
+  for DP in {{DP_SIZES}}; do
+    YAML+="$(just _kv-sweep-job-yaml $DP)"$'\n'
+  done
+  echo "$YAML" | {{KN}} replace --force -f -
+  echo "KV sweep jobs launched for DP sizes: {{DP_SIZES}}"
+
+# Show status of KV sweep jobs
+kv-sweep-status:
+  {{KN}} get jobs -l app=kv-sweep -o wide
+
+# Collect KV cache results from sweep job logs
+kv-sweep-collect:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  for job in $({{KN}} get jobs -l app=kv-sweep -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+    RESULT=$({{KN}} logs "job/$job" 2>/dev/null | grep '^KV_RESULT:' || true)
+    if [ -n "$RESULT" ]; then
+      echo "$RESULT"
+    else
+      echo "# $job: pending ({{KN}} logs job/$job)"
+    fi
+  done
+
+# Clean up KV sweep jobs
+kv-sweep-clean:
+  {{KN}} delete jobs -l app=kv-sweep --ignore-not-found=true

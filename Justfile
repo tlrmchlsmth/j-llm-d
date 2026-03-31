@@ -475,23 +475,41 @@ process-traces N='':
 NYANN_POKER_DIR := env("NYANN_POKER_DIR", "")
 
 # Wait for stack readiness, then launch nyann_poker load + eval jobs
-benchmark-nyann:
+benchmark-stairs:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "{{NYANN_POKER_DIR}}" ]; then
       echo "Error: NYANN_POKER_DIR is not set. Add it to .env or export it." >&2
       exit 1
     fi
-    just ready
     LUSTRE="/mnt/lustre/{{NAME_PREFIX}}"
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_POKER_DIR}}"
     just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
-      "{\"load\":{\"concurrency\":1900,\"duration\":\"3600s\"},\"warmup\":[{\"duration\":\"120s\",\"stagger\":true}],\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":100,\"osl\":1500,\"turns\":1}}" \
-      8 {{NAMESPACE}} arm64 lustre &
+      "{\"load\":{\"concurrency\":128},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"sweep\":{\"min\":128,\"max\":896,\"steps\":3,\"step_duration\":\"60s\"},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
+      8 {{NAMESPACE}} arm64 lustre pr-28 &
     just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
       "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
-      1 {{NAMESPACE}} arm64 lustre &
+      1 {{NAMESPACE}} arm64 lustre pr-28 &
+    wait
+    echo "nyann_poker jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
+
+benchmark-constant:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{NYANN_POKER_DIR}}" ]; then
+      echo "Error: NYANN_POKER_DIR is not set. Add it to .env or export it." >&2
+      exit 1
+    fi
+    LUSTRE="/mnt/lustre/{{NAME_PREFIX}}"
+    BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
+    cd "{{NYANN_POKER_DIR}}"
+    just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
+      "{\"load\":{\"concurrency\":1900,\"duration\":\"3600s\"},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
+      8 {{NAMESPACE}} arm64 lustre pr-28 &
+    just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
+      "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
+      1 {{NAMESPACE}} arm64 lustre pr-28 &
     wait
     echo "nyann_poker jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
 
@@ -504,6 +522,17 @@ stop-nyann:
 # Tail nyann_poker job logs
 nyann-logs NAME:
   {{KN}} logs -l app={{NAME}} -c nyann-poker --tail=50 -f --max-log-requests=20
+
+# Query Prometheus for per-stage benchmark metrics (requires port-forward: just prometheus)
+query-prometheus CLIENT_JOB=(NAME_PREFIX + "-sharegpt-load") DEPLOYMENT=DEPLOY_NAME EVAL_JOB=(NAME_PREFIX + "-poker-eval") *ARGS='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [ -z "{{NYANN_POKER_DIR}}" ]; then
+    echo "Error: NYANN_POKER_DIR is not set. Add it to .env or export it." >&2
+    exit 1
+  fi
+  cd "{{NYANN_POKER_DIR}}"
+  just query-prometheus {{CLIENT_JOB}} {{DEPLOYMENT}} {{NAMESPACE}} '' {{EVAL_JOB}} {{ARGS}}
 
 # === Monitoring ===
 

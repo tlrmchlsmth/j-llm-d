@@ -32,12 +32,12 @@ CONFIGS=(
 
 # Workload — single turn, measuring raw prefill TTFT
 # All array vars are space-separated strings
-CONCURRENCIES=(${CONCURRENCIES:-256 512 1024})
+CONCURRENCIES=(${CONCURRENCIES:-10})
 ISL=${ISL:-10000}
 OSL=${OSL:-1}
-DURATION=${DURATION:-300s}
+DURATION=${DURATION:-180s}
 WARMUP=${WARMUP:-120s}
-NUM_WORKERS=${NUM_WORKERS:-8}
+NUM_WORKERS=${NUM_WORKERS:-1}
 NYANN_TAG=${NYANN_TAG:-latest}
 
 # Timeouts

@@ -32,8 +32,8 @@ CONFIGS=(
 # Workload — single turn, measuring raw prefill TTFT
 # All array vars are space-separated strings
 CONCURRENCIES=(${CONCURRENCIES:-256 512 1024})
-ISL=${ISL:-5000}
-OSL=${OSL:-1000}
+ISL=${ISL:-10000}
+OSL=${OSL:-2000}
 DURATION=${DURATION:-300s}
 WARMUP=${WARMUP:-120s}
 NUM_WORKERS=${NUM_WORKERS:-8}

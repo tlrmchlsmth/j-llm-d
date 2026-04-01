@@ -5,16 +5,17 @@ metadata:
   namespace: vllm
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
   name: ${NAME_PREFIX}-sweep-runner
+  namespace: vllm
 subjects:
 - kind: ServiceAccount
   name: ${NAME_PREFIX}-sweep-runner
   namespace: vllm
 roleRef:
   kind: ClusterRole
-  name: cluster-admin
+  name: admin
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: v1
@@ -32,11 +33,7 @@ spec:
         - matchExpressions:
           - key: kubernetes.io/arch
             operator: In
-            values: ["amd64"]
-  volumes:
-    - name: lustre
-      persistentVolumeClaim:
-        claimName: lustre-pvc-vllm
+            values: ["arm64", "amd64"]
   containers:
     - name: sweep
       image: bitnami/kubectl:latest
@@ -45,18 +42,20 @@ spec:
         - |
           set -euo pipefail
 
-          # Install tools
+          # Install tools (bitnami/kubectl is Debian-based)
           echo "Installing tools..."
-          apt-get update -qq && apt-get install -y -qq git gettext-base > /dev/null 2>&1
+          apt-get update -qq && apt-get install -y -qq git gettext-base python3 python3-yaml > /dev/null 2>&1 || \
+            (apk add --no-cache git gettext python3 py3-yaml > /dev/null 2>&1) || true
 
           # Install helm
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash > /dev/null 2>&1
 
           # Install just
-          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin > /dev/null 2>&1
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin > /dev/null 2>&1 || \
+            echo "WARNING: just install failed, sweep may not work"
 
           # Clone repos
-          WORK="/mnt/lustre/${USER}/sweep-runner"
+          WORK="/tmp/sweep-runner"
           mkdir -p "$WORK"
           cd "$WORK"
 
@@ -100,6 +99,3 @@ spec:
         limits:
           cpu: "4"
           memory: "8Gi"
-      volumeMounts:
-        - mountPath: /mnt/lustre
-          name: lustre

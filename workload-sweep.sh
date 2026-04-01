@@ -30,7 +30,7 @@ NYANN_TAG=${NYANN_TAG:-latest}
 
 # Timeouts
 BENCH_TIMEOUT=${BENCH_TIMEOUT:-5400}
-EPP_SETTLE=${EPP_SETTLE:-30}
+EPP_READY_TIMEOUT=${EPP_READY_TIMEOUT:-120}
 
 # Derived
 NAMESPACE="vllm"
@@ -66,6 +66,24 @@ deploy_infpool() {
     -f .tmp/inferencepool-values.yaml \
     -n "$NAMESPACE"
   $KN delete pod -l "inferencepool=${DEPLOY_NAME}-infpool-epp" --ignore-not-found=true
+  wait_for_epp
+}
+
+wait_for_epp() {
+  local elapsed=0
+  log "Waiting for EPP pod to be ready..."
+  while [ $elapsed -lt "$EPP_READY_TIMEOUT" ]; do
+    local ready
+    ready=$($KN get pod -l "inferencepool=${DEPLOY_NAME}-infpool-epp" \
+      -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+    if [ "$ready" = "True" ]; then
+      log "EPP ready (${elapsed}s)"
+      return 0
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+  log "WARNING: EPP not ready after ${EPP_READY_TIMEOUT}s, proceeding anyway"
 }
 
 make_workload_json() {
@@ -159,8 +177,6 @@ EOF
 for STRATEGY in "${STRATEGIES[@]}"; do
   log "--- Strategy: $STRATEGY ---"
   deploy_infpool "$STRATEGY"
-  log "Waiting ${EPP_SETTLE}s for EPP to settle..."
-  sleep "$EPP_SETTLE"
 
   for CONC in "${CONCURRENCIES[@]}"; do
     TAG="${STRATEGY}-c${CONC}"

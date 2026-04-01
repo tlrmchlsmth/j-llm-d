@@ -45,7 +45,7 @@ NYANN_TAG=${NYANN_TAG:-latest}
 # Timeouts
 READY_TIMEOUT=${READY_TIMEOUT:-1200}    # 20 min for model servers to start
 BENCH_TIMEOUT=${BENCH_TIMEOUT:-5400}
-EPP_SETTLE=${EPP_SETTLE:-30}
+
 
 # Derived
 NAMESPACE="vllm"
@@ -126,8 +126,27 @@ deploy_infpool() {
     --version v1.3.0 \
     -f .tmp/inferencepool-values.yaml \
     -n "$NAMESPACE"
-  # Restart EPP pod
+  # Restart EPP pod and wait for readiness
   $KN delete pod -l "inferencepool=${DEPLOY_NAME}-infpool-epp" --ignore-not-found=true
+  wait_for_epp
+}
+
+wait_for_epp() {
+  local timeout="${EPP_READY_TIMEOUT:-120}"
+  local elapsed=0
+  log "Waiting for EPP pod to be ready..."
+  while [ $elapsed -lt "$timeout" ]; do
+    local ready
+    ready=$($KN get pod -l "inferencepool=${DEPLOY_NAME}-infpool-epp" \
+      -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+    if [ "$ready" = "True" ]; then
+      log "EPP ready (${elapsed}s)"
+      return 0
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+  log "WARNING: EPP not ready after ${timeout}s, proceeding anyway"
 }
 
 # Replicate nyann_poker `just deploy` without requiring just in nyann_poker
@@ -210,8 +229,6 @@ swap_routing() {
     log "  [dry-run] would run: deploy_infpool $strategy"
   else
     deploy_infpool "$strategy"
-    log "Waiting ${EPP_SETTLE}s for EPP to settle..."
-    sleep "$EPP_SETTLE"
   fi
 }
 

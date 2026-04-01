@@ -250,11 +250,9 @@ for doc in docs:
                       if p['containerPort'] < 8000 + dp_local
                       or (8200 <= p['containerPort'] < 8200 + dp_local)]
         # Fix readiness probe to only check active ports
-        ports_bash = ' '.join(str(8000 + r) for r in range(dp_local))
-        c['readinessProbe']['exec']['command'] = [
-            '/bin/bash', '-c',
-            'for port in $ports_bash; do\n  curl -sf http://localhost:\$port/v1/models | grep -q \'\"id\"\' || exit 1\ndone'.replace('\$ports_bash', ports_bash)
-        ]
+        port_list = ' '.join(str(8000 + r) for r in range(dp_local))
+        probe_script = 'for port in ' + port_list + '; do\\n  curl -sf http://localhost:' + chr(36) + 'port/v1/models | grep -q \\x27\"id\"\\x27 || exit 1\\ndone'
+        c['readinessProbe']['exec']['command'] = ['/bin/bash', '-c', probe_script]
 
 print('---\n'.join(yaml.dump(d, default_flow_style=False) for d in docs if d))
 " \

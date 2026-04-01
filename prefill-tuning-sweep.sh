@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # prefill-tuning-sweep.sh — Find the optimal TP/DP config for a single prefiller
 #
-# Deploys a single prefiller with different TP/DP configurations and
-# benchmarks TTFT to find the fastest prefill config.
+# Deploys ALL configs in parallel as independent agg stacks (each with its
+# own gateway + InferencePool), benchmarks them simultaneously, and collects
+# results. Much faster than sequential testing.
 #
 # Prerequisites:
 #   - .env with HF_TOKEN, GH_TOKEN, KUBECONFIG, NYANN_POKER_DIR
 #   - Monitoring stack running: just start-monitoring
 #   - Prometheus port-forward running: just prometheus
+#   - Enough GPU nodes for all configs simultaneously
 #
 # Usage:
 #   ./prefill-tuning-sweep.sh
@@ -20,7 +22,7 @@ DRY_RUN=${DRY_RUN:-}
 # Each config: "NAME TP_SIZE LWS_SIZE"
 #   TP_SIZE: tensor parallelism (GPUs per DP rank)
 #   LWS_SIZE: pods per prefiller group (total GPUs = LWS_SIZE * 4)
-#   DP is derived: DP_SIZE_LOCAL = 4 / TP_SIZE, total DP = LWS_SIZE * DP_SIZE_LOCAL
+#   DP derived: DP_SIZE_LOCAL = 4 / TP_SIZE, total DP = LWS_SIZE * DP_SIZE_LOCAL
 CONFIGS=(
   "tp2-dp4  2 2"   # TP=2, DP=4 across 8 GPUs (2 pods)
   "tp4-dp2  4 2"   # TP=4, DP=2 across 8 GPUs (2 pods)
@@ -42,19 +44,15 @@ NYANN_TAG=${NYANN_TAG:-latest}
 # Timeouts
 READY_TIMEOUT=${READY_TIMEOUT:-900}
 BENCH_TIMEOUT=${BENCH_TIMEOUT:-3600}
-EPP_SETTLE=${EPP_SETTLE:-30}
 
 # Derived
 NAMESPACE="vllm"
 KN="kubectl -n $NAMESPACE"
 NAME_PREFIX="${USER}"
-DEPLOY_NAME="${NAME_PREFIX}-wide-ep"
 LUSTRE="/mnt/lustre/${NAME_PREFIX}"
-BASE_URL="http://${DEPLOY_NAME}-inference-gateway-istio.${NAMESPACE}.svc.cluster.local/v1"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 RESULTS_DIR="results/prefill-tuning-${TIMESTAMP}"
-PREFILL_LWS="${DEPLOY_NAME}-prefill"
-PREFILL_YAML="gb200/base/prefill.yaml"
+GB200_DIR="$(cd gb200 && pwd)"
 
 # Load .env (skip in dry-run)
 if [ -z "$DRY_RUN" ]; then
@@ -73,7 +71,7 @@ fi
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 FAILURES=()
 
-# === Functions ===
+# === Helper Functions ===
 
 make_workload_json() {
   local concurrency="$1"
@@ -82,17 +80,29 @@ make_workload_json() {
 EOF
 }
 
+# Returns the deploy name for a config
+deploy_name_for() { echo "${NAME_PREFIX}-pt-${1}"; }
+
+# Returns the LWS name for a config (kustomize adds namePrefix + "wide-ep-decode")
+lws_name_for() { echo "${NAME_PREFIX}-pt-${1}-wide-ep-decode"; }
+
+# Returns the gateway URL for a config
+base_url_for() {
+  local dn
+  dn=$(deploy_name_for "$1")
+  echo "http://${dn}-inference-gateway-istio.${NAMESPACE}.svc.cluster.local/v1"
+}
+
 wait_for_lws_ready() {
   local lws_name="$1"
-  local expected_pods="${2:-}"
-  local timeout="${3:-$READY_TIMEOUT}"
+  local timeout="${2:-$READY_TIMEOUT}"
 
   if [ -n "$DRY_RUN" ]; then
-    log "  [dry-run] skip wait for $lws_name (expected: ${expected_pods:-any})"
+    log "  [dry-run] skip wait for $lws_name"
     return 0
   fi
 
-  log "Waiting for LWS $lws_name to be ready (timeout: ${timeout}s)..."
+  log "Waiting for LWS $lws_name (timeout: ${timeout}s)..."
   local elapsed=0
   while [ $elapsed -lt "$timeout" ]; do
     local total ready not_ready
@@ -104,12 +114,8 @@ wait_for_lws_ready() {
         -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null \
         | grep -c False || true)
       if [ "$not_ready" -eq 0 ]; then
-        if [ -n "$expected_pods" ] && [ "$total" -ne "$expected_pods" ]; then
-          log "$lws_name: $total pods ready but expected $expected_pods, waiting..."
-        else
-          log "$lws_name: all $total pods ready"
-          return 0
-        fi
+        log "$lws_name: all $total pods ready"
+        return 0
       fi
     fi
 
@@ -122,25 +128,6 @@ wait_for_lws_ready() {
   return 1
 }
 
-launch_benchmark() {
-  local job_name="$1"
-  local config="$2"
-
-  if [ -n "$DRY_RUN" ]; then
-    log "  [dry-run] would run benchmark: $job_name"
-    log "  [dry-run] config: $config"
-    return 0
-  fi
-
-  $KN delete job -l "app=${job_name}" --ignore-not-found=true 2>/dev/null || true
-  sleep 5
-
-  log "Launching benchmark: $job_name"
-  log "  config: $config"
-  (cd "$NYANN_POKER_DIR" && just deploy "$job_name" "$BASE_URL" "$config" \
-    "$NUM_WORKERS" "$NAMESPACE" arm64 lustre "$NYANN_TAG")
-}
-
 wait_for_benchmark() {
   local job_name="$1"
   local timeout="${2:-$BENCH_TIMEOUT}"
@@ -150,7 +137,6 @@ wait_for_benchmark() {
     return 0
   fi
 
-  log "Waiting for benchmark $job_name (timeout: ${timeout}s)..."
   local elapsed=0
   while [ $elapsed -lt "$timeout" ]; do
     local complete failed
@@ -194,54 +180,114 @@ collect_results() {
     > "${outdir}/logs.txt" 2>/dev/null || true
 
   (cd "$NYANN_POKER_DIR" && \
-    just query-prometheus "$job_name" "$DEPLOY_NAME" "$NAMESPACE" \
+    just query-prometheus "$job_name" "$(deploy_name_for "$tag")" "$NAMESPACE" \
       'http://localhost:9090' '' '' \
     > "${outdir}/metrics.txt" 2>/dev/null) || true
 
   log "Results saved to ${outdir}/"
 }
 
-patch_prefill_config() {
-  local tp_size="$1"
-  local lws_size="$2"
-  local dp_local=$((4 / tp_size))
+# === Deploy / Cleanup ===
 
-  log "Patching prefill: TP_SIZE=$tp_size, LWS size=$lws_size (DP_LOCAL=$dp_local)"
+deploy_config() {
+  local cfg_name="$1" tp_size="$2" lws_size="$3"
+  local deploy_name owner
+  deploy_name=$(deploy_name_for "$cfg_name")
+  owner="${NAME_PREFIX}-pt-${cfg_name}"
+
+  log "Deploying $cfg_name (TP=$tp_size, LWS_SIZE=$lws_size) as $deploy_name ..."
 
   if [ -n "$DRY_RUN" ]; then
-    log "  [dry-run] would patch $PREFILL_YAML"
+    log "  [dry-run] would deploy agg stack: $deploy_name"
+    log "  [dry-run]   kustomize (namePrefix=$owner) | sed TP_SIZE=$tp_size, size=$lws_size | kubectl apply"
+    log "  [dry-run]   helm install ${deploy_name}-infpool (owner=$owner)"
+    log "  [dry-run]   gateway + httproute for $deploy_name"
     return 0
   fi
 
-  # NOTE: sed -i '' is macOS syntax; GNU sed uses sed -i''
-  # Set replicas=1 (single prefiller for tuning)
-  sed -i '' "s/^  replicas: .*/  replicas: 1/" "$PREFILL_YAML"
-  # Set LWS worker size
-  sed -i '' "s/^    size: .*/    size: $lws_size/" "$PREFILL_YAML"
-  # Set TP_SIZE env var (appears as value: "N" after the TP_SIZE name)
-  sed -i '' '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' "$PREFILL_YAML"
+  # 1. Render kustomize with config-specific namePrefix
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: %s-\nresources:\n  - %s/overlays/agg\n' \
+    "$owner" "$GB200_DIR" > "$tmpdir/kustomization.yaml"
+
+  local deploy_ts
+  deploy_ts=$(date +%Y%m%d-%H%M%S)
+
+  # NOTE: sed -i is not used — we pipe the rendered output directly
+  kubectl kustomize "$tmpdir" \
+    | sed -e "s/DEPLOY_TS_PLACEHOLDER/$deploy_ts/g" \
+          -e "s/OWNER_PLACEHOLDER/${owner}/g" \
+          -e "s|VLLM_DEV_VENV_PLACEHOLDER||g" \
+          -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/${NAME_PREFIX}|g" \
+          -e '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' \
+          -e "s/^    size: .*/    size: $lws_size/" \
+    | $KN apply -f -
+  rm -rf "$tmpdir"
+
+  # 2. Deploy InferencePool via helm
+  mkdir -p .tmp
+  DEPLOY_NAME="$deploy_name" OWNER="$owner" \
+    envsubst '${DEPLOY_NAME} ${OWNER}' < gb200/inferencepool-agg.values.yaml \
+    > ".tmp/infpool-pt-${cfg_name}.yaml"
+
+  helm upgrade --install "${deploy_name}-infpool" \
+    oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
+    --version v1.3.0 \
+    -f ".tmp/infpool-pt-${cfg_name}.yaml" \
+    -n "$NAMESPACE"
+
+  # 3. Deploy gateway + httproute
+  DEPLOY_NAME="$deploy_name" envsubst '${DEPLOY_NAME}' < gb200/gateway.yaml | $KN apply -f -
+  DEPLOY_NAME="$deploy_name" envsubst '${DEPLOY_NAME}' < gb200/httproute.yaml | $KN apply -f -
+
+  log "Deployed $cfg_name as $deploy_name"
+}
+
+cleanup_config() {
+  local cfg_name="$1"
+  local deploy_name owner lws_name
+  deploy_name=$(deploy_name_for "$cfg_name")
+  owner="${NAME_PREFIX}-pt-${cfg_name}"
+  lws_name=$(lws_name_for "$cfg_name")
+
+  log "Cleaning up $cfg_name ..."
+
+  if [ -n "$DRY_RUN" ]; then
+    log "  [dry-run] would delete: $lws_name, ${deploy_name}-infpool, gateway, httproute"
+    return 0
+  fi
+
+  $KN delete lws "$lws_name" --ignore-not-found=true &
+  helm uninstall "${deploy_name}-infpool" -n "$NAMESPACE" 2>/dev/null || true &
+  $KN delete httproute "${deploy_name}-route" --ignore-not-found=true &
+  $KN delete gateway "${deploy_name}-inference-gateway" --ignore-not-found=true &
+  $KN delete service "${deploy_name}-inference-gateway-istio" --ignore-not-found=true &
+  $KN delete configmap "${deploy_name}-gateway-options" --ignore-not-found=true &
+  $KN delete destinationrule "${deploy_name}-infpool-backend" --ignore-not-found=true &
+  $KN delete sa "${owner}-wide-ep" --ignore-not-found=true &
+  wait
 }
 
 # === Main ===
 
-log "=== Prefill Tuning Sweep ==="
+log "=== Prefill Tuning Sweep (parallel) ==="
 [ -n "$DRY_RUN" ] && log "*** DRY RUN — no cluster commands will execute ***"
-log "Configs:       ${CONFIGS[*]}"
+log "Configs:       ${#CONFIGS[@]} configs"
+for c in "${CONFIGS[@]}"; do log "  $c"; done
 log "Concurrencies: ${CONCURRENCIES[*]} (per worker, ×$NUM_WORKERS workers)"
-log "Workload:      isl=$ISL osl=$OSL turns=1 (single-turn prefill test)"
+log "Workload:      isl=$ISL osl=$OSL turns=1 duration=$DURATION"
 log "Results:       $RESULTS_DIR"
 echo ""
 
 mkdir -p "$RESULTS_DIR"
-
-# Tee all output to log file
 exec > >(tee -a "${RESULTS_DIR}/sweep.log") 2>&1
 
 # Save experiment config
 cat > "${RESULTS_DIR}/config.json" <<EOF
 {
   "timestamp": "$TIMESTAMP",
-  "configs": [$(printf '"%s",' "${CONFIGS[@]}" | sed 's/,$//')],
+  "configs": [$(for c in "${CONFIGS[@]}"; do read -r n t l <<< "$c"; printf '{"name":"%s","tp":%s,"lws":%s},' "$n" "$t" "$l"; done | sed 's/,$//')],
   "concurrencies": [$(printf '%s,' "${CONCURRENCIES[@]}" | sed 's/,$//')],
   "isl": $ISL,
   "osl": $OSL,
@@ -251,44 +297,79 @@ cat > "${RESULTS_DIR}/config.json" <<EOF
 }
 EOF
 
-# Restore prefill.yaml on exit
+# Cleanup on exit
+cleanup_all() {
+  log "Cleaning up all configs..."
+  for config_str in "${CONFIGS[@]}"; do
+    read -r cfg_name _ _ <<< "$config_str"
+    cleanup_config "$cfg_name" &
+  done
+  wait
+  log "Cleanup complete"
+}
 if [ -z "$DRY_RUN" ]; then
-  trap 'git checkout "$PREFILL_YAML" 2>/dev/null; log "Restored $PREFILL_YAML"' EXIT
+  trap cleanup_all EXIT
 fi
 
-for CONFIG_STR in "${CONFIGS[@]}"; do
-  read -r CFG_NAME TP_SIZE LWS_SIZE <<< "$CONFIG_STR"
-  log "====== Config: $CFG_NAME (TP=$TP_SIZE, LWS_SIZE=$LWS_SIZE) ======"
+# --- Phase 1: Deploy all configs in parallel ---
+log "=== Phase 1: Deploying ${#CONFIGS[@]} configs in parallel ==="
+for config_str in "${CONFIGS[@]}"; do
+  read -r cfg_name tp_size lws_size <<< "$config_str"
+  deploy_config "$cfg_name" "$tp_size" "$lws_size" &
+done
+wait
+log "All configs deployed"
 
-  patch_prefill_config "$TP_SIZE" "$LWS_SIZE"
+# --- Phase 2: Wait for all pods ready ---
+log "=== Phase 2: Waiting for all pods ==="
+for config_str in "${CONFIGS[@]}"; do
+  read -r cfg_name _ _ <<< "$config_str"
+  wait_for_lws_ready "$(lws_name_for "$cfg_name")" &
+done
+wait
+log "All configs ready"
 
-  # Redeploy — decode is unchanged so kubectl apply is a no-op for it,
-  # only the prefill LWS restarts with the new config.
-  if [ -n "$DRY_RUN" ]; then
-    log "  [dry-run] would run: just start pd"
-  else
-    just start pd
-  fi
-  wait_for_lws_ready "${DEPLOY_NAME}-decode"
-  wait_for_lws_ready "$PREFILL_LWS" 1  # 1 replica
+# --- Phase 3: Benchmark each concurrency level ---
+# Run all configs at the same concurrency in parallel, then move to next level.
+# This prevents cross-concurrency load interference.
+for CONC in "${CONCURRENCIES[@]}"; do
+  log "=== Phase 3: Benchmarks at concurrency=$CONC ==="
 
-  for CONC in "${CONCURRENCIES[@]}"; do
-    TAG="${CFG_NAME}-c${CONC}"
-    JOB_NAME="${NAME_PREFIX}-pt-${TAG}"
-    log "--- Run: $TAG ---"
+  # Launch all configs in parallel
+  for config_str in "${CONFIGS[@]}"; do
+    read -r cfg_name _ _ <<< "$config_str"
+    deploy_name=$(deploy_name_for "$cfg_name")
+    base_url=$(base_url_for "$cfg_name")
+    job_name="${NAME_PREFIX}-pt-${cfg_name}-c${CONC}"
+    config_json=$(make_workload_json "$CONC")
 
-    CONFIG=$(make_workload_json "$CONC")
-    launch_benchmark "$JOB_NAME" "$CONFIG"
-
-    if wait_for_benchmark "$JOB_NAME"; then
-      collect_results "$JOB_NAME" "$TAG"
+    if [ -n "$DRY_RUN" ]; then
+      log "  [dry-run] would launch: $job_name -> $base_url"
+      log "  [dry-run] config: $config_json"
     else
-      FAILURES+=("$TAG")
-      collect_results "$JOB_NAME" "$TAG"
+      $KN delete job -l "app=${job_name}" --ignore-not-found=true 2>/dev/null || true
+      sleep 2
+      log "Launching $job_name"
+      (cd "$NYANN_POKER_DIR" && just deploy "$job_name" "$base_url" "$config_json" \
+        "$NUM_WORKERS" "$NAMESPACE" arm64 lustre "$NYANN_TAG")
+    fi
+  done
+
+  # Wait for all to complete
+  for config_str in "${CONFIGS[@]}"; do
+    read -r cfg_name _ _ <<< "$config_str"
+    job_name="${NAME_PREFIX}-pt-${cfg_name}-c${CONC}"
+    tag="${cfg_name}-c${CONC}"
+
+    if wait_for_benchmark "$job_name"; then
+      collect_results "$job_name" "$tag"
+    else
+      FAILURES+=("$tag")
+      collect_results "$job_name" "$tag"
     fi
 
     if [ -z "$DRY_RUN" ]; then
-      $KN delete job -l "app=${JOB_NAME}" --ignore-not-found=true 2>/dev/null || true
+      $KN delete job -l "app=${job_name}" --ignore-not-found=true 2>/dev/null || true
     fi
   done
 done

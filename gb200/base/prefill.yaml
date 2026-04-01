@@ -7,7 +7,7 @@ metadata:
     llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
     llm-d.ai/role: prefill
 spec:
-  replicas: 1
+  replicas: 4
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:
@@ -116,14 +116,13 @@ spec:
                     --disable-uvicorn-access-log \
                     --port $((8000 + R)) \
                     --tensor-parallel-size $TP_SIZE \
-                    --enable-expert-parallel \
+                    $([ $TP_SIZE -eq 1 ] && echo '--enable-expert-parallel') \
                     $DP_FLAGS $RANK_FLAGS \
                     --trust-remote-code \
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
                     --gpu-memory-utilization 0.85 \
-                    --all2all-backend "flashinfer_nvlink_one_sided" \
+                    $([ $TP_SIZE -eq 1 ] && echo '--all2all-backend flashinfer_nvlink_one_sided') \
                     --disable_cascade_attn \
-                    --api-server-count 4 \
                     --async-scheduling \
                     --kv-cache-dtype fp8 \
                     --enable-force-include-usage &
@@ -181,9 +180,9 @@ spec:
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = GPUS_PER_POD / TP_SIZE)
               - name: TP_SIZE
-                value: "1"
+                value: "2"
               - name: GPUS_PER_POD
-                value: "4"
+                value: "2"
 
               - name: VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE
                 value: "1"
@@ -249,12 +248,12 @@ spec:
               limits:
                 ephemeral-storage: 128Gi
                 memory: 512Gi
-                nvidia.com/gpu: "4"
+                nvidia.com/gpu: "2"
               requests:
                 cpu: 32
                 ephemeral-storage: 128Gi
                 memory: 512Gi
-                nvidia.com/gpu: "4"
+                nvidia.com/gpu: "2"
             volumeMounts:
               - mountPath: /dev/shm
                 name: dshm

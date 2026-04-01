@@ -16,7 +16,7 @@ set -euo pipefail
 
 # === Configuration ===
 STRATEGIES=(${STRATEGIES:-pd pd-random})
-CONCURRENCIES=(${CONCURRENCIES:-128 512})
+CONCURRENCIES=(${CONCURRENCIES:-512 1024 2048})
 
 # Workload
 TURNS=${TURNS:-5}

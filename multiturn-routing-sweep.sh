@@ -30,7 +30,7 @@ PHASE_1="${PHASE_1-ep8-pd      pd        1 2 4   1 2 3 4}"
 PHASE_2="${PHASE_2-tp2-random  pd-random 2 1 2   4 8 12 16}"
 PHASE_3="${PHASE_3-ep8-random  pd-random 1 2 4   1 2 3 4}"
 
-CONCURRENCIES=(${CONCURRENCIES:-128 512})
+CONCURRENCIES=(${CONCURRENCIES:-512 1024 2048})
 
 # Workload knobs
 TURNS=${TURNS:-5}

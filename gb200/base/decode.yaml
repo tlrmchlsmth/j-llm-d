@@ -13,7 +13,7 @@ spec:
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 4
+    size: 8
     workerTemplate:
       metadata:
         labels:
@@ -160,7 +160,18 @@ spec:
                 export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2))
 
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
+                DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
+
+                # Build DP flags only when there are multiple DP ranks
+                DP_FLAGS=""
+                if [ $DP_SIZE -gt 1 ]; then
+                  DP_FLAGS="--data-parallel-size $DP_SIZE \
+                    --data-parallel-size-local 1 \
+                    --data-parallel-address ${LWS_LEADER_ADDRESS} \
+                    --data-parallel-rpc-port 5555 \
+                    --api-server-count $DP_SIZE_LOCAL"
+                fi
 
                 PROFILER_ARGS=""
                 NSYS_PREFIX=""
@@ -185,6 +196,11 @@ spec:
                   GPU_START=$((R * TP_SIZE))
                   GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
 
+                  RANK_FLAGS=""
+                  if [ $DP_SIZE -gt 1 ]; then
+                    RANK_FLAGS="--data-parallel-rank $((START_RANK + R))"
+                  fi
+
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
                   CUDA_VISIBLE_DEVICES=$GPUS $NSYS_PREFIX vllm serve $PROFILER_ARGS \
@@ -193,11 +209,7 @@ spec:
                     --port $((8200 + R)) \
                     --tensor-parallel-size $TP_SIZE \
                     --enable-expert-parallel \
-                    --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
-                    --data-parallel-rank $((START_RANK + R)) \
-                    --data-parallel-size-local 1 \
-                    --data-parallel-address ${LWS_LEADER_ADDRESS} \
-                    --data-parallel-rpc-port 5555 \
+                    $DP_FLAGS $RANK_FLAGS \
                     --trust-remote-code \
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
                     --gpu-memory-utilization 0.75 \
@@ -207,7 +219,6 @@ spec:
                     --max-cudagraph-capture-size $MAX_TOKENS \
                     --all2all-backend "flashinfer_nvlink_one_sided" \
                     --async-scheduling \
-                    --api-server-count 4 \
                     --enable-eplb \
                     --eplb-config '{"window_size":"100",
                                     "step_interval":"3000",

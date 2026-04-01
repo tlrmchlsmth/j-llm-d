@@ -218,8 +218,12 @@ deploy_config() {
 
   # Render, substitute placeholders and config, fix ports for DP count
   local dp_local=$((4 / tp_size))
-  local port_list
-  port_list=$(seq -s ' ' 8000 $((8000 + dp_local - 1)))
+
+  # Disable EPLB for TP>1 (experts shared across TP group, EPLB doesn't apply)
+  local eplb_sed=""
+  if [ "$tp_size" -gt 1 ]; then
+    eplb_sed="-e /--enable-eplb/d -e /--eplb-config/,/}'/d"
+  fi
 
   kubectl kustomize "$tmpdir" \
     | sed -e "s/DEPLOY_TS_PLACEHOLDER/$deploy_ts/g" \
@@ -228,6 +232,7 @@ deploy_config() {
           -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/${NAME_PREFIX}|g" \
           -e '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' \
           -e "s/^    size: .*/    size: $lws_size/" \
+          $eplb_sed \
     | python3 -c "
 import sys, yaml
 
@@ -253,6 +258,7 @@ for doc in docs:
         port_list = ' '.join(str(8000 + r) for r in range(dp_local))
         probe_script = 'for port in ' + port_list + '; do\\n  curl -sf http://localhost:' + chr(36) + 'port/v1/models | grep -q \\x27\"id\"\\x27 || exit 1\\ndone'
         c['readinessProbe']['exec']['command'] = ['/bin/bash', '-c', probe_script]
+
 
 print('---\n'.join(yaml.dump(d, default_flow_style=False) for d in docs if d))
 " \

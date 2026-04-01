@@ -202,7 +202,11 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
 
   envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/gateway.yaml | {{KN}} apply -f -
   if [ "{{MODE}}" = "pd" ]; then
-    just deploy_inferencepool pd
+    if [ "{{ROUTING}}" = "load-aware" ]; then
+      just deploy_inferencepool pd
+    else
+      just deploy_inferencepool pd-{{ROUTING}}
+    fi
   elif [ "{{MODE}}" = "agg" ]; then
     if [ "{{ROUTING}}" = "load-aware" ]; then
       just deploy_inferencepool agg
@@ -532,7 +536,7 @@ query-prometheus CLIENT_JOB=(NAME_PREFIX + "-sharegpt-load") DEPLOYMENT=DEPLOY_N
     exit 1
   fi
   cd "{{NYANN_POKER_DIR}}"
-  just query-prometheus {{CLIENT_JOB}} {{DEPLOYMENT}} {{NAMESPACE}} '' {{EVAL_JOB}} {{ARGS}}
+  just query-prometheus {{CLIENT_JOB}} {{DEPLOYMENT}} {{NAMESPACE}} 'http://localhost:9090' '' {{EVAL_JOB}} {{ARGS}}
 
 # === Monitoring ===
 

@@ -192,15 +192,18 @@ spec:
                   fi
                 fi
 
-                # EPLB only works with EP (TP=1); skip for TP>1
+                # EPLB only applies to pure EP (TP=1)
                 EPLB_FLAGS=""
                 if [ $TP_SIZE -eq 1 ]; then
-                  EPLB_FLAGS="--enable-eplb \
-                    --eplb-config '{\"window_size\":\"100\",
-                                    \"step_interval\":\"3000\",
-                                    \"num_redundant_experts\":\"32\",
-                                    \"log_balancedness\":\"False\",
-                                    \"log_balancedness_interval\":\"1000\"}'"
+                  EP_DP_SIZE=$((LWS_GROUP_SIZE * 4))
+                  case $EP_DP_SIZE in
+                    32) NUM_REDUNDANT=32 ;;
+                    48) NUM_REDUNDANT=32 ;;
+                    64) NUM_REDUNDANT=0  ;;
+                    72) NUM_REDUNDANT=32 ;;
+                    *)  NUM_REDUNDANT=0  ;;
+                  esac
+                  EPLB_FLAGS="--enable-eplb --eplb-config {\"window_size\":\"100\",\"step_interval\":\"3000\",\"num_redundant_experts\":\"$NUM_REDUNDANT\",\"log_balancedness\":\"False\",\"log_balancedness_interval\":\"1000\"}"
                 fi
 
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
@@ -301,6 +304,7 @@ spec:
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
                 value: "1"
+
 
               - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"

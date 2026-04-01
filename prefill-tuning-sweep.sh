@@ -212,15 +212,11 @@ deploy_config() {
   printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: %s-\nresources:\n  - overlays/agg\n' \
     "$owner" > "$tmpdir/kustomization.yaml"
 
-  local deploy_ts
-  deploy_ts=$(date +%Y%m%d-%H%M%S)
-
   # Render, substitute placeholders and config, fix ports for DP count
   local dp_local=$((4 / tp_size))
 
   kubectl kustomize "$tmpdir" \
-    | sed -e "s/DEPLOY_TS_PLACEHOLDER/$deploy_ts/g" \
-          -e "s/OWNER_PLACEHOLDER/${owner}/g" \
+    | sed -e "s/OWNER_PLACEHOLDER/${owner}/g" \
           -e "s|VLLM_DEV_VENV_PLACEHOLDER||g" \
           -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/${NAME_PREFIX}|g" \
           -e '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' \

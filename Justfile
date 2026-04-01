@@ -181,8 +181,6 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
   #!/usr/bin/env bash
   set -euo pipefail
   export DEPLOY_NAME="{{DEPLOY_NAME}}"
-  DEPLOY_TS=$(date +%Y%m%d-%H%M%S)
-
   # Generate wrapper kustomization with user-specific namePrefix
   printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: {{NAME_PREFIX}}-\nresources:\n  - overlays/{{MODE}}\n' \
     > {{GB200_DIR}}/kustomization.yaml
@@ -193,8 +191,7 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
     echo "Dev mode: VLLM_DEV_VENV=$DEV_VENV"
   fi
   kubectl kustomize {{GB200_DIR}} \
-    | sed -e "s/DEPLOY_TS_PLACEHOLDER/$DEPLOY_TS/g" \
-          -e "s/OWNER_PLACEHOLDER/{{NAME_PREFIX}}/g" \
+    | sed -e "s/OWNER_PLACEHOLDER/{{NAME_PREFIX}}/g" \
           -e "s|VLLM_DEV_VENV_PLACEHOLDER|$DEV_VENV|g" \
           -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/{{NAME_PREFIX}}|g" \
     | {{KN}} apply -f -
@@ -217,7 +214,7 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
     just deploy_inferencepool {{ROUTING}}
   fi
   envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/httproute.yaml | {{KN}} apply -f -
-  echo "Deployed $DEPLOY_TS"
+  echo "Deployed"
 
 stop NOW='false':
   #!/usr/bin/env bash

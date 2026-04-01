@@ -17,7 +17,6 @@ spec:
     workerTemplate:
       metadata:
         labels:
-          llm-d.ai/deploy-ts: DEPLOY_TS_PLACEHOLDER
           llm-d.ai/inferenceServing: "true"
           llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
           llm-d.ai/owner: OWNER_PLACEHOLDER

@@ -37,8 +37,8 @@ TURNS=${TURNS:-5}
 ISL=${ISL:-10000}
 SUBSEQUENT_ISL=${SUBSEQUENT_ISL:-1000}
 OSL=${OSL:-1000}
-DURATION=${DURATION:-180s}
-WARMUP=${WARMUP:-60s}
+DURATION=${DURATION:-300s}
+WARMUP=${WARMUP:-180s}
 NUM_WORKERS=${NUM_WORKERS:-8}
 NYANN_TAG=${NYANN_TAG:-latest}
 
@@ -83,9 +83,6 @@ sedi() { sed -i"$(sed --version 2>/dev/null | grep -q GNU && echo '' || echo ' '
 # Takes optional prefill config overrides so we never modify committed files.
 deploy_stack() {
   local tp_size="${1:-}" lws_size="${2:-}" gpus_per_pod="${3:-}" replicas="${4:-}"
-  local deploy_ts
-  deploy_ts=$(date +%Y%m%d-%H%M%S)
-
   # Work on a temp copy so committed files are never touched
   local tmpdir
   tmpdir=$(mktemp -d)
@@ -106,8 +103,7 @@ deploy_stack() {
     "$NAME_PREFIX" > "${tmpdir}/kustomization.yaml"
 
   kubectl kustomize "$tmpdir" \
-    | sed -e "s/DEPLOY_TS_PLACEHOLDER/$deploy_ts/g" \
-          -e "s/OWNER_PLACEHOLDER/${NAME_PREFIX}/g" \
+    | sed -e "s/OWNER_PLACEHOLDER/${NAME_PREFIX}/g" \
           -e "s|VLLM_DEV_VENV_PLACEHOLDER||g" \
           -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/${NAME_PREFIX}|g" \
     | $KN apply -f -

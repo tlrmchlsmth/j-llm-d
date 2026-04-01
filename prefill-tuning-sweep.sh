@@ -24,11 +24,10 @@ DRY_RUN=${DRY_RUN:-}
 #   LWS_SIZE: pods per prefiller group (total GPUs = LWS_SIZE * 4)
 #   DP derived: DP_SIZE_LOCAL = 4 / TP_SIZE, total DP = LWS_SIZE * DP_SIZE_LOCAL
 CONFIGS=(
-  "tp2-dp4  2 2"   # TP=2, DP=4 across 8 GPUs (2 pods)
-  "tp4-dp2  4 2"   # TP=4, DP=2 across 8 GPUs (2 pods)
-  "tp8-dp1  8 2"   # TP=8, DP=1 across 8 GPUs (2 pods)
-  "dp4      1 1"   # TP=1, DP=4 across 4 GPUs (1 pod)
-  "dp8      1 2"   # TP=1, DP=8 across 8 GPUs (2 pods)
+  "ep-dp4   1 1"   # TP=1 (EP+DP), DP=4 across 4 GPUs (1 pod)
+  "ep-dp8   1 2"   # TP=1 (EP+DP), DP=8 across 8 GPUs (2 pods)
+  "tp4      4 1"   # TP=4, DP=1 across 4 GPUs (1 pod)
+  "tp2      2 1"   # TP=2, DP=2 across 4 GPUs (1 pod)
 )
 
 # Workload — single turn, measuring raw prefill TTFT
@@ -206,10 +205,13 @@ deploy_config() {
   fi
 
   # 1. Render kustomize with config-specific namePrefix
+  #    Kustomize requires relative paths, so symlink the overlay into a temp dir
   local tmpdir
   tmpdir=$(mktemp -d)
-  printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: %s-\nresources:\n  - %s/overlays/agg\n' \
-    "$owner" "$GB200_DIR" > "$tmpdir/kustomization.yaml"
+  ln -s "$GB200_DIR/overlays" "$tmpdir/overlays"
+  ln -s "$GB200_DIR/base" "$tmpdir/base"
+  printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: %s-\nresources:\n  - overlays/agg\n' \
+    "$owner" > "$tmpdir/kustomization.yaml"
 
   local deploy_ts
   deploy_ts=$(date +%Y%m%d-%H%M%S)

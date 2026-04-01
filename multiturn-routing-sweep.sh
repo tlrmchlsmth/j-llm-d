@@ -57,7 +57,7 @@ BASE_URL="http://${DEPLOY_NAME}-inference-gateway-istio.${NAMESPACE}.svc.cluster
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 RESULTS_DIR="${RESULTS_DIR:-results/multiturn-sweep-${TIMESTAMP}}"
 PREFILL_LWS="${DEPLOY_NAME}-prefill"
-PREFILL_YAML="gb200/base/prefill.yaml"
+
 
 # Load .env (skip in dry-run)
 if [ -z "$DRY_RUN" ]; then
@@ -79,26 +79,43 @@ FAILURES=()
 # Portable sed -i (macOS uses -i '', GNU uses -i)
 sedi() { sed -i"$(sed --version 2>/dev/null | grep -q GNU && echo '' || echo ' ')" "$@"; }
 
-# Replicate `just start pd` without requiring just
+# Replicate `just start pd` without requiring just.
+# Takes optional prefill config overrides so we never modify committed files.
 deploy_stack() {
+  local tp_size="${1:-}" lws_size="${2:-}" gpus_per_pod="${3:-}" replicas="${4:-}"
   local deploy_ts
   deploy_ts=$(date +%Y%m%d-%H%M%S)
-  local gb200_dir="gb200"
+
+  # Work on a temp copy so committed files are never touched
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  cp -r gb200/* "$tmpdir/"
+
+  # Apply prefill config overrides to the temp copy
+  if [ -n "$tp_size" ]; then
+    local pf="$tmpdir/base/prefill.yaml"
+    sedi "s/^  replicas: .*/  replicas: ${replicas:-1}/" "$pf"
+    sedi "s/^    size: .*/    size: $lws_size/" "$pf"
+    sedi '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' "$pf"
+    sedi '/- name: GPUS_PER_POD/{n;s/value: ".*"/value: "'"$gpus_per_pod"'"/;}' "$pf"
+    sedi 's/nvidia.com\/gpu: "[0-9]*"/nvidia.com\/gpu: "'"$gpus_per_pod"'"/g' "$pf"
+    log "  Prefill config: TP=$tp_size LWS=$lws_size GPUs=$gpus_per_pod replicas=${replicas:-1}"
+  fi
 
   printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: %s-\nresources:\n  - overlays/pd\n' \
-    "$NAME_PREFIX" > "${gb200_dir}/kustomization.yaml"
+    "$NAME_PREFIX" > "${tmpdir}/kustomization.yaml"
 
-  kubectl kustomize "$gb200_dir" \
+  kubectl kustomize "$tmpdir" \
     | sed -e "s/DEPLOY_TS_PLACEHOLDER/$deploy_ts/g" \
           -e "s/OWNER_PLACEHOLDER/${NAME_PREFIX}/g" \
           -e "s|VLLM_DEV_VENV_PLACEHOLDER||g" \
           -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/${NAME_PREFIX}|g" \
     | $KN apply -f -
-  rm -f "${gb200_dir}/kustomization.yaml"
+  rm -rf "$tmpdir"
 
   export DEPLOY_NAME
-  envsubst '${DEPLOY_NAME}' < "${gb200_dir}/gateway.yaml" | $KN apply -f -
-  envsubst '${DEPLOY_NAME}' < "${gb200_dir}/httproute.yaml" | $KN apply -f -
+  envsubst '${DEPLOY_NAME}' < "gb200/gateway.yaml" | $KN apply -f -
+  envsubst '${DEPLOY_NAME}' < "gb200/httproute.yaml" | $KN apply -f -
 }
 
 # Replicate `just deploy_inferencepool` without requiring just
@@ -202,24 +219,6 @@ swap_routing() {
   fi
 }
 
-patch_prefill_config() {
-  local tp_size="$1"
-  local lws_size="$2"
-  local gpus_per_pod="${3:-4}"
-  log "Patching prefill: TP_SIZE=$tp_size, LWS size=$lws_size, GPUs/pod=$gpus_per_pod"
-
-  if [ -n "$DRY_RUN" ]; then
-    log "  [dry-run] would patch $PREFILL_YAML"
-    return 0
-  fi
-
-  sedi "s/^  replicas: .*/  replicas: 1/" "$PREFILL_YAML"
-  sedi "s/^    size: .*/    size: $lws_size/" "$PREFILL_YAML"
-  sedi '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' "$PREFILL_YAML"
-  sedi '/- name: GPUS_PER_POD/{n;s/value: ".*"/value: "'"$gpus_per_pod"'"/;}' "$PREFILL_YAML"
-  # Patch GPU resource requests/limits
-  sedi 's/nvidia.com\/gpu: "[0-9]*"/nvidia.com\/gpu: "'"$gpus_per_pod"'"/g' "$PREFILL_YAML"
-}
 
 launch_benchmark() {
   local job_name="$1"
@@ -314,14 +313,11 @@ run_phase() {
   log "  Replicas: ${replicas[*]}"
   echo ""
 
-  # Patch prefill config and redeploy
-  patch_prefill_config "$tp_size" "$lws_size" "$gpus_per_pod"
-  sedi "s/^  replicas: .*/  replicas: ${replicas[0]}/" "$PREFILL_YAML"
-
+  # Deploy stack with prefill config overrides (works on temp copy, never modifies committed files)
   if [ -n "$DRY_RUN" ]; then
-    log "  [dry-run] would deploy stack"
+    log "  [dry-run] would deploy stack with TP=$tp_size LWS=$lws_size GPUs=$gpus_per_pod replicas=${replicas[0]}"
   else
-    deploy_stack
+    deploy_stack "$tp_size" "$lws_size" "$gpus_per_pod" "${replicas[0]}"
   fi
   wait_for_lws_ready "${DEPLOY_NAME}-decode"
   wait_for_lws_ready "$PREFILL_LWS" "$((${replicas[0]} * lws_size))"

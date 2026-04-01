@@ -40,19 +40,18 @@ spec:
       command: ["/bin/bash", "-c"]
       args:
         - |
-          set -euo pipefail
-
-          # Install tools (bitnami/kubectl is Debian-based)
+          # Install tools
           echo "Installing tools..."
-          apt-get update -qq && apt-get install -y -qq git gettext-base python3 python3-yaml > /dev/null 2>&1 || \
-            (apk add --no-cache git gettext python3 py3-yaml > /dev/null 2>&1) || true
+          if command -v apt-get &>/dev/null; then
+            apt-get update -qq && apt-get install -y -qq git gettext-base python3 python3-yaml > /dev/null 2>&1
+          elif command -v apk &>/dev/null; then
+            apk add --no-cache git gettext bash curl python3 py3-yaml > /dev/null 2>&1
+          fi
 
-          # Install helm
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash > /dev/null 2>&1
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin > /dev/null 2>&1
 
-          # Install just
-          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin > /dev/null 2>&1 || \
-            echo "WARNING: just install failed, sweep may not work"
+          set -euo pipefail
 
           # Clone repos
           WORK="/tmp/sweep-runner"

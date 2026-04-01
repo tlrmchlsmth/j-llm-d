@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${NAME_PREFIX}-sweep-runner
+  namespace: vllm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ${NAME_PREFIX}-sweep-runner
+subjects:
+- kind: ServiceAccount
+  name: ${NAME_PREFIX}-sweep-runner
+  namespace: vllm
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${NAME_PREFIX}-sweep-runner
+  namespace: vllm
+spec:
+  serviceAccountName: ${NAME_PREFIX}-sweep-runner
+  restartPolicy: Never
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: kubernetes.io/arch
+            operator: In
+            values: ["amd64"]
+  volumes:
+    - name: lustre
+      persistentVolumeClaim:
+        claimName: lustre-pvc-vllm
+  containers:
+    - name: sweep
+      image: bitnami/kubectl:latest
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          set -euo pipefail
+
+          # Install tools
+          echo "Installing tools..."
+          apt-get update -qq && apt-get install -y -qq git gettext-base > /dev/null 2>&1
+
+          # Install helm
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash > /dev/null 2>&1
+
+          # Install just
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin > /dev/null 2>&1
+
+          # Clone repos
+          WORK="/mnt/lustre/${USER}/sweep-runner"
+          mkdir -p "$WORK"
+          cd "$WORK"
+
+          if [ -d j-llm-d ]; then
+            cd j-llm-d && git fetch && git checkout ${GIT_BRANCH} && git pull && cd ..
+          else
+            git clone -b ${GIT_BRANCH} https://${GH_TOKEN}@github.com/tlrmchlsmth/j-llm-d.git
+          fi
+
+          if [ -d nyann_poker ]; then
+            cd nyann_poker && git pull && cd ..
+          else
+            git clone https://${GH_TOKEN}@github.com/neuralmagic/nyann_poker.git
+          fi
+
+          export NYANN_POKER_DIR="$WORK/nyann_poker"
+          cd j-llm-d
+
+          echo "=== Starting sweep at $(date) ==="
+          ./multiturn-routing-sweep.sh
+          echo "=== Sweep finished at $(date) ==="
+
+          # Keep pod alive briefly so logs can be retrieved
+          sleep 300
+      env:
+        - name: USER
+          value: "${NAME_PREFIX}"
+        - name: GIT_BRANCH
+          value: "multiturn-routing-sweep"
+        - name: GH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: gh-secret
+              key: GH_TOKEN
+        - name: HOME
+          value: "/tmp"
+      resources:
+        requests:
+          cpu: "4"
+          memory: "8Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+      volumeMounts:
+        - mountPath: /mnt/lustre
+          name: lustre

@@ -26,7 +26,6 @@ DRY_RUN=${DRY_RUN:-}
 CONFIGS=(
   "ep-dp4   1 1"   # TP=1 (EP+DP), DP=4 across 4 GPUs (1 pod)
   "ep-dp8   1 2"   # TP=1 (EP+DP), DP=8 across 8 GPUs (2 pods)
-  "tp4      4 1"   # TP=4, DP=1 across 4 GPUs (1 pod)
   "tp2      2 1"   # TP=2, DP=2 across 4 GPUs (1 pod)
 )
 
@@ -34,7 +33,7 @@ CONFIGS=(
 # All array vars are space-separated strings
 CONCURRENCIES=(${CONCURRENCIES:-10})
 ISL=${ISL:-10000}
-OSL=${OSL:-1}
+OSL=${OSL:-2}
 DURATION=${DURATION:-180s}
 WARMUP=${WARMUP:-120s}
 NUM_WORKERS=${NUM_WORKERS:-1}
@@ -346,9 +345,10 @@ cleanup_all() {
   wait
   log "Cleanup complete"
 }
-if [ -z "$DRY_RUN" ]; then
-  trap cleanup_all EXIT
-fi
+## Uncomment to auto-cleanup on exit (tears down all stacks):
+# if [ -z "$DRY_RUN" ]; then
+#   trap cleanup_all EXIT
+# fi
 
 # --- Phase 1: Deploy all configs in parallel ---
 log "=== Phase 1: Deploying ${#CONFIGS[@]} configs in parallel ==="

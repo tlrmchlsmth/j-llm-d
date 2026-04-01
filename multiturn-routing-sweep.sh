@@ -1,48 +1,49 @@
 #!/usr/bin/env bash
-# multiturn-routing-sweep.sh — Sweep (routing x prefill_replicas x concurrency)
+# multiturn-routing-sweep.sh — Compare intelligent vs random routing
 #
-# Deploys a P/D stack once, then scales prefill replicas in-place and
-# hot-swaps routing strategies between runs. Decode pods are never restarted.
+# Two phases with different prefill configs:
+#   Phase 1: EP+DP8 (TP=1, size=2) with intelligent routing (pd)
+#   Phase 2: TP2 (TP=2, size=1) with random routing (pd-random)
+#
+# Each phase sweeps over prefill replica counts and concurrency levels.
+# Decode pods are deployed once and never restarted.
 #
 # Prerequisites:
 #   - .env with HF_TOKEN, GH_TOKEN, KUBECONFIG, NYANN_POKER_DIR
 #   - Monitoring stack running: just start-monitoring
 #   - Prometheus port-forward running: just prometheus
-#   - Routing config files: gb200/inferencepool-{STRATEGY}.values.yaml
-#     Each must have matchLabels with llm-d.ai/deployment: pd
 #
 # Usage:
 #   ./multiturn-routing-sweep.sh
-#   REPLICAS="1 2 4" STRATEGIES="pd pd-random" CONCURRENCIES="64 128 256" \
-#     ./multiturn-routing-sweep.sh
-#
-# Dry run (no cluster needed, validates sweep logic):
 #   DRY_RUN=1 ./multiturn-routing-sweep.sh
 set -euo pipefail
 
-# === Configuration (override via env) ===
-# All array vars are space-separated strings, e.g. REPLICAS="1 2 4"
+# === Configuration ===
 DRY_RUN=${DRY_RUN:-}
-REPLICAS=(${REPLICAS:-1 2 5})
-STRATEGIES=(${STRATEGIES:-pd pd-random})
-CONCURRENCIES=(${CONCURRENCIES:-256 512 1024})
+
+# Phase definitions: "LABEL ROUTING TP_SIZE LWS_SIZE REPLICAS..."
+PHASE_1="ep8-pd      pd        1 2   1 3 5"
+PHASE_2="tp2-random  pd-random 2 1   4 12 20"
+PHASE_3="ep8-random  pd-random 1 2   1 3 5"
+
+CONCURRENCIES=(${CONCURRENCIES:-128 512})
 
 # Workload knobs
 TURNS=${TURNS:-5}
-ISL=${ISL:-5000}
+ISL=${ISL:-10000}
 SUBSEQUENT_ISL=${SUBSEQUENT_ISL:-1000}
 OSL=${OSL:-1000}
-DURATION=${DURATION:-600s}
-WARMUP=${WARMUP:-120s}
+DURATION=${DURATION:-180s}
+WARMUP=${WARMUP:-60s}
 NUM_WORKERS=${NUM_WORKERS:-8}
 NYANN_TAG=${NYANN_TAG:-latest}
 
 # Timeouts
-READY_TIMEOUT=${READY_TIMEOUT:-900}    # 15 min for model servers to start
-BENCH_TIMEOUT=${BENCH_TIMEOUT:-5400}   # 90 min for benchmark to complete
-EPP_SETTLE=${EPP_SETTLE:-30}           # seconds to wait after routing swap
+READY_TIMEOUT=${READY_TIMEOUT:-900}
+BENCH_TIMEOUT=${BENCH_TIMEOUT:-5400}
+EPP_SETTLE=${EPP_SETTLE:-30}
 
-# Derived (mirrors Justfile)
+# Derived
 NAMESPACE="vllm"
 KN="kubectl -n $NAMESPACE"
 NAME_PREFIX="${USER}"
@@ -52,8 +53,9 @@ BASE_URL="http://${DEPLOY_NAME}-inference-gateway-istio.${NAMESPACE}.svc.cluster
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 RESULTS_DIR="results/multiturn-sweep-${TIMESTAMP}"
 PREFILL_LWS="${DEPLOY_NAME}-prefill"
+PREFILL_YAML="gb200/base/prefill.yaml"
 
-# Load .env for NYANN_POKER_DIR (skip in dry-run)
+# Load .env (skip in dry-run)
 if [ -z "$DRY_RUN" ]; then
   if [ -f .env ]; then
     set -a; source .env; set +a
@@ -68,8 +70,6 @@ fi
 
 # === Logging ===
 log() { echo "[$(date +%H:%M:%S)] $*"; }
-
-# Track failed runs for summary
 FAILURES=()
 
 # === Functions ===
@@ -96,7 +96,6 @@ wait_for_lws_ready() {
   fi
 
   log "Waiting for LWS $lws_name to be ready (timeout: ${timeout}s)..."
-
   local elapsed=0
   while [ $elapsed -lt "$timeout" ]; do
     local total ready not_ready
@@ -128,13 +127,15 @@ wait_for_lws_ready() {
 
 scale_prefill() {
   local count="$1"
-  log "Scaling prefill LWS to $count replicas"
+  local lws_size="${2:-1}"
+  local expected_pods=$((count * lws_size))
+  log "Scaling prefill LWS to $count replicas ($expected_pods pods)"
   if [ -n "$DRY_RUN" ]; then
     log "  [dry-run] would run: $KN patch lws $PREFILL_LWS --type merge -p '{\"spec\":{\"replicas\":$count}}'"
   else
     $KN patch lws "$PREFILL_LWS" --type merge -p "{\"spec\":{\"replicas\":$count}}"
   fi
-  wait_for_lws_ready "$PREFILL_LWS" "$count"
+  wait_for_lws_ready "$PREFILL_LWS" "$expected_pods"
 }
 
 swap_routing() {
@@ -149,20 +150,34 @@ swap_routing() {
   fi
 }
 
+patch_prefill_config() {
+  local tp_size="$1"
+  local lws_size="$2"
+  log "Patching prefill: TP_SIZE=$tp_size, LWS size=$lws_size"
+
+  if [ -n "$DRY_RUN" ]; then
+    log "  [dry-run] would patch $PREFILL_YAML"
+    return 0
+  fi
+
+  # NOTE: sed -i '' is macOS syntax
+  sed -i '' "s/^  replicas: .*/  replicas: 1/" "$PREFILL_YAML"
+  sed -i '' "s/^    size: .*/    size: $lws_size/" "$PREFILL_YAML"
+  sed -i '' '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' "$PREFILL_YAML"
+}
+
 launch_benchmark() {
   local job_name="$1"
   local config="$2"
 
   if [ -n "$DRY_RUN" ]; then
-    log "  [dry-run] would delete previous job: $job_name"
-    log "  [dry-run] would run: cd $NYANN_POKER_DIR && just deploy $job_name $BASE_URL '<config>' $NUM_WORKERS $NAMESPACE arm64 lustre $NYANN_TAG"
+    log "  [dry-run] would launch: $job_name"
     log "  [dry-run] config: $config"
     return 0
   fi
 
   $KN delete job -l "app=${job_name}" --ignore-not-found=true 2>/dev/null || true
   sleep 5
-
   log "Launching benchmark: $job_name"
   log "  config: $config"
   (cd "$NYANN_POKER_DIR" && just deploy "$job_name" "$BASE_URL" "$config" \
@@ -179,7 +194,6 @@ wait_for_benchmark() {
   fi
 
   log "Waiting for benchmark $job_name (timeout: ${timeout}s)..."
-
   local elapsed=0
   while [ $elapsed -lt "$timeout" ]; do
     local complete failed
@@ -215,14 +229,13 @@ collect_results() {
   mkdir -p "$outdir"
 
   if [ -n "$DRY_RUN" ]; then
-    log "  [dry-run] would collect logs and prometheus metrics for $job_name -> $outdir/"
+    log "  [dry-run] would collect results for $job_name -> $outdir/"
     return 0
   fi
 
   $KN logs -l "app=${job_name}" -c nyann-poker --tail=-1 \
     > "${outdir}/logs.txt" 2>/dev/null || true
 
-  # Query Prometheus (requires port-forward: just prometheus)
   (cd "$NYANN_POKER_DIR" && \
     just query-prometheus "$job_name" "$DEPLOY_NAME" "$NAMESPACE" \
       'http://localhost:9090' '' '' \
@@ -231,32 +244,87 @@ collect_results() {
   log "Results saved to ${outdir}/"
 }
 
-# === Main ===
+# Run a single phase: deploy prefill config, sweep replicas + concurrency
+run_phase() {
+  local phase_str="$1"
+  read -r label routing tp_size lws_size rest <<< "$phase_str"
+  local replicas=($(sort_ascending $rest))
 
-# Sort replicas ascending so we only ever scale up (new pods load model once)
-REPLICAS=($(sort_ascending "${REPLICAS[@]}"))
+  log "====== Phase: $label ======"
+  log "  Routing:  $routing"
+  log "  Prefill:  TP=$tp_size, LWS_SIZE=$lws_size"
+  log "  Replicas: ${replicas[*]}"
+  echo ""
+
+  # Patch prefill config and redeploy
+  patch_prefill_config "$tp_size" "$lws_size"
+  sed -i '' "s/^  replicas: .*/  replicas: ${replicas[0]}/" "$PREFILL_YAML"
+
+  if [ -n "$DRY_RUN" ]; then
+    log "  [dry-run] would run: just start pd"
+  else
+    just start pd
+  fi
+  wait_for_lws_ready "${DEPLOY_NAME}-decode"
+  wait_for_lws_ready "$PREFILL_LWS" "$((${replicas[0]} * lws_size))"
+
+  swap_routing "$routing"
+
+  local first_rep=true
+  for REP in "${replicas[@]}"; do
+    log "--- Replicas: $REP ($label) ---"
+
+    if [ "$first_rep" = true ]; then
+      first_rep=false
+    else
+      scale_prefill "$REP" "$lws_size"
+    fi
+
+    for CONC in "${CONCURRENCIES[@]}"; do
+      TAG="${label}-${REP}rep-c${CONC}"
+      JOB_NAME="${NAME_PREFIX}-mt-${TAG}"
+      log "--- Run: $TAG ---"
+
+      CONFIG=$(make_workload_json "$CONC")
+      launch_benchmark "$JOB_NAME" "$CONFIG"
+
+      if wait_for_benchmark "$JOB_NAME"; then
+        collect_results "$JOB_NAME" "$TAG"
+      else
+        FAILURES+=("$TAG")
+        collect_results "$JOB_NAME" "$TAG"
+      fi
+
+      if [ -z "$DRY_RUN" ]; then
+        $KN delete job -l "app=${JOB_NAME}" --ignore-not-found=true 2>/dev/null || true
+      fi
+    done
+  done
+}
+
+# === Main ===
 
 log "=== Multiturn Routing Sweep ==="
 [ -n "$DRY_RUN" ] && log "*** DRY RUN — no cluster commands will execute ***"
-log "Replicas:      ${REPLICAS[*]} (ascending)"
-log "Strategies:    ${STRATEGIES[*]}"
-log "Concurrencies: ${CONCURRENCIES[*]}"
+log "Phase 1: $PHASE_1"
+log "Phase 2: $PHASE_2"
+log "Phase 3: $PHASE_3"
+log "Concurrencies: ${CONCURRENCIES[*]} (per worker, ×$NUM_WORKERS workers)"
 log "Workload:      turns=$TURNS isl=$ISL subsequent_isl=$SUBSEQUENT_ISL osl=$OSL"
 log "Timing:        duration=$DURATION warmup=$WARMUP"
 log "Results:       $RESULTS_DIR"
 echo ""
 
 mkdir -p "$RESULTS_DIR"
-
-# Tee all output to a log file so it survives terminal disconnects
 exec > >(tee -a "${RESULTS_DIR}/sweep.log") 2>&1
 
 # Save experiment config
 cat > "${RESULTS_DIR}/config.json" <<EOF
 {
   "timestamp": "$TIMESTAMP",
-  "replicas": [$(printf '%s,' "${REPLICAS[@]}" | sed 's/,$//')],
-  "strategies": [$(printf '"%s",' "${STRATEGIES[@]}" | sed 's/,$//')],
+  "phase_1": "$PHASE_1",
+  "phase_2": "$PHASE_2",
+  "phase_3": "$PHASE_3",
   "concurrencies": [$(printf '%s,' "${CONCURRENCIES[@]}" | sed 's/,$//')],
   "turns": $TURNS,
   "isl": $ISL,
@@ -268,56 +336,14 @@ cat > "${RESULTS_DIR}/config.json" <<EOF
 }
 EOF
 
-# Deploy stack once with the smallest replica count.
-# NOTE: sed -i '' is macOS syntax; GNU sed uses sed -i'' (no space).
+# Restore prefill.yaml on exit
 if [ -z "$DRY_RUN" ]; then
-  sed -i '' "s/^  replicas: .*/  replicas: ${REPLICAS[0]}/" gb200/base/prefill.yaml
-  trap 'git checkout gb200/base/prefill.yaml 2>/dev/null; log "Restored prefill.yaml"' EXIT
-
-  log "Deploying stack (initial prefill replicas: ${REPLICAS[0]})..."
-  just start pd
-else
-  log "[dry-run] would patch prefill.yaml to ${REPLICAS[0]} replicas and run: just start pd"
+  trap 'git checkout "$PREFILL_YAML" 2>/dev/null; log "Restored $PREFILL_YAML"' EXIT
 fi
-wait_for_lws_ready "${DEPLOY_NAME}-decode"
-wait_for_lws_ready "$PREFILL_LWS" "${REPLICAS[0]}"
-log "Stack ready"
-echo ""
 
-FIRST_REP=true
-for REP in "${REPLICAS[@]}"; do
-  log "====== Prefill replicas: $REP ======"
-
-  if [ "$FIRST_REP" = true ]; then
-    FIRST_REP=false
-  else
-    scale_prefill "$REP"
-  fi
-
-  for STRAT in "${STRATEGIES[@]}"; do
-    swap_routing "$STRAT"
-
-    for CONC in "${CONCURRENCIES[@]}"; do
-      TAG="${STRAT}-${REP}rep-c${CONC}"
-      JOB_NAME="${NAME_PREFIX}-mt-${TAG}"
-      log "--- Run: $TAG ---"
-
-      CONFIG=$(make_workload_json "$CONC")
-      launch_benchmark "$JOB_NAME" "$CONFIG"
-
-      if wait_for_benchmark "$JOB_NAME"; then
-        collect_results "$JOB_NAME" "$TAG"
-      else
-        FAILURES+=("$TAG")
-        collect_results "$JOB_NAME" "$TAG"  # still grab logs on failure
-      fi
-
-      if [ -z "$DRY_RUN" ]; then
-        $KN delete job -l "app=${JOB_NAME}" --ignore-not-found=true 2>/dev/null || true
-      fi
-    done
-  done
-done
+run_phase "$PHASE_1"
+run_phase "$PHASE_2"
+run_phase "$PHASE_3"
 
 log "=== Sweep complete ==="
 log "Results in: $RESULTS_DIR/"
@@ -330,6 +356,3 @@ if [ ${#FAILURES[@]} -gt 0 ]; then
     log "  - $f"
   done
 fi
-
-# Optionally tear down (uncomment if desired)
-# just stop

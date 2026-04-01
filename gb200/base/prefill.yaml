@@ -7,13 +7,13 @@ metadata:
     llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
     llm-d.ai/role: prefill
 spec:
-  replicas: 1
+  replicas: 2
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 2
+    size: 1
     workerTemplate:
       metadata:
         labels:
@@ -25,6 +25,13 @@ spec:
       spec:
         serviceAccountName: wide-ep
         terminationGracePeriodSeconds: 0
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - key: node-role.kubernetes.io/hpc-rack-1
+                  operator: Exists
         volumes:
           - name: dshm
             emptyDir:
@@ -42,7 +49,8 @@ spec:
             resourceClaimTemplateName: llm-d-dev-claim
         containers:
           - name: vllm
-            image: ghcr.io/tlrmchlsmth/llm-d-cuda-dev:c6b5108
+            image: ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091
+            #image: quay.io/tms/llm-d-cuda-dev:ef2c4f7
             securityContext:
               capabilities:
                 add:
@@ -63,11 +71,11 @@ spec:
                 # No routing sidecar - serves directly on ports 8000+
                 #################
                 # Persist logs to Lustre so they survive LWS pod recreation
-                # LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/prefill
-                # mkdir -p "$LOG_DIR"
-                # LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
-                # exec > >(tee -a "$LOG_FILE") 2>&1
-                # echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+                LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/prefill
+                mkdir -p "$LOG_DIR"
+                LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
+                exec > >(tee -a "$LOG_FILE") 2>&1
+                echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
 
                 # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
@@ -114,11 +122,9 @@ spec:
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
                     --gpu-memory-utilization 0.85 \
                     --all2all-backend "flashinfer_nvlink_one_sided" \
-                    --no-enable-prefix-caching \
+                    --disable_cascade_attn \
                     --api-server-count 4 \
-                    -ac.use_trtllm_ragged_deepseek_prefill=true \
                     --async-scheduling \
-                    --compilation_config '{"custom_ops": ["none", "+rms_norm"]}' \
                     --kv-cache-dtype fp8 \
                     --enable-force-include-usage &
                 done
@@ -137,12 +143,16 @@ spec:
                 exit 1
 
             env:
-              - name: TQDM_DISABLE
+              - name: VLLM_USE_V2_MODEL_RUNNER
                 value: "1"
+              #- name: VLLM_NAN_DETECT
+              #  value: "1"
+              #- name: VLLM_ATTENTION_NAN_DETECT
+              #  value: "1"
 
-              - name: VLLM_NAN_DETECT
+              - name: VLLM_NO_USAGE_STATS
                 value: "1"
-              - name: VLLM_NIXL_NAN_DETECT
+              - name: TQDM_DISABLE
                 value: "1"
 
               # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)

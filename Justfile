@@ -486,7 +486,7 @@ benchmark-stairs:
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_POKER_DIR}}"
     just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
-      "{\"load\":{\"concurrency\":128},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"sweep\":{\"min\":128,\"max\":896,\"steps\":3,\"step_duration\":\"60s\"},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
+      "{\"load\":{\"concurrency\":128},\"warmup\":{\"duration\":\"300s\",\"stagger\":true},\"sweep\":{\"min\":128,\"max\":1920,\"steps\":10,\"step_duration\":\"300s\"},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
       8 {{NAMESPACE}} arm64 lustre pr-28 &
     just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
       "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \

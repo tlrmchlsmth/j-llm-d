@@ -13,6 +13,8 @@ spec:
         - matchExpressions:
           - key: nvidia.com/gpu.present
             operator: Exists
+          - key: node-role.kubernetes.io/hpc-rack-2
+            operator: Exists
   securityContext:
     runAsUser: 0
     runAsGroup: 0

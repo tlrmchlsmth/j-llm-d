@@ -25,6 +25,13 @@ spec:
       spec:
         serviceAccountName: wide-ep
         terminationGracePeriodSeconds: 0
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - key: node-role.kubernetes.io/hpc-rack-2
+                  operator: Exists
         volumes:
           - name: dshm
             emptyDir:
@@ -109,7 +116,8 @@ spec:
               allowPrivilegeEscalation: false
         containers:
           - name: vllm
-            image: ghcr.io/tlrmchlsmth/llm-d-cuda-dev:c6b5108
+            image: ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091
+            #image: quay.io/tms/llm-d-cuda-dev:ef2c4f7
             securityContext:
               capabilities:
                 add:
@@ -130,11 +138,11 @@ spec:
                 # Routing sidecar maps port 800X -> localhost:820X
                 #################
                 # Persist logs to Lustre so they survive LWS pod recreation
-                #LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/decode
-                #mkdir -p "$LOG_DIR"
-                #LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
-                #exec > >(tee -a "$LOG_FILE") 2>&1
-                #echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+                LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/decode
+                mkdir -p "$LOG_DIR"
+                LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
+                exec > >(tee -a "$LOG_FILE") 2>&1
+                echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
 
                 # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
@@ -198,17 +206,15 @@ spec:
                     --disable_cascade_attn \
                     --max-cudagraph-capture-size $MAX_TOKENS \
                     --all2all-backend "flashinfer_nvlink_one_sided" \
-                    --no-enable-prefix-caching \
                     --async-scheduling \
                     --api-server-count 4 \
                     --enable-eplb \
                     --eplb-config '{"window_size":"100",
                                     "step_interval":"3000",
-                                    "num_redundant_experts":"16",
+                                    "num_redundant_experts":"32",
                                     "log_balancedness":"False",
                                     "log_balancedness_interval":"1000"}' \
                     --kv-cache-dtype fp8 \
-                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY", "custom_ops": ["none", "+rms_norm"]}' \
                     --enable-force-include-usage &
                 done
 
@@ -234,13 +240,12 @@ spec:
                 exit 1
 
             env:
-              - name: TQDM_DISABLE
+              - name: VLLM_USE_V2_MODEL_RUNNER
                 value: "1"
 
-              # NaN detection v2: track real vs padding NaN separately
-              - name: VLLM_NAN_DETECT
+              - name: VLLM_NO_USAGE_STATS
                 value: "1"
-              - name: VLLM_NIXL_NAN_DETECT
+              - name: TQDM_DISABLE
                 value: "1"
 
               # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)

@@ -34,8 +34,8 @@ CONFIGS=(
 # Workload — single turn, measuring raw prefill TTFT
 # All array vars are space-separated strings
 CONCURRENCIES=(${CONCURRENCIES:-256 512 1024})
-ISL=${ISL:-5000}
-OSL=${OSL:-1000}
+ISL=${ISL:-10000}
+OSL=${OSL:-1}
 DURATION=${DURATION:-300s}
 WARMUP=${WARMUP:-120s}
 NUM_WORKERS=${NUM_WORKERS:-8}
@@ -276,7 +276,7 @@ log "=== Prefill Tuning Sweep (parallel) ==="
 log "Configs:       ${#CONFIGS[@]} configs"
 for c in "${CONFIGS[@]}"; do log "  $c"; done
 log "Concurrencies: ${CONCURRENCIES[*]} (per worker, ×$NUM_WORKERS workers)"
-log "Workload:      isl=$ISL osl=$OSL turns=1 duration=$DURATION"
+log "Workload:      isl=$ISL osl=$OSL (pure prefill) duration=$DURATION"
 log "Results:       $RESULTS_DIR"
 echo ""
 

@@ -216,7 +216,11 @@ deploy_config() {
   local deploy_ts
   deploy_ts=$(date +%Y%m%d-%H%M%S)
 
-  # NOTE: sed -i is not used — we pipe the rendered output directly
+  # Render, substitute placeholders and config, fix ports for DP count
+  local dp_local=$((4 / tp_size))
+  local port_list
+  port_list=$(seq -s ' ' 8000 $((8000 + dp_local - 1)))
+
   kubectl kustomize "$tmpdir" \
     | sed -e "s/DEPLOY_TS_PLACEHOLDER/$deploy_ts/g" \
           -e "s/OWNER_PLACEHOLDER/${owner}/g" \
@@ -224,14 +228,50 @@ deploy_config() {
           -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/${NAME_PREFIX}|g" \
           -e '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' \
           -e "s/^    size: .*/    size: $lws_size/" \
+    | python3 -c "
+import sys, yaml
+
+dp_local = $dp_local
+docs = list(yaml.safe_load_all(sys.stdin))
+for doc in docs:
+    if doc is None or doc.get('kind') != 'LeaderWorkerSet':
+        continue
+    spec = doc['spec']['leaderWorkerTemplate']['workerTemplate']['spec']
+
+    # Keep only the first dp_local init containers (routing sidecars)
+    if 'initContainers' in spec:
+        spec['initContainers'] = spec['initContainers'][:dp_local]
+
+    for c in spec.get('containers', []):
+        if c.get('name') != 'vllm':
+            continue
+        # Fix containerPort list — keep only active ports for both ranges
+        c['ports'] = [p for p in c.get('ports', [])
+                      if p['containerPort'] < 8000 + dp_local
+                      or (8200 <= p['containerPort'] < 8200 + dp_local)]
+        # Fix readiness probe to only check active ports
+        ports_bash = ' '.join(str(8000 + r) for r in range(dp_local))
+        c['readinessProbe']['exec']['command'] = [
+            '/bin/bash', '-c',
+            'for port in $ports_bash; do\n  curl -sf http://localhost:\$port/v1/models | grep -q \'\"id\"\' || exit 1\ndone'.replace('\$ports_bash', ports_bash)
+        ]
+
+print('---\n'.join(yaml.dump(d, default_flow_style=False) for d in docs if d))
+" \
     | $KN apply -f -
   rm -rf "$tmpdir"
 
-  # 2. Deploy InferencePool via helm
+  # 2. Deploy InferencePool via helm (only target active DP ports)
   mkdir -p .tmp
   DEPLOY_NAME="$deploy_name" OWNER="$owner" \
     envsubst '${DEPLOY_NAME} ${OWNER}' < gb200/inferencepool-agg.values.yaml \
-    > ".tmp/infpool-pt-${cfg_name}.yaml"
+    | python3 -c "
+import sys, yaml
+dp_local = $dp_local
+doc = yaml.safe_load(sys.stdin)
+doc['inferencePool']['targetPorts'] = [{'number': 8000 + i} for i in range(dp_local)]
+yaml.dump(doc, sys.stdout, default_flow_style=False)
+" > ".tmp/infpool-pt-${cfg_name}.yaml"
 
   helm upgrade --install "${deploy_name}-infpool" \
     oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \

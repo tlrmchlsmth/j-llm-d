@@ -35,7 +35,7 @@ OSL=${OSL:-1000}
 DURATION=${DURATION:-600s}
 WARMUP=${WARMUP:-120s}
 NUM_WORKERS=${NUM_WORKERS:-8}
-NYANN_TAG=${NYANN_TAG:-pr-27}
+NYANN_TAG=${NYANN_TAG:-latest}
 
 # Timeouts
 READY_TIMEOUT=${READY_TIMEOUT:-900}    # 15 min for model servers to start

@@ -16,6 +16,9 @@
 # Usage:
 #   ./multiturn-routing-sweep.sh
 #   DRY_RUN=1 ./multiturn-routing-sweep.sh
+#
+# Resume a previous run (skips completed benchmarks):
+#   RESULTS_DIR=results/multiturn-sweep-20260401-105957 ./multiturn-routing-sweep.sh
 set -euo pipefail
 
 # === Configuration ===
@@ -39,7 +42,7 @@ NUM_WORKERS=${NUM_WORKERS:-8}
 NYANN_TAG=${NYANN_TAG:-latest}
 
 # Timeouts
-READY_TIMEOUT=${READY_TIMEOUT:-900}
+READY_TIMEOUT=${READY_TIMEOUT:-1200}    # 20 min for model servers to start
 BENCH_TIMEOUT=${BENCH_TIMEOUT:-5400}
 EPP_SETTLE=${EPP_SETTLE:-30}
 
@@ -51,7 +54,7 @@ DEPLOY_NAME="${NAME_PREFIX}-wide-ep"
 LUSTRE="/mnt/lustre/${NAME_PREFIX}"
 BASE_URL="http://${DEPLOY_NAME}-inference-gateway-istio.${NAMESPACE}.svc.cluster.local/v1"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-RESULTS_DIR="results/multiturn-sweep-${TIMESTAMP}"
+RESULTS_DIR="${RESULTS_DIR:-results/multiturn-sweep-${TIMESTAMP}}"
 PREFILL_LWS="${DEPLOY_NAME}-prefill"
 PREFILL_YAML="gb200/base/prefill.yaml"
 
@@ -319,6 +322,16 @@ run_phase() {
 
   local first_rep=true
   for REP in "${replicas[@]}"; do
+    # Check if all runs for this replica count are done
+    local all_done=true
+    for C in "${CONCURRENCIES[@]}"; do
+      [ -s "${RESULTS_DIR}/${label}-${REP}rep-c${C}/logs.txt" ] || { all_done=false; break; }
+    done
+    if [ "$all_done" = true ]; then
+      log "--- Skip replicas=$REP ($label) — all runs completed ---"
+      continue
+    fi
+
     log "--- Replicas: $REP ($label) ---"
 
     if [ "$first_rep" = true ]; then
@@ -330,6 +343,13 @@ run_phase() {
     for CONC in "${CONCURRENCIES[@]}"; do
       TAG="${label}-${REP}rep-c${CONC}"
       JOB_NAME="${NAME_PREFIX}-mt-${TAG}"
+
+      # Skip if results already exist (resume support)
+      if [ -s "${RESULTS_DIR}/${TAG}/logs.txt" ]; then
+        log "--- Skip: $TAG (already completed) ---"
+        continue
+      fi
+
       log "--- Run: $TAG ---"
 
       CONFIG=$(make_workload_json "$CONC")

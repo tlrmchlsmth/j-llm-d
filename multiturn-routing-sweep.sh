@@ -23,19 +23,19 @@ set -euo pipefail
 # === Configuration (override via env) ===
 # All array vars are space-separated strings, e.g. REPLICAS="1 2 4"
 DRY_RUN=${DRY_RUN:-}
-REPLICAS=(${REPLICAS:-2 4})
+REPLICAS=(${REPLICAS:-1 2 5})
 STRATEGIES=(${STRATEGIES:-pd pd-random})
-CONCURRENCIES=(${CONCURRENCIES:-64 128 256})
+CONCURRENCIES=(${CONCURRENCIES:-256 512 1024})
 
 # Workload knobs
 TURNS=${TURNS:-5}
-ISL=${ISL:-2048}
-SUBSEQUENT_ISL=${SUBSEQUENT_ISL:-128}
-OSL=${OSL:-256}
+ISL=${ISL:-5000}
+SUBSEQUENT_ISL=${SUBSEQUENT_ISL:-100}
+OSL=${OSL:-1000}
 DURATION=${DURATION:-600s}
 WARMUP=${WARMUP:-120s}
-NUM_WORKERS=${NUM_WORKERS:-4}
-NYANN_TAG=${NYANN_TAG:-pr-28}
+NUM_WORKERS=${NUM_WORKERS:-8}
+NYANN_TAG=${NYANN_TAG:-pr-27}
 
 # Timeouts
 READY_TIMEOUT=${READY_TIMEOUT:-900}    # 15 min for model servers to start
@@ -247,6 +247,9 @@ log "Results:       $RESULTS_DIR"
 echo ""
 
 mkdir -p "$RESULTS_DIR"
+
+# Tee all output to a log file so it survives terminal disconnects
+exec > >(tee -a "${RESULTS_DIR}/sweep.log") 2>&1
 
 # Save experiment config
 cat > "${RESULTS_DIR}/config.json" <<EOF

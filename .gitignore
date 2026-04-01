@@ -17,6 +17,7 @@
 gb200/kustomization.yaml
 
 # Results and output directories
+results/
 results-*/
 guide-llm-results/
 traces/

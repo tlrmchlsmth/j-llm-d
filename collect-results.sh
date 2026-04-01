@@ -10,73 +10,61 @@
 PROM="${PROMETHEUS_URL:-http://localhost:9090}"
 DEPLOY_NAME="${USER}-wide-ep"
 
-# Query a prometheus metric, averaged over a time range
-prom_query() {
-  local query="$1" start="$2" end="$3"
-  curl -s --fail "${PROM}/api/v1/query" \
-    --data-urlencode "query=avg_over_time(($query)[${end}s:10s] @ $end)" \
-    --data-urlencode "time=$end" 2>/dev/null \
-    | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['data']['result'][0]['value'][1] if r['data']['result'] else '0')" 2>/dev/null || echo "0"
-}
-
-# Extract start_time, end_time from logs
-get_timestamps() {
-  python3 -c "
-import json
-for line in open('$1'):
-    line = line.strip().rstrip(',')
-    if not line.startswith('{'): continue
-    try:
-        j = json.loads(line)
-    except: continue
-    stages = j.get('stages', [])
-    if stages:
-        print(f'{stages[0][\"start_time\"]},{stages[-1][\"end_time\"]}')
-        break
-" 2>/dev/null
-}
-
-echo "run,requests,ok,errors,throughput_rps,output_tps,ttft_mean_ms,ttft_p50_ms,ttft_p90_ms,ttft_p99_ms,ttft_min_ms,ttft_max_ms,itl_mean_ms,itl_p50_ms,e2e_mean_ms,e2e_p50_ms,prom_prefill_tps,prom_decode_tps,prom_prefill_cache_hit_rate"
+echo "run,start_time,end_time,requests,ok,errors,rps,output_tps,ttft_mean_ms,ttft_p50_ms,ttft_p90_ms,ttft_p99_ms,ttft_min_ms,ttft_max_ms,itl_mean_ms,itl_p50_ms,e2e_mean_ms,e2e_p50_ms,prom_prefill_tps,prom_decode_tps,prom_cache_hit_rate"
 
 for d in results/*/*/logs.txt; do
   [ -s "$d" ] || continue
   tag=$(basename "$(dirname "$d")")
 
-  # Client-side metrics from nyann_poker
-  client_row=$(python3 -c "
-import json
-for line in open('$d'):
-    line = line.strip().rstrip(',')
-    if not line.startswith('{'): continue
+  python3 -c "
+import json, sys, subprocess
+
+text = open('$d').read()
+# Find the last JSON block (the summary object)
+idx = text.rfind('{')
+j = None
+while idx >= 0:
     try:
-        j = json.loads(line)
-    except: continue
-    if 'total_requests' not in j: continue
-    t = j
-    ttft = t.get('ttft_ms', {})
-    itl = t.get('itl_ms', {})
-    e2e = t.get('e2e_latency_ms', {})
-    print(f'{t[\"total_requests\"]},{t[\"ok_requests\"]},{t[\"error_requests\"]},{t.get(\"throughput_rps\",0)},{t.get(\"output_tps\",0)},{ttft.get(\"mean\",0)},{ttft.get(\"p50\",0)},{ttft.get(\"p90\",0)},{ttft.get(\"p99\",0)},{ttft.get(\"min\",0)},{ttft.get(\"max\",0)},{itl.get(\"mean\",0)},{itl.get(\"p50\",0)},{e2e.get(\"mean\",0)},{e2e.get(\"p50\",0)}')
-    break
-" 2>/dev/null)
+        j = json.loads(text[idx:])
+        if 'total_requests' in j:
+            break
+        j = None
+    except:
+        pass
+    idx = text.rfind('{', 0, idx)
 
-  [ -z "$client_row" ] && continue
+if not j:
+    sys.exit(0)
 
-  # Server-side metrics from Prometheus
-  timestamps=$(get_timestamps "$d")
-  if [ -n "$timestamps" ]; then
-    IFS=',' read -r start_t end_t <<< "$timestamps"
-    start_int=${start_t%.*}
-    end_int=${end_t%.*}
+ttft = j.get('ttft_ms', {})
+itl = j.get('itl_ms', {})
+e2e = j.get('e2e_latency_ms', {})
+ts = j.get('timestamps', {})
+stages = ts.get('stages', [])
+start = str(int(stages[0]['start_time'])) if stages else ''
+end = str(int(stages[-1]['end_time'])) if stages else ''
 
-    prefill_tps=$(prom_query "sum(rate(vllm:prompt_tokens_total{pod=~\"${DEPLOY_NAME}-prefill.*\"}[30s]))" "$start_int" "$end_int")
-    decode_tps=$(prom_query "sum(rate(vllm:generation_tokens_total{pod=~\"${DEPLOY_NAME}-decode.*\"}[30s]))" "$start_int" "$end_int")
-    cache_hit=$(prom_query "sum(rate(vllm:prefix_cache_hit_tokens_total{pod=~\"${DEPLOY_NAME}-prefill.*\"}[30s])) / clamp_min(sum(rate(vllm:prompt_tokens_total{pod=~\"${DEPLOY_NAME}-prefill.*\"}[30s])),1)" "$start_int" "$end_int")
-  else
-    prefill_tps=0
-    decode_tps=0
-    cache_hit=0
-  fi
+# Query prometheus for server-side metrics
+def prom_query(query, end_t):
+    if not end_t:
+        return '0'
+    try:
+        import urllib.request, urllib.parse
+        url = '${PROM}/api/v1/query?' + urllib.parse.urlencode({
+            'query': f'avg_over_time(({query})[180s:10s])',
+            'time': end_t
+        })
+        resp = json.loads(urllib.request.urlopen(url, timeout=5).read())
+        result = resp.get('data', {}).get('result', [])
+        return result[0]['value'][1] if result else '0'
+    except:
+        return '0'
 
-  echo "$tag,$client_row,$prefill_tps,$decode_tps,$cache_hit"
+deploy = '${DEPLOY_NAME}'
+pf_tps = prom_query(f'sum(rate(vllm:prompt_tokens_total{{pod=~\"{deploy}-prefill.*\"}}[30s]))', end)
+dec_tps = prom_query(f'sum(rate(vllm:generation_tokens_total{{pod=~\"{deploy}-decode.*\"}}[30s]))', end)
+cache_hit = prom_query(f'sum(rate(vllm:prompt_tokens_cached_total{{pod=~\"{deploy}-prefill.*\"}}[30s])) / clamp_min(sum(rate(vllm:prompt_tokens_total{{pod=~\"{deploy}-prefill.*\"}}[30s])),1)', end)
+
+print(f'$tag,{start},{end},{j[\"total_requests\"]},{j.get(\"successful_requests\",0)},{j.get(\"error_requests\",0)},{j.get(\"requests_per_second\",0)},{j.get(\"output_tokens_per_second\",0)},{ttft.get(\"mean\",0)},{ttft.get(\"p50\",0)},{ttft.get(\"p90\",0)},{ttft.get(\"p99\",0)},{ttft.get(\"min\",0)},{ttft.get(\"max\",0)},{itl.get(\"mean\",0)},{itl.get(\"p50\",0)},{e2e.get(\"mean\",0)},{e2e.get(\"p50\",0)},{pf_tps},{dec_tps},{cache_hit}')
+" 2>/dev/null
 done

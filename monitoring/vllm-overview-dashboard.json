@@ -913,6 +913,185 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Ratio of cached prompt tokens to total prompt tokens. Higher values indicate better prefix cache utilization from intelligent routing.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "line+area"
+            }
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 0.3
+              },
+              {
+                "color": "green",
+                "value": 0.6
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 51
+      },
+      "id": 358,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(vllm:prompt_tokens_cached_total{pod=~\"${deployment}-.*prefill.*\"}[30s])) / sum(rate(vllm:prompt_tokens_total{pod=~\"${deployment}-.*prefill.*\"}[30s]))",
+          "instant": false,
+          "legendFormat": "prefill cache hit rate",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Prefix Cache Hit Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Per-pod prefix cache hit rate to visualize routing affinity. With intelligent routing, some pods should have higher hit rates.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "id": 359,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "rate(vllm:prompt_tokens_cached_total{pod=~\"${deployment}-.*prefill.*\"}[30s]) / rate(vllm:prompt_tokens_total{pod=~\"${deployment}-.*prefill.*\"}[30s])",
+          "instant": false,
+          "legendFormat": "{{pod}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Per-Pod Prefix Cache Hit Rate",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1745,7 +1924,9 @@
           "id": 351,
           "options": {
             "legend": {
-              "calcs": ["lastNotNull"],
+              "calcs": [
+                "lastNotNull"
+              ],
               "displayMode": "table",
               "placement": "bottom"
             },
@@ -1851,7 +2032,9 @@
           "id": 352,
           "options": {
             "legend": {
-              "calcs": ["lastNotNull"],
+              "calcs": [
+                "lastNotNull"
+              ],
               "displayMode": "table",
               "placement": "bottom"
             },
@@ -1906,7 +2089,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "description": "Input Sequence Length — prompt token count per request (p10/p50/p99)",
+          "description": "Input Sequence Length \u2014 prompt token count per request (p10/p50/p99)",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -1957,7 +2140,9 @@
           "id": 353,
           "options": {
             "legend": {
-              "calcs": ["lastNotNull"],
+              "calcs": [
+                "lastNotNull"
+              ],
               "displayMode": "table",
               "placement": "bottom"
             },
@@ -2004,7 +2189,7 @@
               "refId": "C"
             }
           ],
-          "title": "ISL — Input Sequence Length (p10/p50/p99)",
+          "title": "ISL \u2014 Input Sequence Length (p10/p50/p99)",
           "type": "timeseries"
         },
         {
@@ -2012,7 +2197,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "description": "Output Sequence Length — generation token count per request (p10/p50/p99)",
+          "description": "Output Sequence Length \u2014 generation token count per request (p10/p50/p99)",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -2063,7 +2248,9 @@
           "id": 354,
           "options": {
             "legend": {
-              "calcs": ["lastNotNull"],
+              "calcs": [
+                "lastNotNull"
+              ],
               "displayMode": "table",
               "placement": "bottom"
             },
@@ -2110,7 +2297,7 @@
               "refId": "C"
             }
           ],
-          "title": "OSL — Output Sequence Length (p10/p50/p99)",
+          "title": "OSL \u2014 Output Sequence Length (p10/p50/p99)",
           "type": "timeseries"
         },
         {
@@ -2169,7 +2356,9 @@
           "id": 355,
           "options": {
             "legend": {
-              "calcs": ["lastNotNull"],
+              "calcs": [
+                "lastNotNull"
+              ],
               "displayMode": "table",
               "placement": "bottom"
             },
@@ -2275,7 +2464,9 @@
           "id": 356,
           "options": {
             "legend": {
-              "calcs": ["lastNotNull"],
+              "calcs": [
+                "lastNotNull"
+              ],
               "displayMode": "table",
               "placement": "bottom"
             },
@@ -2381,7 +2572,9 @@
           "id": 357,
           "options": {
             "legend": {
-              "calcs": ["lastNotNull"],
+              "calcs": [
+                "lastNotNull"
+              ],
               "displayMode": "table",
               "placement": "bottom"
             },

@@ -58,11 +58,7 @@ inferenceExtension:
         plugins:
         - pluginRef: prefill-filter
         - pluginRef: prefix-cache-scorer
-          weight: 3
-        - pluginRef: active-request-scorer
-          weight: 2
-        - pluginRef: queue-scorer
-          weight: 2
+          weight: 1
         - pluginRef: prefill-picker
       - name: decode
         plugins:

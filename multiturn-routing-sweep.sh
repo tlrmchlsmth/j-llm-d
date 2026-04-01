@@ -25,9 +25,10 @@ set -euo pipefail
 DRY_RUN=${DRY_RUN:-}
 
 # Phase definitions: "LABEL ROUTING TP_SIZE LWS_SIZE GPUS_PER_POD REPLICAS..."
-PHASE_1="ep8-pd      pd        1 2 4   1 2 3 4"
-PHASE_2="tp2-random  pd-random 2 1 2   4 8 12 16"
-PHASE_3="ep8-random  pd-random 1 2 4   1 2 3 4"
+# Override via env vars. Set to empty string to skip a phase.
+PHASE_1="${PHASE_1-ep8-pd      pd        1 2 4   1 2 3 4}"
+PHASE_2="${PHASE_2-tp2-random  pd-random 2 1 2   4 8 12 16}"
+PHASE_3="${PHASE_3-ep8-random  pd-random 1 2 4   1 2 3 4}"
 
 CONCURRENCIES=(${CONCURRENCIES:-128 512})
 
@@ -217,7 +218,7 @@ patch_prefill_config() {
   sedi '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' "$PREFILL_YAML"
   sedi '/- name: GPUS_PER_POD/{n;s/value: ".*"/value: "'"$gpus_per_pod"'"/;}' "$PREFILL_YAML"
   # Patch GPU resource requests/limits
-  sedi 's/nvidia.com\/gpu: "4"/nvidia.com\/gpu: "'"$gpus_per_pod"'"/g' "$PREFILL_YAML"
+  sedi 's/nvidia.com\/gpu: "[0-9]*"/nvidia.com\/gpu: "'"$gpus_per_pod"'"/g' "$PREFILL_YAML"
 }
 
 launch_benchmark() {
@@ -300,6 +301,10 @@ collect_results() {
 # Run a single phase: deploy prefill config, sweep replicas + concurrency
 run_phase() {
   local phase_str="$1"
+  if [ -z "$phase_str" ]; then
+    log "  (phase skipped — empty definition)"
+    return 0
+  fi
   read -r label routing tp_size lws_size gpus_per_pod rest <<< "$phase_str"
   local replicas=($(sort_ascending $rest))
 
@@ -376,9 +381,9 @@ run_phase() {
 
 log "=== Multiturn Routing Sweep ==="
 [ -n "$DRY_RUN" ] && log "*** DRY RUN — no cluster commands will execute ***"
-log "Phase 1: $PHASE_1"
-log "Phase 2: $PHASE_2"
-log "Phase 3: $PHASE_3"
+[ -n "$PHASE_1" ] && log "Phase 1: $PHASE_1"
+[ -n "$PHASE_2" ] && log "Phase 2: $PHASE_2"
+[ -n "$PHASE_3" ] && log "Phase 3: $PHASE_3"
 log "Concurrencies: ${CONCURRENCIES[*]} (per worker, ×$NUM_WORKERS workers)"
 log "Workload:      turns=$TURNS isl=$ISL subsequent_isl=$SUBSEQUENT_ISL osl=$OSL"
 log "Timing:        duration=$DURATION warmup=$WARMUP"
@@ -392,9 +397,9 @@ exec > >(tee -a "${RESULTS_DIR}/sweep.log") 2>&1
 cat > "${RESULTS_DIR}/config.json" <<EOF
 {
   "timestamp": "$TIMESTAMP",
-  "phase_1": "$PHASE_1",
-  "phase_2": "$PHASE_2",
-  "phase_3": "$PHASE_3",
+  "phase_1": "${PHASE_1:-}",
+  "phase_2": "${PHASE_2:-}",
+  "phase_3": "${PHASE_3:-}",
   "concurrencies": [$(printf '%s,' "${CONCURRENCIES[@]}" | sed 's/,$//')],
   "turns": $TURNS,
   "isl": $ISL,
@@ -406,10 +411,6 @@ cat > "${RESULTS_DIR}/config.json" <<EOF
 }
 EOF
 
-# Restore prefill.yaml on exit
-if [ -z "$DRY_RUN" ]; then
-  trap 'git checkout "$PREFILL_YAML" 2>/dev/null; log "Restored $PREFILL_YAML"' EXIT
-fi
 
 run_phase "$PHASE_1"
 run_phase "$PHASE_2"

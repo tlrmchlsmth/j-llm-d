@@ -75,6 +75,51 @@ FAILURES=()
 # Portable sed -i (macOS uses -i '', GNU uses -i)
 sedi() { sed -i"$(sed --version 2>/dev/null | grep -q GNU && echo '' || echo ' ')" "$@"; }
 
+# Replicate `just start pd` without requiring just
+deploy_stack() {
+  local deploy_ts
+  deploy_ts=$(date +%Y%m%d-%H%M%S)
+  local gb200_dir="gb200"
+
+  printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: %s-\nresources:\n  - overlays/pd\n' \
+    "$NAME_PREFIX" > "${gb200_dir}/kustomization.yaml"
+
+  kubectl kustomize "$gb200_dir" \
+    | sed -e "s/DEPLOY_TS_PLACEHOLDER/$deploy_ts/g" \
+          -e "s/OWNER_PLACEHOLDER/${NAME_PREFIX}/g" \
+          -e "s|VLLM_DEV_VENV_PLACEHOLDER||g" \
+          -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/${NAME_PREFIX}|g" \
+    | $KN apply -f -
+  rm -f "${gb200_dir}/kustomization.yaml"
+
+  export DEPLOY_NAME
+  envsubst '${DEPLOY_NAME}' < "${gb200_dir}/gateway.yaml" | $KN apply -f -
+  envsubst '${DEPLOY_NAME}' < "${gb200_dir}/httproute.yaml" | $KN apply -f -
+}
+
+# Replicate `just deploy_inferencepool` without requiring just
+deploy_infpool() {
+  local routing="$1"
+  mkdir -p .tmp
+  local owner="$NAME_PREFIX"
+  export DEPLOY_NAME OWNER="$owner"
+  envsubst '${DEPLOY_NAME} ${OWNER}' < "gb200/inferencepool-${routing}.values.yaml" > .tmp/inferencepool-values.yaml
+  helm upgrade --install "${DEPLOY_NAME}-infpool" \
+    oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
+    --version v1.3.0 \
+    -f .tmp/inferencepool-values.yaml \
+    -n "$NAMESPACE"
+  # Restart EPP pod
+  $KN delete pod -l "inferencepool=${DEPLOY_NAME}-infpool-epp" --ignore-not-found=true
+}
+
+# Replicate nyann_poker `just deploy` without requiring just in nyann_poker
+deploy_benchmark() {
+  local job_name="$1" base_url="$2" config="$3" num_workers="$4"
+  (cd "$NYANN_POKER_DIR" && just deploy "$job_name" "$base_url" "$config" \
+    "$num_workers" "$NAMESPACE" arm64 lustre "$NYANN_TAG")
+}
+
 # === Functions ===
 
 sort_ascending() {
@@ -145,9 +190,9 @@ swap_routing() {
   local strategy="$1"
   log "Swapping routing to: $strategy"
   if [ -n "$DRY_RUN" ]; then
-    log "  [dry-run] would run: just deploy_inferencepool $strategy"
+    log "  [dry-run] would run: deploy_infpool $strategy"
   else
-    just deploy_inferencepool "$strategy"
+    deploy_infpool "$strategy"
     log "Waiting ${EPP_SETTLE}s for EPP to settle..."
     sleep "$EPP_SETTLE"
   fi
@@ -183,8 +228,7 @@ launch_benchmark() {
   sleep 5
   log "Launching benchmark: $job_name"
   log "  config: $config"
-  (cd "$NYANN_POKER_DIR" && just deploy "$job_name" "$BASE_URL" "$config" \
-    "$NUM_WORKERS" "$NAMESPACE" arm64 lustre "$NYANN_TAG")
+  deploy_benchmark "$job_name" "$BASE_URL" "$config" "$NUM_WORKERS"
 }
 
 wait_for_benchmark() {
@@ -264,9 +308,9 @@ run_phase() {
   sedi "s/^  replicas: .*/  replicas: ${replicas[0]}/" "$PREFILL_YAML"
 
   if [ -n "$DRY_RUN" ]; then
-    log "  [dry-run] would run: just start pd"
+    log "  [dry-run] would deploy stack"
   else
-    just start pd
+    deploy_stack
   fi
   wait_for_lws_ready "${DEPLOY_NAME}-decode"
   wait_for_lws_ready "$PREFILL_LWS" "$((${replicas[0]} * lws_size))"

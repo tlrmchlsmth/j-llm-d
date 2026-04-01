@@ -222,7 +222,7 @@ spec:
                     --disable-uvicorn-access-log \
                     --port $((8200 + R)) \
                     --tensor-parallel-size $TP_SIZE \
-                    --enable-expert-parallel \
+                    $([ $TP_SIZE -eq 1 ] && echo '--enable-expert-parallel') \
                     $DP_FLAGS $RANK_FLAGS \
                     --trust-remote-code \
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
@@ -231,7 +231,7 @@ spec:
                     --max-num-seqs $MAX_TOKENS \
                     --disable_cascade_attn \
                     --max-cudagraph-capture-size $MAX_TOKENS \
-                    --all2all-backend "flashinfer_nvlink_one_sided" \
+                    $([ $TP_SIZE -eq 1 ] && echo '--all2all-backend flashinfer_nvlink_one_sided') \
                     --async-scheduling \
                     $EPLB_FLAGS \
                     --kv-cache-dtype fp8 \

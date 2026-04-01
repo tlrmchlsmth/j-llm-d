@@ -7,7 +7,7 @@ metadata:
     llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
     llm-d.ai/role: prefill
 spec:
-  replicas: 2
+  replicas: 1
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:
@@ -87,7 +87,7 @@ spec:
 
                 uv pip install --upgrade mistral_common
 
-                DP_SIZE_LOCAL=$((4 / TP_SIZE))
+                DP_SIZE_LOCAL=$((GPUS_PER_POD / TP_SIZE))
                 DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
 
@@ -179,9 +179,11 @@ spec:
               - name: FLASHINFER_CACHE_DIR
                 value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_extdp
 
-              # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
+              # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = GPUS_PER_POD / TP_SIZE)
               - name: TP_SIZE
                 value: "1"
+              - name: GPUS_PER_POD
+                value: "4"
 
               - name: VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE
                 value: "1"

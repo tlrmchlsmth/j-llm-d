@@ -24,10 +24,10 @@ set -euo pipefail
 # === Configuration ===
 DRY_RUN=${DRY_RUN:-}
 
-# Phase definitions: "LABEL ROUTING TP_SIZE LWS_SIZE REPLICAS..."
-PHASE_1="ep8-pd      pd        1 2   1 3 5"
-PHASE_2="tp2-random  pd-random 2 1   4 12 20"
-PHASE_3="ep8-random  pd-random 1 2   1 3 5"
+# Phase definitions: "LABEL ROUTING TP_SIZE LWS_SIZE GPUS_PER_POD REPLICAS..."
+PHASE_1="ep8-pd      pd        1 2 4   1 2 3 4"
+PHASE_2="tp2-random  pd-random 2 1 2   4 8 12 16"
+PHASE_3="ep8-random  pd-random 1 2 4   1 2 3 4"
 
 CONCURRENCIES=(${CONCURRENCIES:-128 512})
 
@@ -204,17 +204,20 @@ swap_routing() {
 patch_prefill_config() {
   local tp_size="$1"
   local lws_size="$2"
-  log "Patching prefill: TP_SIZE=$tp_size, LWS size=$lws_size"
+  local gpus_per_pod="${3:-4}"
+  log "Patching prefill: TP_SIZE=$tp_size, LWS size=$lws_size, GPUs/pod=$gpus_per_pod"
 
   if [ -n "$DRY_RUN" ]; then
     log "  [dry-run] would patch $PREFILL_YAML"
     return 0
   fi
 
-  # NOTE: sedi is macOS syntax
   sedi "s/^  replicas: .*/  replicas: 1/" "$PREFILL_YAML"
   sedi "s/^    size: .*/    size: $lws_size/" "$PREFILL_YAML"
   sedi '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' "$PREFILL_YAML"
+  sedi '/- name: GPUS_PER_POD/{n;s/value: ".*"/value: "'"$gpus_per_pod"'"/;}' "$PREFILL_YAML"
+  # Patch GPU resource requests/limits
+  sedi 's/nvidia.com\/gpu: "4"/nvidia.com\/gpu: "'"$gpus_per_pod"'"/g' "$PREFILL_YAML"
 }
 
 launch_benchmark() {
@@ -297,17 +300,17 @@ collect_results() {
 # Run a single phase: deploy prefill config, sweep replicas + concurrency
 run_phase() {
   local phase_str="$1"
-  read -r label routing tp_size lws_size rest <<< "$phase_str"
+  read -r label routing tp_size lws_size gpus_per_pod rest <<< "$phase_str"
   local replicas=($(sort_ascending $rest))
 
   log "====== Phase: $label ======"
   log "  Routing:  $routing"
-  log "  Prefill:  TP=$tp_size, LWS_SIZE=$lws_size"
+  log "  Prefill:  TP=$tp_size, LWS_SIZE=$lws_size, GPUs/pod=$gpus_per_pod"
   log "  Replicas: ${replicas[*]}"
   echo ""
 
   # Patch prefill config and redeploy
-  patch_prefill_config "$tp_size" "$lws_size"
+  patch_prefill_config "$tp_size" "$lws_size" "$gpus_per_pod"
   sedi "s/^  replicas: .*/  replicas: ${replicas[0]}/" "$PREFILL_YAML"
 
   if [ -n "$DRY_RUN" ]; then

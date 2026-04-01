@@ -21,6 +21,7 @@
 set -euo pipefail
 
 # === Configuration (override via env) ===
+# All array vars are space-separated strings, e.g. REPLICAS="1 2 4"
 DRY_RUN=${DRY_RUN:-}
 REPLICAS=(${REPLICAS:-2 4})
 STRATEGIES=(${STRATEGIES:-pd pd-random})
@@ -67,6 +68,9 @@ fi
 
 # === Logging ===
 log() { echo "[$(date +%H:%M:%S)] $*"; }
+
+# Track failed runs for summary
+FAILURES=()
 
 # === Functions ===
 
@@ -262,10 +266,10 @@ cat > "${RESULTS_DIR}/config.json" <<EOF
 EOF
 
 # Deploy stack once with the smallest replica count.
+# NOTE: sed -i '' is macOS syntax; GNU sed uses sed -i'' (no space).
 if [ -z "$DRY_RUN" ]; then
-  ORIG_REPLICAS=$(awk '/^  replicas:/{print $2}' gb200/base/prefill.yaml)
   sed -i '' "s/^  replicas: .*/  replicas: ${REPLICAS[0]}/" gb200/base/prefill.yaml
-  trap 'sed -i "" "s/^  replicas: .*/  replicas: $ORIG_REPLICAS/" gb200/base/prefill.yaml; log "Restored prefill.yaml replicas to $ORIG_REPLICAS"' EXIT
+  trap 'git checkout gb200/base/prefill.yaml 2>/dev/null; log "Restored prefill.yaml"' EXIT
 
   log "Deploying stack (initial prefill replicas: ${REPLICAS[0]})..."
   just start pd
@@ -301,6 +305,7 @@ for REP in "${REPLICAS[@]}"; do
       if wait_for_benchmark "$JOB_NAME"; then
         collect_results "$JOB_NAME" "$TAG"
       else
+        FAILURES+=("$TAG")
         collect_results "$JOB_NAME" "$TAG"  # still grab logs on failure
       fi
 
@@ -314,6 +319,14 @@ done
 log "=== Sweep complete ==="
 log "Results in: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR/"
+
+if [ ${#FAILURES[@]} -gt 0 ]; then
+  echo ""
+  log "WARNING: ${#FAILURES[@]} run(s) failed or timed out:"
+  for f in "${FAILURES[@]}"; do
+    log "  - $f"
+  done
+fi
 
 # Optionally tear down (uncomment if desired)
 # just stop

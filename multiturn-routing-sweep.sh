@@ -72,6 +72,9 @@ fi
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 FAILURES=()
 
+# Portable sed -i (macOS uses -i '', GNU uses -i)
+sedi() { sed -i"$(sed --version 2>/dev/null | grep -q GNU && echo '' || echo ' ')" "$@"; }
+
 # === Functions ===
 
 sort_ascending() {
@@ -160,10 +163,10 @@ patch_prefill_config() {
     return 0
   fi
 
-  # NOTE: sed -i '' is macOS syntax
-  sed -i '' "s/^  replicas: .*/  replicas: 1/" "$PREFILL_YAML"
-  sed -i '' "s/^    size: .*/    size: $lws_size/" "$PREFILL_YAML"
-  sed -i '' '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' "$PREFILL_YAML"
+  # NOTE: sedi is macOS syntax
+  sedi "s/^  replicas: .*/  replicas: 1/" "$PREFILL_YAML"
+  sedi "s/^    size: .*/    size: $lws_size/" "$PREFILL_YAML"
+  sedi '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' "$PREFILL_YAML"
 }
 
 launch_benchmark() {
@@ -258,7 +261,7 @@ run_phase() {
 
   # Patch prefill config and redeploy
   patch_prefill_config "$tp_size" "$lws_size"
-  sed -i '' "s/^  replicas: .*/  replicas: ${replicas[0]}/" "$PREFILL_YAML"
+  sedi "s/^  replicas: .*/  replicas: ${replicas[0]}/" "$PREFILL_YAML"
 
   if [ -n "$DRY_RUN" ]; then
     log "  [dry-run] would run: just start pd"

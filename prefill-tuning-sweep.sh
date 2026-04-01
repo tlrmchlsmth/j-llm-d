@@ -219,12 +219,6 @@ deploy_config() {
   # Render, substitute placeholders and config, fix ports for DP count
   local dp_local=$((4 / tp_size))
 
-  # Disable EPLB for TP>1 (experts shared across TP group, EPLB doesn't apply)
-  local eplb_sed=""
-  if [ "$tp_size" -gt 1 ]; then
-    eplb_sed="-e /--enable-eplb/d -e /--eplb-config/,/}'/d"
-  fi
-
   kubectl kustomize "$tmpdir" \
     | sed -e "s/DEPLOY_TS_PLACEHOLDER/$deploy_ts/g" \
           -e "s/OWNER_PLACEHOLDER/${owner}/g" \
@@ -232,7 +226,6 @@ deploy_config() {
           -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/${NAME_PREFIX}|g" \
           -e '/- name: TP_SIZE/{n;s/value: ".*"/value: "'"$tp_size"'"/;}' \
           -e "s/^    size: .*/    size: $lws_size/" \
-          $eplb_sed \
     | python3 -c "
 import sys, yaml
 

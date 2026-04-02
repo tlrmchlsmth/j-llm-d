@@ -94,7 +94,7 @@ def process_run(run_dir):
 
     # Prometheus queries (3 queries per run, all in this thread)
     pf_tps = prom_query(
-        f'sum(increase(vllm:prompt_tokens_total{{pod=~"{DEPLOY}-prefill.*"}}[{dur}])) / {secs}',
+        f'sum(increase(vllm:prompt_tokens_by_source_total{{pod=~"{DEPLOY}-prefill.*",source="local_compute"}}[{dur}])) / {secs}',
         end_t)
     dec_tps = prom_query(
         f'sum(increase(vllm:generation_tokens_total{{pod=~"{DEPLOY}-decode.*"}}[{dur}])) / {secs}',

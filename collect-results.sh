@@ -21,7 +21,7 @@ PROM = sys.argv[1]
 DEPLOY = sys.argv[2]
 run_dirs = sys.argv[3:]
 
-HEADER = "run,start_time,end_time,requests,ok,errors,rps,client_input_tps,client_output_tps,server_prefill_tps,server_decode_tps,cache_hit_rate,ttft_p50_ms,ttft_p90_ms,ttft_p99_ms,ttft_min_ms,itl_p50_ms,itl_p90_ms,itl_p99_ms,e2e_p50_ms,e2e_p90_ms,e2e_p99_ms"
+HEADER = "run,start_time,end_time,requests,ok,errors,rps,client_input_tps,client_output_tps,server_prefill_tps,server_decode_tps,cache_hit_rate,prefill_running,prefill_waiting,decode_running,decode_waiting,ttft_p50_ms,ttft_p90_ms,ttft_p99_ms,ttft_min_ms,itl_p50_ms,itl_p90_ms,itl_p99_ms,e2e_p50_ms,e2e_p90_ms,e2e_p99_ms"
 
 def prom_query(query, time):
     url = f'{PROM}/api/v1/query?' + urlencode({'query': query, 'time': time})
@@ -102,9 +102,22 @@ def process_run(run_dir):
     cache_hit = prom_query(
         f'sum(increase(vllm:prompt_tokens_cached_total{{pod=~"{DEPLOY}-prefill.*"}}[{dur}])) / clamp_min(sum(increase(vllm:prompt_tokens_total{{pod=~"{DEPLOY}-prefill.*"}}[{dur}])),1)',
         end_t)
+    # Gauge metrics: avg over the benchmark window
+    pf_running = prom_query(
+        f'avg_over_time(sum(vllm:num_requests_running{{pod=~"{DEPLOY}-prefill.*"}})[{dur}:10s])',
+        end_t)
+    pf_waiting = prom_query(
+        f'avg_over_time(sum(vllm:num_requests_waiting{{pod=~"{DEPLOY}-prefill.*"}})[{dur}:10s])',
+        end_t)
+    dec_running = prom_query(
+        f'avg_over_time(sum(vllm:num_requests_running{{pod=~"{DEPLOY}-decode.*"}})[{dur}:10s])',
+        end_t)
+    dec_waiting = prom_query(
+        f'avg_over_time(sum(vllm:num_requests_waiting{{pod=~"{DEPLOY}-decode.*"}})[{dur}:10s])',
+        end_t)
 
     client_input_tps = total_prompt / secs
-    return f'{tag},{start_t},{end_t},{total_requests},{ok},{errors},{rps},{client_input_tps},{output_tps},{pf_tps},{dec_tps},{cache_hit},{ttft_p50},{ttft_p90},{ttft_p99},{ttft_min},{itl_p50},{itl_p90},{itl_p99},{e2e_p50},{e2e_p90},{e2e_p99}'
+    return f'{tag},{start_t},{end_t},{total_requests},{ok},{errors},{rps},{client_input_tps},{output_tps},{pf_tps},{dec_tps},{cache_hit},{pf_running},{pf_waiting},{dec_running},{dec_waiting},{ttft_p50},{ttft_p90},{ttft_p99},{ttft_min},{itl_p50},{itl_p90},{itl_p99},{e2e_p50},{e2e_p90},{e2e_p99}'
 
 # Find all run directories
 dirs = []

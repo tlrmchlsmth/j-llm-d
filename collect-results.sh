@@ -135,8 +135,8 @@ with ThreadPoolExecutor(max_workers=len(dirs) or 1) as pool:
         d = futures[f]
         results[d] = f.result()  # raises on error
 
-# Print in sorted order
-for d in sorted(results):
+# Print sorted by start_time (column 2) so concurrency order is natural
+for d in sorted(results, key=lambda d: int(results[d].split(',')[1]) if results[d] else 0):
     if results[d]:
         print(results[d])
 PYEOF

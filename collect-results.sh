@@ -10,42 +10,73 @@ PROM="${PROMETHEUS_URL:-http://localhost:9090}"
 DEPLOY_NAME="${USER}-wide-ep"
 RESULTS_PATH="${1:-results/*}"
 
-echo "run,start_time,end_time,requests,ok,errors,rps,input_tps,output_tps,ttft_p50_ms,ttft_p90_ms,ttft_p99_ms,ttft_min_ms,itl_p50_ms,itl_p90_ms,itl_p99_ms,e2e_p50_ms,e2e_p90_ms,e2e_p99_ms,prom_prefill_tps,prom_decode_tps,prom_cache_hit_rate"
+echo "run,start_time,end_time,requests,ok,errors,rps,client_input_tps,client_output_tps,server_prefill_tps,server_decode_tps,cache_hit_rate,ttft_p50_ms,ttft_p90_ms,ttft_p99_ms,ttft_min_ms,itl_p50_ms,itl_p90_ms,itl_p99_ms,e2e_p50_ms,e2e_p90_ms,e2e_p99_ms"
 
 for d in $RESULTS_PATH/*/logs.txt; do
   [ -s "$d" ] || continue
   tag=$(basename "$(dirname "$d")")
 
   python3 -c "
-import json, sys, subprocess
+import json, sys
 
 text = open('$d').read()
-# Find the last JSON block (the summary object)
-idx = text.rfind('{')
-j = None
-while idx >= 0:
+# Find ALL JSON summary blocks (one per worker)
+decoder = json.JSONDecoder()
+workers = []
+idx = 0
+while True:
+    idx = text.find('{', idx)
+    if idx < 0:
+        break
     try:
-        j = json.loads(text[idx:])
+        j, end = decoder.raw_decode(text, idx)
         if 'total_requests' in j:
-            break
-        j = None
+            workers.append(j)
+        idx = end
     except:
-        pass
-    idx = text.rfind('{', 0, idx)
+        idx += 1
 
-if not j:
+if not workers:
     sys.exit(0)
 
-ttft = j.get('ttft_ms', {})
-itl = j.get('itl_ms', {})
-e2e = j.get('e2e_latency_ms', {})
-ts = j.get('timestamps', {})
-stages = ts.get('stages', [])
-start_t = int(stages[0]['start_time']) if stages else 0
-end_t = int(stages[-1]['end_time']) if stages else 0
+n = len(workers)
+
+# Sum totals and rates across workers
+total_requests = sum(w['total_requests'] for w in workers)
+ok = sum(w.get('successful_requests', 0) for w in workers)
+errors = sum(w.get('error_requests', 0) for w in workers)
+rps = sum(w.get('requests_per_second', 0) for w in workers)
+total_prompt = sum(w.get('total_prompt_tokens', 0) for w in workers)
+total_output = sum(w.get('total_output_tokens', 0) for w in workers)
+output_tps = sum(w.get('output_tokens_per_second', 0) for w in workers)
+
+# Average latency percentiles across workers (weighted by request count)
+def wavg(key, sub):
+    vals = [(w.get(key, {}).get(sub, 0), w['total_requests']) for w in workers]
+    total_w = sum(v[1] for v in vals)
+    return sum(v[0] * v[1] for v in vals) / total_w if total_w else 0
+
+ttft_p50 = wavg('ttft_ms', 'p50')
+ttft_p90 = wavg('ttft_ms', 'p90')
+ttft_p99 = wavg('ttft_ms', 'p99')
+ttft_min = min(w.get('ttft_ms', {}).get('min', 0) for w in workers)
+itl_p50 = wavg('itl_ms', 'p50')
+itl_p90 = wavg('itl_ms', 'p90')
+itl_p99 = wavg('itl_ms', 'p99')
+e2e_p50 = wavg('e2e_latency_ms', 'p50')
+e2e_p90 = wavg('e2e_latency_ms', 'p90')
+e2e_p99 = wavg('e2e_latency_ms', 'p99')
+
+# Timestamps: use earliest start, latest end across workers
+all_stages = []
+for w in workers:
+    all_stages.extend(w.get('timestamps', {}).get('stages', []))
+start_t = int(min(s['start_time'] for s in all_stages)) if all_stages else 0
+end_t = int(max(s['end_time'] for s in all_stages)) if all_stages else 0
 start = str(start_t)
 end = str(end_t)
-dur = f'{end_t - start_t}s'
+secs = (end_t - start_t) or 1
+dur = f'{secs}s'
 
 # Query prometheus using increase() over the full benchmark duration
 def prom_query(query):
@@ -69,8 +100,7 @@ pf_tps = prom_query(f'sum(increase(vllm:prompt_tokens_total{{pod=~\"{deploy}-pre
 dec_tps = prom_query(f'sum(increase(vllm:generation_tokens_total{{pod=~\"{deploy}-decode.*\"}}[{dur}])) / {end_t - start_t}')
 cache_hit = prom_query(f'sum(increase(vllm:prompt_tokens_cached_total{{pod=~\"{deploy}-prefill.*\"}}[{dur}])) / clamp_min(sum(increase(vllm:prompt_tokens_total{{pod=~\"{deploy}-prefill.*\"}}[{dur}])),1)')
 
-secs = (end_t - start_t) or 1
-input_tps = j.get('total_prompt_tokens', 0) / secs
-print(f'$tag,{start},{end},{j[\"total_requests\"]},{j.get(\"successful_requests\",0)},{j.get(\"error_requests\",0)},{j.get(\"requests_per_second\",0)},{input_tps},{j.get(\"output_tokens_per_second\",0)},{ttft.get(\"p50\",0)},{ttft.get(\"p90\",0)},{ttft.get(\"p99\",0)},{ttft.get(\"min\",0)},{itl.get(\"p50\",0)},{itl.get(\"p90\",0)},{itl.get(\"p99\",0)},{e2e.get(\"p50\",0)},{e2e.get(\"p90\",0)},{e2e.get(\"p99\",0)},{pf_tps},{dec_tps},{cache_hit}')
+client_input_tps = total_prompt / secs
+print(f'$tag,{start},{end},{total_requests},{ok},{errors},{rps},{client_input_tps},{output_tps},{pf_tps},{dec_tps},{cache_hit},{ttft_p50},{ttft_p90},{ttft_p99},{ttft_min},{itl_p50},{itl_p90},{itl_p99},{e2e_p50},{e2e_p90},{e2e_p99}')
 " 2>/dev/null
 done

@@ -154,9 +154,9 @@ just stop-monitoring
 
 ## Benchmarking
 
-**nyann-poker** (combined load + eval):
+**nyann-bench** (combined load + eval):
 
-Requires a local checkout of `nyann_poker`. Set `NYANN_POKER_DIR` in your `.env` file.
+Requires a local checkout of `nyann-bench`. Set `NYANN_BENCH_DIR` in your `.env` file.
 
 ```bash
 just benchmark-nyann    # Wait for stack readiness, then submit load + eval jobs

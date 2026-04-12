@@ -472,19 +472,19 @@ process-traces N='':
   echo "Processing traces/$N ..."
   python3 profiling/process_traces.py "traces/$N"
 
-NYANN_POKER_DIR := env("NYANN_POKER_DIR", "")
+NYANN_BENCH_DIR := env("NYANN_BENCH_DIR", "")
 
-# Wait for stack readiness, then launch nyann_poker load + eval jobs
+# Wait for stack readiness, then launch nyann-bench load + eval jobs
 benchmark-stairs:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -z "{{NYANN_POKER_DIR}}" ]; then
-      echo "Error: NYANN_POKER_DIR is not set. Add it to .env or export it." >&2
+    if [ -z "{{NYANN_BENCH_DIR}}" ]; then
+      echo "Error: NYANN_BENCH_DIR is not set. Add it to .env or export it." >&2
       exit 1
     fi
     LUSTRE="/mnt/lustre/{{NAME_PREFIX}}"
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
-    cd "{{NYANN_POKER_DIR}}"
+    cd "{{NYANN_BENCH_DIR}}"
     just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
       "{\"load\":{\"concurrency\":128},\"warmup\":{\"duration\":\"300s\",\"stagger\":true},\"sweep\":{\"min\":128,\"max\":1920,\"steps\":10,\"step_duration\":\"300s\"},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
       8 {{NAMESPACE}} arm64 lustre pr-28 &
@@ -492,18 +492,18 @@ benchmark-stairs:
       "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
       1 {{NAMESPACE}} arm64 lustre pr-28 &
     wait
-    echo "nyann_poker jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
+    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
 
 benchmark-constant:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -z "{{NYANN_POKER_DIR}}" ]; then
-      echo "Error: NYANN_POKER_DIR is not set. Add it to .env or export it." >&2
+    if [ -z "{{NYANN_BENCH_DIR}}" ]; then
+      echo "Error: NYANN_BENCH_DIR is not set. Add it to .env or export it." >&2
       exit 1
     fi
     LUSTRE="/mnt/lustre/{{NAME_PREFIX}}"
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
-    cd "{{NYANN_POKER_DIR}}"
+    cd "{{NYANN_BENCH_DIR}}"
     just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
       "{\"load\":{\"concurrency\":1900,\"duration\":\"3600s\"},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
       8 {{NAMESPACE}} arm64 lustre pr-28 &
@@ -511,27 +511,27 @@ benchmark-constant:
       "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
       1 {{NAMESPACE}} arm64 lustre pr-28 &
     wait
-    echo "nyann_poker jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
+    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
 
-# Stop nyann_poker benchmark jobs
+# Stop nyann-bench benchmark jobs
 stop-nyann:
   {{KN}} delete job -l app={{NAME_PREFIX}}-sharegpt-load --ignore-not-found=true &
   {{KN}} delete job -l app={{NAME_PREFIX}}-poker-eval --ignore-not-found=true &
   wait
 
-# Tail nyann_poker job logs
+# Tail nyann-bench job logs
 nyann-logs NAME:
-  {{KN}} logs -l app={{NAME}} -c nyann-poker --tail=50 -f --max-log-requests=20
+  {{KN}} logs -l app={{NAME}} -c nyann-bench --tail=50 -f --max-log-requests=20
 
 # Query Prometheus for per-stage benchmark metrics (requires port-forward: just prometheus)
 query-prometheus CLIENT_JOB=(NAME_PREFIX + "-sharegpt-load") DEPLOYMENT=DEPLOY_NAME EVAL_JOB=(NAME_PREFIX + "-poker-eval") *ARGS='':
   #!/usr/bin/env bash
   set -euo pipefail
-  if [ -z "{{NYANN_POKER_DIR}}" ]; then
-    echo "Error: NYANN_POKER_DIR is not set. Add it to .env or export it." >&2
+  if [ -z "{{NYANN_BENCH_DIR}}" ]; then
+    echo "Error: NYANN_BENCH_DIR is not set. Add it to .env or export it." >&2
     exit 1
   fi
-  cd "{{NYANN_POKER_DIR}}"
+  cd "{{NYANN_BENCH_DIR}}"
   just query-prometheus {{CLIENT_JOB}} {{DEPLOYMENT}} {{NAMESPACE}} '' {{EVAL_JOB}} {{ARGS}}
 
 # === Monitoring ===

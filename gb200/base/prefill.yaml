@@ -49,8 +49,7 @@ spec:
             resourceClaimTemplateName: llm-d-dev-claim
         containers:
           - name: vllm
-            image: ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091
-            #image: quay.io/tms/llm-d-cuda-dev:ef2c4f7
+            image: VLLM_IMAGE_PLACEHOLDER
             securityContext:
               capabilities:
                 add:
@@ -64,18 +63,24 @@ spec:
               - -c
             args:
               - |-
-                #################
-                # RUN vLLM prefill with external DP load balancing
-                # TP_SIZE controls tensor parallelism (GPUs per DP rank)
-                # DP_SIZE_LOCAL is derived: 4 GPUs / TP_SIZE
-                # No routing sidecar - serves directly on ports 8000+
-                #################
+                set -euo pipefail
                 # Persist logs to Lustre so they survive LWS pod recreation
                 LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/prefill
                 mkdir -p "$LOG_DIR"
                 LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
                 exec > >(tee -a "$LOG_FILE") 2>&1
                 echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+
+                FORK_REPO="FORK_REPO_PLACEHOLDER"
+                FORK_BRANCH="FORK_BRANCH_PLACEHOLDER"
+                if [ -n "$FORK_BRANCH" ]; then
+                  cd /opt/vllm-source
+                  git remote add fork "$FORK_REPO" 2>/dev/null || git remote set-url fork "$FORK_REPO"
+                  git fetch fork "$FORK_BRANCH"
+                  git checkout "fork/$FORK_BRANCH"
+                  echo "=== Checked out fork/$FORK_BRANCH at $(date) ==="
+                  cd -
+                fi
 
                 # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then

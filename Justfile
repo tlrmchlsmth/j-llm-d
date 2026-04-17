@@ -177,6 +177,10 @@ VLLM_DEV_REMOTE := "https://github.com/vllm-project/vllm.git"
 VLLM_DEV_BRANCH := "main"
 VLLM_BUILD_JOBS := "16"
 
+VLLM_IMAGE := env("VLLM_IMAGE", "ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091")
+FORK_REPO := env("FORK_REPO", "")
+FORK_BRANCH := env("FORK_BRANCH", "")
+
 start MODE='pd' ROUTING='load-aware' DEV='false':
   #!/usr/bin/env bash
   set -euo pipefail
@@ -197,6 +201,9 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
           -e "s/OWNER_PLACEHOLDER/{{NAME_PREFIX}}/g" \
           -e "s|VLLM_DEV_VENV_PLACEHOLDER|$DEV_VENV|g" \
           -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/{{NAME_PREFIX}}|g" \
+          -e "s|VLLM_IMAGE_PLACEHOLDER|{{VLLM_IMAGE}}|g" \
+          -e "s|FORK_REPO_PLACEHOLDER|{{FORK_REPO}}|g" \
+          -e "s|FORK_BRANCH_PLACEHOLDER|{{FORK_BRANCH}}|g" \
     | {{KN}} apply -f -
   rm -f {{GB200_DIR}}/kustomization.yaml
 

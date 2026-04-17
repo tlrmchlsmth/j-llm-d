@@ -25,13 +25,6 @@ spec:
       spec:
         serviceAccountName: wide-ep
         terminationGracePeriodSeconds: 0
-        affinity:
-          nodeAffinity:
-            requiredDuringSchedulingIgnoredDuringExecution:
-              nodeSelectorTerms:
-              - matchExpressions:
-                - key: node-role.kubernetes.io/hpc-rack-2
-                  operator: Exists
         volumes:
           - name: dshm
             emptyDir:

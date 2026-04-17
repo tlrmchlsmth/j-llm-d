@@ -130,12 +130,7 @@ spec:
               - -c
             args:
               - |-
-                #################
-                # RUN vLLM with external DP load balancing
-                # TP_SIZE controls tensor parallelism (GPUs per DP rank)
-                # DP_SIZE_LOCAL is derived: 4 GPUs / TP_SIZE
-                # Routing sidecar maps port 800X -> localhost:820X
-                #################
+                set -euo pipefail
                 # Persist logs to Lustre so they survive LWS pod recreation
                 LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/decode
                 mkdir -p "$LOG_DIR"
@@ -148,8 +143,8 @@ spec:
                 if [ -n "$FORK_BRANCH" ]; then
                   cd /opt/vllm-source
                   git remote add fork "$FORK_REPO" 2>/dev/null || git remote set-url fork "$FORK_REPO"
-                  git fetch fork "$FORK_BRANCH" || { echo "FATAL: git fetch fork $FORK_BRANCH failed"; exit 1; }
-                  git checkout "fork/$FORK_BRANCH" || { echo "FATAL: git checkout fork/$FORK_BRANCH failed"; exit 1; }
+                  git fetch fork "$FORK_BRANCH"
+                  git checkout "fork/$FORK_BRANCH"
                   echo "=== Checked out fork/$FORK_BRANCH at $(date) ==="
                   cd -
                 fi

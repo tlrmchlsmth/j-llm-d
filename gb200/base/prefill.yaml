@@ -81,8 +81,8 @@ spec:
                 if [ -n "$FORK_BRANCH" ]; then
                   cd /opt/vllm-source
                   git remote add fork "$FORK_REPO" 2>/dev/null || git remote set-url fork "$FORK_REPO"
-                  git fetch fork "$FORK_BRANCH"
-                  git checkout "fork/$FORK_BRANCH"
+                  git fetch fork "$FORK_BRANCH" || { echo "FATAL: git fetch fork $FORK_BRANCH failed"; exit 1; }
+                  git checkout "fork/$FORK_BRANCH" || { echo "FATAL: git checkout fork/$FORK_BRANCH failed"; exit 1; }
                   echo "=== Checked out fork/$FORK_BRANCH at $(date) ==="
                   cd -
                 fi

@@ -203,9 +203,10 @@ spec:
                     --max-num-seqs $MAX_TOKENS \
                     --disable_cascade_attn \
                     --max-cudagraph-capture-size $MAX_TOKENS \
-                    --all2all-backend "flashinfer_nvlink_one_sided" \
+                    --all2all-backend "deepep_low_latency" \
                     --async-scheduling \
                     --api-server-count 4 \
+                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
                     --enable-eplb \
                     --eplb-config '{"window_size":"100",
                                     "step_interval":"3000",
@@ -215,6 +216,8 @@ spec:
                     --kv-cache-dtype fp8 \
                     --enable-force-include-usage &
                 done
+                
+                #                     --all2all-backend "flashinfer_nvlink_one_sided" \
 
                     #--all2all-backend "deepep_low_latency" \
                     ########
@@ -239,6 +242,8 @@ spec:
 
             env:
               - name: VLLM_USE_V2_MODEL_RUNNER
+                value: "0"
+              - name: VLLM_COMPUTE_NANS_IN_LOGITS
                 value: "1"
 
               - name: VLLM_NO_USAGE_STATS
@@ -250,11 +255,14 @@ spec:
               - name: VLLM_DEV_VENV
                 value: VLLM_DEV_VENV_PLACEHOLDER
 
-              # DeepEP low-latency only: NVFP4 dispatch + masked_gemm
-              #- name: VLLM_DEEPEPLL_NVFP4_DISPATCH
-              #  value: "1"
-              #- name: VLLM_FLASHINFER_MOE_BACKEND
-              #  value: "masked_gemm"
+              - name: VLLM_DEEPEPLL_NVFP4_DISPATCH
+                value: "1"
+              - name: VLLM_FLASHINFER_MOE_BACKEND
+                value: "masked_gemm"
+              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
+                value: "1"
+              - name: VLLM_ENABLE_MOE_DP_CHUNK
+                value: "0"
 
               - name: MAX_TOKENS
                 value: "1024"
@@ -281,9 +289,6 @@ spec:
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
-                value: "1"
-
-              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"
 
               # Common vLLM settings

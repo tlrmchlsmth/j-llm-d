@@ -16,8 +16,11 @@ extraScrapeConfigs: |
       - role: pod
         namespaces:
           names:
-            - vllm
+            - ${NAMESPACE}
     relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_owner]
+        regex: ${DEPLOY_USER}
+        action: keep
       - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
         regex: decode
         action: keep
@@ -45,8 +48,11 @@ extraScrapeConfigs: |
       - role: pod
         namespaces:
           names:
-            - vllm
+            - ${NAMESPACE}
     relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_owner]
+        regex: ${DEPLOY_USER}
+        action: keep
       - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
         regex: prefill
         action: keep
@@ -74,8 +80,11 @@ extraScrapeConfigs: |
       - role: pod
         namespaces:
           names:
-            - vllm
+            - ${NAMESPACE}
     relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_name]
+        regex: ${DEPLOY_USER}-.*
+        action: keep
       - source_labels: [__meta_kubernetes_pod_container_name]
         regex: nyann-bench
         action: keep
@@ -96,10 +105,10 @@ extraScrapeConfigs: |
       - role: pod
         namespaces:
           names:
-            - vllm
+            - ${NAMESPACE}
     relabel_configs:
       - source_labels: [__meta_kubernetes_pod_label_inferencepool]
-        regex: .+
+        regex: ${DEPLOY_USER}-.*
         action: keep
       - source_labels: [__meta_kubernetes_pod_ip]
         target_label: __address__

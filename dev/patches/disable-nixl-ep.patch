@@ -1,0 +1,18 @@
+diff --git a/vllm/model_executor/layers/fused_moe/all2all_utils.py b/vllm/model_executor/layers/fused_moe/all2all_utils.py
+index 62b2602928..76c883b344 100644
+--- a/vllm/model_executor/layers/fused_moe/all2all_utils.py
++++ b/vllm/model_executor/layers/fused_moe/all2all_utils.py
+@@ -43,10 +43,11 @@ if current_platform.is_cuda_alike():
+     if has_mori():
+         from .mori_prepare_finalize import MoriPrepareAndFinalize
+     if has_nixl_ep():
+-        from .nixl_ep_prepare_finalize import (
+-            NIXL_EP_QUANT_BLOCK_SHAPE,
+-            NixlEPPrepareAndFinalize,
+-        )
++        pass
++        #from .nixl_ep_prepare_finalize import (
++        #    NIXL_EP_QUANT_BLOCK_SHAPE,
++        #    NixlEPPrepareAndFinalize,
++        #)
+ 

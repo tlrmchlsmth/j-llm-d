@@ -35,6 +35,28 @@ benchmark MC NUM_REQUESTS INPUT_LEN OUTPUT_LEN:
         --num-prompts {{NUM_REQUESTS}} \
         --ignore-eos
 
+LUSTRE_PREFIX := env("LUSTRE_PREFIX", "/mnt/lustre")
+SHAREGPT_PATH := env("SHAREGPT_PATH", LUSTRE_PREFIX + "/corpus/ShareGPT_V3_unfiltered_cleaned_split.json")
+
+# Download ShareGPT dataset to Lustre (only needed once)
+download-sharegpt:
+    mkdir -p {{LUSTRE_PREFIX}}/corpus
+    wget -O {{SHAREGPT_PATH}} \
+        https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
+    echo "Downloaded to {{SHAREGPT_PATH}}"
+
+benchmark-sharegpt MC NUM_REQUESTS:
+    vllm bench serve \
+        --base-url {{BASE_URL}} \
+        --model $(just _model) \
+        --dataset-name sharegpt \
+        --dataset-path {{SHAREGPT_PATH}} \
+        --max-concurrency {{MC}} \
+        --request-rate 4096 \
+        --seed $(date +%M%H%M%S) \
+        --num-prompts {{NUM_REQUESTS}} \
+        --ignore-eos
+
 # Run N waves of X concurrent requests (wraps `benchmark`)
 # Usage: just run-benchmark N X INPUT_LEN OUTPUT_LEN
 # Optional: set OUTFILE=/path/to/log to control the log destination.

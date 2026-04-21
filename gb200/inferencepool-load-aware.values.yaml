@@ -54,7 +54,7 @@ inferencePool:
   modelServers:
     matchLabels:
       llm-d.ai/inferenceServing: "true"
-      llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+      llm-d.ai/model: ${MODEL_LABEL}
       llm-d.ai/deployment: decode-bench
       llm-d.ai/owner: ${OWNER}
 

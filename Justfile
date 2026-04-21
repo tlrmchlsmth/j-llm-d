@@ -7,10 +7,13 @@ GH_TOKEN := "$GH_TOKEN"
 
 KN := "kubectl -n " + NAMESPACE
 
-NAME_PREFIX := env("USER", "dev")
+NAME_PREFIX := env("DEPLOY_USER", env("USER", "dev"))
 DEPLOY_NAME := NAME_PREFIX + "-wide-ep"
 POKER_NAME := NAME_PREFIX + "-poker"
 DEV_POD_NAME := NAME_PREFIX + "-vllm-dev"
+
+MODEL := env("MODEL", "nvidia/DeepSeek-R1-0528-NVFP4-v2")
+MODEL_LABEL := file_name(MODEL)
 
 GB200_DIR := "gb200"
 DEV_DIR := "dev"
@@ -56,11 +59,15 @@ check-ib:
   ./scripts/check-ib.sh
 
 create-secrets:
-  kubectl create secret generic hf-secret --from-literal=HF_TOKEN={{HF_TOKEN}} -n {{NAMESPACE}} \
-  && kubectl create secret generic gh-token-secret --from-literal=GH_TOKEN={{GH_TOKEN}} -n {{NAMESPACE}}
+  kubectl create secret generic hf-secret --from-literal=HF_TOKEN={{HF_TOKEN}} -n {{NAMESPACE}}
+
+  # && kubectl create secret generic gh-token-secret --from-literal=GH_TOKEN={{GH_TOKEN}} -n {{NAMESPACE}}
+
+view-allocations:
+  kubectl view-allocations -r gpu -n {{NAMESPACE}} -o table
 
 start-poker:
-    POKER_NAME={{POKER_NAME}} envsubst '${POKER_NAME}' < poker/poker.yaml | {{KN}} apply -f -
+    POKER_NAME={{POKER_NAME}} DEPLOY_USER={{NAME_PREFIX}} envsubst '${POKER_NAME} ${DEPLOY_USER}' < poker/poker.yaml | {{KN}} apply -f -
 
 # Fetch decode pod names and IPs and cache them
 get-decode-pods:
@@ -133,7 +140,8 @@ deploy_inferencepool ROUTING='load-aware':
   mkdir -p ./.tmp
   export DEPLOY_NAME="{{DEPLOY_NAME}}"
   export OWNER="{{NAME_PREFIX}}"
-  envsubst '${DEPLOY_NAME} ${OWNER}' < {{GB200_DIR}}/inferencepool-{{ROUTING}}.values.yaml > .tmp/inferencepool-values.yaml
+  export MODEL_LABEL="{{MODEL_LABEL}}"
+  envsubst '${DEPLOY_NAME} ${OWNER} ${MODEL_LABEL}' < {{GB200_DIR}}/inferencepool-{{ROUTING}}.values.yaml > .tmp/inferencepool-values.yaml
   helm upgrade --install {{DEPLOY_NAME}}-infpool \
     oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
     --version v1.3.0 \
@@ -195,6 +203,8 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
   kubectl kustomize {{GB200_DIR}} \
     | sed -e "s/DEPLOY_TS_PLACEHOLDER/$DEPLOY_TS/g" \
           -e "s/OWNER_PLACEHOLDER/{{NAME_PREFIX}}/g" \
+          -e "s|MODEL_PLACEHOLDER|{{MODEL}}|g" \
+          -e "s|MODEL_LABEL_PLACEHOLDER|{{MODEL_LABEL}}|g" \
           -e "s|VLLM_DEV_VENV_PLACEHOLDER|$DEV_VENV|g" \
           -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/{{NAME_PREFIX}}|g" \
     | {{KN}} apply -f -
@@ -236,6 +246,28 @@ stop NOW='false':
   {{KN}} delete configmap inference-perf-config --ignore-not-found=true &
   wait
   {{KN}} delete sa {{DEPLOY_NAME}} --ignore-not-found=true
+
+# Restart LWS pods with latest config, without touching gateway/EPP/infpool
+restart-lws MODE='pd' DEV='false' WHICH='all':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  # Re-render and apply LWS specs to pick up any config changes
+  DEV_VENV=""
+  if [ "{{DEV}}" = "true" ]; then DEV_VENV="{{VLLM_DEV_VENV}}"; fi
+  DEPLOY_TS=$(date +%Y%m%d-%H%M%S)
+  printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: {{NAME_PREFIX}}-\nresources:\n  - overlays/{{MODE}}\n' \
+    > {{GB200_DIR}}/kustomization.yaml
+  RENDERED=$(kubectl kustomize {{GB200_DIR}} \
+    | sed -e "s/DEPLOY_TS_PLACEHOLDER/$DEPLOY_TS/g" \
+          -e "s/OWNER_PLACEHOLDER/{{NAME_PREFIX}}/g" \
+          -e "s|MODEL_PLACEHOLDER|{{MODEL}}|g" \
+          -e "s|MODEL_LABEL_PLACEHOLDER|{{MODEL_LABEL}}|g" \
+          -e "s|VLLM_DEV_VENV_PLACEHOLDER|$DEV_VENV|g" \
+          -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/{{NAME_PREFIX}}|g")
+  rm -f {{GB200_DIR}}/kustomization.yaml
+
+  echo "$RENDERED" | {{KN}} apply -f -
+  echo "LWS reapplied ({{WHICH}}, dev={{DEV}}). Rolling update in progress."
 
 restart MODE='pd' ROUTING='load-aware' DEV='false':
   #!/usr/bin/env bash
@@ -318,7 +350,7 @@ update-dev-env:
 
 # Deploy the persistent dev pod (CPU-only, for editing/compiling vLLM on Lustre)
 dev-start:
-  envsubst < {{DEV_DIR}}/dev-pod.yaml | {{KN}} apply -f -
+  DEPLOY_USER="{{NAME_PREFIX}}" envsubst '${DEPLOY_USER}' < {{DEV_DIR}}/dev-pod.yaml | {{KN}} apply -f -
   {{KN}} wait --for=condition=Ready pod/{{DEV_POD_NAME}} --timeout=300s
 
 # Exec into the dev pod
@@ -329,10 +361,19 @@ dev:
 dev-build REMOTE=VLLM_DEV_REMOTE BRANCH=VLLM_DEV_BRANCH JOBS=VLLM_BUILD_JOBS:
   #!/usr/bin/env bash
   set -euo pipefail
+  # Copy patches to Lustre so the dev pod can apply them
+  {{KN}} exec {{DEV_POD_NAME}} -- mkdir -p /mnt/lustre/{{NAME_PREFIX}}/patches
+  for p in {{DEV_DIR}}/patches/*.patch; do
+    [ -f "$p" ] && {{KN}} cp "$p" {{DEV_POD_NAME}}:/mnt/lustre/{{NAME_PREFIX}}/patches/
+  done
   {{KN}} exec -i {{DEV_POD_NAME}} -- bash <<'EOF'
   set -euo pipefail
 
-  # ensure venv python points to /usr/bin/python3.12 (works in both dev and runtime images)
+  # Create venv if it doesn't exist, then ensure python points to 3.12
+  if [ ! -d "{{VLLM_DEV_VENV}}" ]; then
+    echo "Creating venv at {{VLLM_DEV_VENV}}"
+    python3.12 -m venv --system-site-packages {{VLLM_DEV_VENV}}
+  fi
   VENV_PYTHON="{{VLLM_DEV_VENV}}/bin/python"
   if [ "$(readlink "$VENV_PYTHON")" != "/usr/bin/python3.12" ]; then
     echo "Repointing venv python: $(readlink "$VENV_PYTHON") -> /usr/bin/python3.12"
@@ -340,7 +381,18 @@ dev-build REMOTE=VLLM_DEV_REMOTE BRANCH=VLLM_DEV_BRANCH JOBS=VLLM_BUILD_JOBS:
   fi
 
   source {{VLLM_DEV_VENV}}/bin/activate
+
+  if [ ! -d "{{VLLM_DEV_SRC}}/.git" ]; then
+    echo "Cloning {{REMOTE}} into {{VLLM_DEV_SRC}}"
+    git clone --branch {{BRANCH}} {{REMOTE}} {{VLLM_DEV_SRC}}
+  fi
+
   cd {{VLLM_DEV_SRC}}
+
+  # Install build deps (--no-build-isolation means they must be in the venv)
+  uv pip install "setuptools>=77.0.3,<81.0.0" "setuptools-scm>=8.0" \
+    "cmake>=3.26.1" ninja "packaging>=24.2" wheel jinja2 "grpcio-tools>=1.76.0" \
+    pybind11 nixl==0.10.0
 
   # fetch and reset to requested branch
   git remote set-url origin {{REMOTE}}
@@ -348,27 +400,68 @@ dev-build REMOTE=VLLM_DEV_REMOTE BRANCH=VLLM_DEV_BRANCH JOBS=VLLM_BUILD_JOBS:
   git checkout {{BRANCH}}
   git reset --hard origin/{{BRANCH}}
 
-  # build in background
-  MAX_JOBS={{JOBS}} nohup uv pip install --no-deps --no-build-isolation -e . \
+  # Pin torch ecosystem to the decode container's versions so uv doesn't pull
+  # newer, ABI-incompatible releases. The decode image ships torch 2.10 / cu130;
+  # torchvision 0.25 is the matching release (0.26 targets torch 2.11).
+  TORCH_VER=$(python -c "import torch; print(torch.__version__.split('+')[0])")
+  echo "torch==$TORCH_VER" > /tmp/uv-overrides.txt
+  echo "torchvision==0.25.0" >> /tmp/uv-overrides.txt
+  uv pip install "torchvision==0.25.0" --no-deps --index-url https://download.pytorch.org/whl/cu130
+
+  MAX_JOBS={{JOBS}} nohup uv pip install --no-build-isolation \
+    --override /tmp/uv-overrides.txt -e . -vvv \
     > /mnt/lustre/{{NAME_PREFIX}}/build.log 2>&1 &
+
+  # Apply patches from dev/patches/ to the source tree (editable install)
+  for p in /mnt/lustre/{{NAME_PREFIX}}/patches/*.patch; do
+    [ -f "$p" ] && git apply --check "$p" 2>/dev/null && git apply "$p" && echo "Applied $(basename $p)" || echo "Skipped $(basename $p)"
+  done
 
   echo "Build started ({{REMOTE}} {{BRANCH}}, jobs={{JOBS}}), follow with: just dev-build-log"
   EOF
 
 # Tail the dev build log
 dev-build-log:
-  {{KN}} exec {{DEV_POD_NAME}} -- tail -f /mnt/lustre/{{NAME_PREFIX}}/build.log
+  {{KN}} exec {{DEV_POD_NAME}} -- tail -n 30 -f /mnt/lustre/{{NAME_PREFIX}}/build.log
+
+# Ephemeral pod with the decode image + Lustre for quick checks
+DECODE_IMAGE := "ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091"
+dev-shell:
+  {{KN}} run {{NAME_PREFIX}}-dev-shell --rm -it \
+    --image={{DECODE_IMAGE}} --restart=Never \
+    --override-type=merge --overrides '{ \
+      "spec": { \
+        "volumes": [{"name":"lustre","persistentVolumeClaim":{"claimName":"lustre-pvc-vllm"}}], \
+        "containers": [{"name":"{{NAME_PREFIX}}-dev-shell","image":"{{DECODE_IMAGE}}","command":["bash"],"stdin":true,"tty":true,"securityContext":{"runAsUser":0},"volumeMounts":[{"name":"lustre","mountPath":"/mnt/lustre"}]}] \
+      }}'
+
+# Single-GPU pod with decode image + Lustre + dev venv for testing vllm launch
+dev-gpu-shell:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  POD="{{NAME_PREFIX}}-dev-gpu"
+  {{KN}} delete pod "$POD" --ignore-not-found=true 2>/dev/null
+  DEPLOY_USER="{{NAME_PREFIX}}" DECODE_IMAGE="{{DECODE_IMAGE}}" VLLM_DEV_VENV="{{VLLM_DEV_VENV}}" \
+    envsubst '${DEPLOY_USER} ${DECODE_IMAGE} ${VLLM_DEV_VENV}' \
+    < {{DEV_DIR}}/dev-gpu-pod.yaml | {{KN}} apply -f -
+  echo "Waiting for pod $POD to be ready..."
+  {{KN}} wait --for=condition=Ready pod/"$POD" --timeout=120s
+  {{KN}} exec -it "$POD" -- bash
+
+# Stop the GPU test pod
+dev-gpu-stop:
+  {{KN}} delete pod {{NAME_PREFIX}}-dev-gpu --ignore-not-found=true
 
 # Delete the dev pod
 dev-stop:
-  envsubst < {{DEV_DIR}}/dev-pod.yaml | {{KN}} delete -f - --ignore-not-found=true
+  DEPLOY_USER="{{NAME_PREFIX}}" envsubst '${DEPLOY_USER}' < {{DEV_DIR}}/dev-pod.yaml | {{KN}} delete -f - --ignore-not-found=true
 
 # Download model weights to local NVMe on all GPU nodes (apply, wait, cleanup)
 cache-model:
   #!/usr/bin/env bash
   set -euo pipefail
   {{KN}} delete daemonset model-cache --ignore-not-found=true
-  {{KN}} apply -f {{GB200_DIR}}/model-cache-ds.yaml
+  sed "s|MODEL_PLACEHOLDER|{{MODEL}}|g" {{GB200_DIR}}/model-cache-ds.yaml | {{KN}} apply -f -
   echo "Waiting for all nodes to finish downloading..."
   {{KN}} rollout status daemonset/model-cache --timeout=30m
   echo "All nodes cached. Cleaning up DaemonSet..."
@@ -538,11 +631,34 @@ query-prometheus CLIENT_JOB=(NAME_PREFIX + "-sharegpt-load") DEPLOYMENT=DEPLOY_N
 
 # Install Prometheus and Grafana (namespace-scoped, no cluster permissions needed)
 start-monitoring:
-  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update && helm repo add grafana https://grafana.github.io/helm-charts --force-update && helm repo update && kubectl apply -f {{MONITORING_DIR}}/prometheus-rbac.yaml && kubectl apply -f {{MONITORING_DIR}}/grafana-rbac.yaml && helm upgrade --install prometheus prometheus-community/prometheus -n {{NAMESPACE}} -f {{MONITORING_DIR}}/prometheus-values.yaml --set rbac.create=false --set serviceAccounts.server.create=false && helm upgrade --install grafana grafana/grafana -n {{NAMESPACE}} -f {{MONITORING_DIR}}/grafana-values.yaml --set rbac.create=false
+  #!/usr/bin/env bash
+  set -euo pipefail
+  mkdir -p .tmp
+  export NAMESPACE="{{NAMESPACE}}"
+  export DEPLOY_USER="{{NAME_PREFIX}}"
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+  helm repo add grafana https://grafana.github.io/helm-charts --force-update
+  helm repo update
+  envsubst '${NAMESPACE}' < {{MONITORING_DIR}}/prometheus-rbac.yaml | kubectl apply -f -
+  envsubst '${NAMESPACE}' < {{MONITORING_DIR}}/grafana-rbac.yaml | kubectl apply -f -
+  envsubst '${NAMESPACE} ${DEPLOY_USER}' < {{MONITORING_DIR}}/prometheus-values.yaml > .tmp/prometheus-values.yaml
+  envsubst '${NAMESPACE}' < {{MONITORING_DIR}}/grafana-values.yaml > .tmp/grafana-values.yaml
+  helm upgrade --install prometheus prometheus-community/prometheus \
+    -n {{NAMESPACE}} -f .tmp/prometheus-values.yaml \
+    --set rbac.create=false --set serviceAccounts.server.create=false
+  helm upgrade --install grafana grafana/grafana \
+    -n {{NAMESPACE}} -f .tmp/grafana-values.yaml \
+    --set rbac.create=false
 
 # Uninstall monitoring stack
 stop-monitoring:
-  helm uninstall prometheus -n {{NAMESPACE}} --ignore-not-found && helm uninstall grafana -n {{NAMESPACE}} --ignore-not-found && kubectl delete -f {{MONITORING_DIR}}/prometheus-rbac.yaml --ignore-not-found && kubectl delete -f {{MONITORING_DIR}}/grafana-rbac.yaml --ignore-not-found
+  #!/usr/bin/env bash
+  set -euo pipefail
+  export NAMESPACE="{{NAMESPACE}}"
+  helm uninstall prometheus -n {{NAMESPACE}} --ignore-not-found
+  helm uninstall grafana -n {{NAMESPACE}} --ignore-not-found
+  envsubst '${NAMESPACE}' < {{MONITORING_DIR}}/prometheus-rbac.yaml | kubectl delete -f - --ignore-not-found
+  envsubst '${NAMESPACE}' < {{MONITORING_DIR}}/grafana-rbac.yaml | kubectl delete -f - --ignore-not-found
 
 # Port-forward Grafana to localhost:3000 (background)
 grafana:
@@ -569,7 +685,7 @@ load-dashboards:
 # === KV Cache Sweep ===
 
 KV_SWEEP_IMAGE := "quay.io/tms/llm-d-cuda-dev:ef2c4f7"
-KV_SWEEP_MODEL := "nvidia/DeepSeek-R1-0528-NVFP4-v2"
+KV_SWEEP_MODEL := MODEL
 KV_SWEEP_PRIORITY := "low-priority"
 KV_SWEEP_GPU_MEM_UTIL := "0.75"
 KV_SWEEP_MAX_TOKENS := "1024"

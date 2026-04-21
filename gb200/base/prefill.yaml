@@ -4,7 +4,7 @@ metadata:
   name: wide-ep-prefill
   labels:
     llm-d.ai/inferenceServing: "true"
-    llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+    llm-d.ai/model: MODEL_LABEL_PLACEHOLDER
     llm-d.ai/role: prefill
 spec:
   replicas: 2
@@ -19,7 +19,7 @@ spec:
         labels:
           llm-d.ai/deploy-ts: DEPLOY_TS_PLACEHOLDER
           llm-d.ai/inferenceServing: "true"
-          llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+          llm-d.ai/model: MODEL_LABEL_PLACEHOLDER
           llm-d.ai/owner: OWNER_PLACEHOLDER
           llm-d.ai/role: prefill
       spec:
@@ -112,7 +112,7 @@ spec:
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
                   CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
-                    nvidia/DeepSeek-R1-0528-NVFP4-v2 \
+                    MODEL_PLACEHOLDER \
                     --disable-uvicorn-access-log \
                     --port $((8000 + R)) \
                     --tensor-parallel-size $TP_SIZE \
@@ -121,6 +121,7 @@ spec:
                     --trust-remote-code \
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
                     --gpu-memory-utilization 0.85 \
+                    --moe-backend ${MOE_BACKEND} \
                     --all2all-backend "flashinfer_nvlink_one_sided" \
                     --disable_cascade_attn \
                     --api-server-count 4 \

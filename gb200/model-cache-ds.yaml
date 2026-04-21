@@ -21,7 +21,7 @@ spec:
             runAsGroup: 0
           command: ["/bin/sh", "-c"]
           args:
-            - huggingface-cli download nvidia/DeepSeek-R1-0528-NVFP4-v2
+            - huggingface-cli download MODEL_PLACEHOLDER
           env:
             - name: HF_HOME
               value: /mnt/local/hf_cache

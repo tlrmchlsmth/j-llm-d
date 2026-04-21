@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Preferences
 
 - Use `podman` instead of `docker` for container builds
-- Prefer `just` commands when available — never run `kubectl apply` directly if a Justfile recipe exists for it (e.g. `just start`, `just restart`). Direct applies bypass `$USER` namespacing and other setup.
+- Prefer `just` commands when available — never run `kubectl apply` directly if a Justfile recipe exists for it (e.g. `just start`, `just restart`). Direct applies bypass `$DEPLOY_USER` namespacing and other setup.
 
 ## Repository Overview
 
@@ -44,7 +44,7 @@ Key components:
 - **Model**: `nvidia/DeepSeek-R1-NVFP4` (FP4 quantized)
 - **Topology**: Prefill LWS + Decode LWS (4 vLLM processes per pod)
 - **Namespace**: `vllm` (configurable)
-- **Naming**: All resources prefixed with `$USER-wide-ep` (e.g., `$USER-wide-ep-decode`)
+- **Naming**: All resources prefixed with `$DEPLOY_USER-wide-ep` (e.g., `$DEPLOY_USER-wide-ep-decode`)
 - **Storage**: Lustre PVC (`lustre-pvc-vllm`) for shared vLLM builds and caches
 
 ## Decode vs Prefill Architecture
@@ -66,6 +66,7 @@ The Justfile requires a `.env` file with:
 - `HF_TOKEN` - HuggingFace token for model access
 - `GH_TOKEN` - GitHub token
 - `KUBECONFIG` - Path to kubeconfig
+- `DEPLOY_USER` - (optional) Override username for resource naming (defaults to `$USER`)
 
 ### Deployment Commands
 

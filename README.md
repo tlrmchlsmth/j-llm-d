@@ -11,13 +11,14 @@ Development workspace for [llm-d](https://github.com/llm-d/llm-d) — deploying 
    HF_TOKEN=hf_...
    GH_TOKEN=ghp_...
    KUBECONFIG=/path/to/kubeconfig
+   DEPLOY_USER=myname        # optional, defaults to $USER
    ```
 4. Create namespace secrets:
    ```bash
    just create-secrets
    ```
 
-Resources are automatically prefixed with `$USER` (e.g. `$USER-wide-ep-decode`), so multiple users can share the `vllm` namespace without collisions.
+Resources are automatically prefixed with `$DEPLOY_USER` (falls back to `$USER` if unset), e.g. `myname-wide-ep-decode`, so multiple users can share the namespace without collisions. Set `DEPLOY_USER` in `.env` to override.
 
 ## Starting a Server
 
@@ -88,7 +89,7 @@ just dev-build REMOTE=https://github.com/user/vllm.git BRANCH=my-branch
 just dev-build-log
 ```
 
-The build runs in the background on the dev pod and survives disconnects. It installs vLLM in editable mode into a shared venv at `/mnt/lustre/$USER/vllm-venv`.
+The build runs in the background on the dev pod and survives disconnects. It installs vLLM in editable mode into a shared venv at `/mnt/lustre/$DEPLOY_USER/vllm-venv`.
 
 ### 3. Deploy with your dev build
 

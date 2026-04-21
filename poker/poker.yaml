@@ -4,6 +4,7 @@ metadata:
   name: ${POKER_NAME}
   labels:
     app: poker
+    llm-d.ai/owner: ${DEPLOY_USER}
 
 spec:
   restartPolicy: Never
@@ -15,6 +16,11 @@ spec:
           - key: kubernetes.io/arch
             operator: In
             values: ["arm64", "amd64"]
+
+  volumes:
+    - name: lustre
+      persistentVolumeClaim:
+        claimName: lustre-pvc-vllm
 
   containers:
     - name: poker
@@ -28,7 +34,13 @@ spec:
           cpu: "16"
           memory: "64Gi"
 
+      volumeMounts:
+        - mountPath: /mnt/lustre
+          name: lustre
+
       env:
+        - name: LUSTRE_PREFIX
+          value: /mnt/lustre/${DEPLOY_USER}
         - name: HF_TOKEN
           valueFrom:
             secretKeyRef:

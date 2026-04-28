@@ -26,11 +26,11 @@ spec:
       command: ["sleep", "infinity"]
       resources:
         requests:
-          cpu: "32"
-          memory: 512Gi
+          cpu: "4"
+          memory: 16Gi
         limits:
-          cpu: "32"
-          memory: 512Gi
+          cpu: "4"
+          memory: 16Gi
       env:
         - name: HF_TOKEN
           valueFrom:

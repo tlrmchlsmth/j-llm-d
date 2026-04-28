@@ -14,7 +14,8 @@ patches:
       metadata:
         name: wide-ep-prefill
 
-  # Patch decode for aggregated mode
+  # Patch decode for aggregated mode: add agg label, remove routing sidecars,
+  # update readiness probe to check vLLM ports directly (no sidecars)
   - target:
       kind: LeaderWorkerSet
       name: wide-ep-decode
@@ -25,3 +26,20 @@ patches:
       - op: add
         path: /spec/leaderWorkerTemplate/workerTemplate/metadata/labels/llm-d.ai~1deployment
         value: agg
+      - op: remove
+        path: /spec/leaderWorkerTemplate/workerTemplate/spec/initContainers/0
+      - op: remove
+        path: /spec/leaderWorkerTemplate/workerTemplate/spec/initContainers/0
+      - op: remove
+        path: /spec/leaderWorkerTemplate/workerTemplate/spec/initContainers/0
+      - op: remove
+        path: /spec/leaderWorkerTemplate/workerTemplate/spec/initContainers/0
+      - op: replace
+        path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/readinessProbe/exec/command
+        value:
+          - /bin/bash
+          - -c
+          - |
+            for port in 8200 8201 8202 8203; do
+              curl -sf http://localhost:$port/v1/models | grep -q '"id"' || exit 1
+            done

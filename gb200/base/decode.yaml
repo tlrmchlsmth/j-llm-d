@@ -13,7 +13,7 @@ spec:
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 4
+    size: DECODE_LWS_SIZE_PLACEHOLDER
     workerTemplate:
       metadata:
         labels:
@@ -25,6 +25,16 @@ spec:
       spec:
         serviceAccountName: wide-ep
         terminationGracePeriodSeconds: 0
+        # affinity:
+        #   nodeAffinity:
+        #     requiredDuringSchedulingIgnoredDuringExecution:
+        #       nodeSelectorTerms:
+        #       - matchExpressions:
+        #         - key: kubernetes.io/hostname
+        #           operator: NotIn
+        #           values:
+        #           - "10.0.130.202"
+        #           - "10.0.133.53"
         volumes:
           - name: dshm
             emptyDir:
@@ -123,7 +133,7 @@ spec:
               - -c
             args:
               - |-
-                set -euo pipefail
+                set -euxo pipefail
                 # Persist logs to Lustre so they survive LWS pod recreation
                 LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/decode
                 mkdir -p "$LOG_DIR"
@@ -179,6 +189,28 @@ spec:
                   fi
                 fi
 
+                # EPLB config: build flags from env vars
+                EPLB_ARGS=""
+                if [ "${EPLB_ENABLED:-true}" = "true" ]; then
+                  EPLB_LOG_INTERVAL=${EPLB_LOG_BALANCEDNESS_INTERVAL:-$(( ${EPLB_STEP_INTERVAL:-3000} / 3 ))}
+                  EPLB_ASYNC_BOOL=$( [ "${EPLB_USE_ASYNC:-false}" = "true" ] && echo true || echo false )
+                  EPLB_LOG_BOOL=$( [ "${EPLB_LOG_BALANCEDNESS:-false}" = "true" ] && echo true || echo false )
+                  EPLB_DUMP_DIR="${EPLB_EXPERT_LOAD_DUMP_DIR:-}"
+                  DUMP_DIR_JSON=""
+                  if [ -n "$EPLB_DUMP_DIR" ]; then
+                    EPLB_DUMP_DIR="${EPLB_DUMP_DIR}/decode"
+                    mkdir -p "$EPLB_DUMP_DIR"
+                    DUMP_DIR_JSON=",\"expert_load_dump_dir\":\"${EPLB_DUMP_DIR}\""
+                  fi
+                  EPLB_JSON="{\"window_size\":${EPLB_WINDOW_SIZE:-100},\"step_interval\":${EPLB_STEP_INTERVAL:-3000},\"num_redundant_experts\":${EPLB_NUM_REDUNDANT_EXPERTS:-32},\"communicator\":\"${EPLB_COMMUNICATOR}\",\"use_async\":${EPLB_ASYNC_BOOL},\"log_balancedness\":${EPLB_LOG_BOOL},\"log_balancedness_interval\":${EPLB_LOG_INTERVAL}${DUMP_DIR_JSON}}"
+                  EPLB_ARGS="--enable-eplb --eplb-config"
+                fi
+
+                PREFIX_CACHE_ARG="--enable-prefix-caching"
+                if [ "${PREFIX_CACHING:-true}" = "false" ]; then
+                  PREFIX_CACHE_ARG="--no-prefix-caching"
+                fi
+
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
                   GPU_START=$((R * TP_SIZE))
                   GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
@@ -197,23 +229,18 @@ spec:
                     --data-parallel-address ${LWS_LEADER_ADDRESS} \
                     --data-parallel-rpc-port 5555 \
                     --trust-remote-code \
-                    --kv_transfer_config "$KV_TRANSFER_CONFIG" \
+                    ${KV_TRANSFER_CONFIG:+--kv_transfer_config "$KV_TRANSFER_CONFIG"} \
                     --gpu-memory-utilization 0.75 \
                     --max-num-batched-tokens $MAX_TOKENS \
                     --max-num-seqs $MAX_TOKENS \
                     --disable_cascade_attn \
                     --max-cudagraph-capture-size $MAX_TOKENS \
                     --moe-backend ${MOE_BACKEND} \
-                    --all2all-backend "deepep_low_latency" \
+                    --all2all-backend "${A2A_BACKEND}" \
                     --async-scheduling \
-                    --api-server-count 4 \
-                    --enable-eplb \
-                    --eplb-config '{"window_size":"100",
-                                    "step_interval":"3000",
-                                    "num_redundant_experts":"32",
-                                    "communicator":"'"${EPLB_COMMUNICATOR}"'",
-                                    "log_balancedness":"False",
-                                    "log_balancedness_interval":"1000"}' \
+                    --api-server-count 1 \
+                    $EPLB_ARGS ${EPLB_JSON:-} \
+                    $PREFIX_CACHE_ARG \
                     --kv-cache-dtype fp8 \
                     --enable-force-include-usage &
                 done
@@ -295,14 +322,38 @@ spec:
                 value: "1"
               - name: MOE_BACKEND
                 value: auto
+              - name: A2A_BACKEND
+                value: deepep_low_latency
               - name: EPLB_COMMUNICATOR
-                value: torch_nccl
-              - name: VLLM_USE_FLASHINFER_MOE_FP8
-                value: "1"
+                value: nixl
+              - name: EPLB_ENABLED
+                value: "DECODE_EPLB_ENABLED_PLACEHOLDER"
+              - name: EPLB_USE_ASYNC
+                value: "EPLB_USE_ASYNC_PLACEHOLDER"
+              - name: EPLB_STEP_INTERVAL
+                value: "EPLB_STEP_INTERVAL_PLACEHOLDER"
+              - name: EPLB_NUM_REDUNDANT_EXPERTS
+                value: "EPLB_NUM_REDUNDANT_EXPERTS_PLACEHOLDER"
+              - name: EPLB_WINDOW_SIZE
+                value: "EPLB_WINDOW_SIZE_PLACEHOLDER"
+              - name: EPLB_LOG_BALANCEDNESS
+                value: "EPLB_LOG_BALANCEDNESS_PLACEHOLDER"
+              - name: EPLB_LOG_BALANCEDNESS_INTERVAL
+                value: "EPLB_LOG_BALANCEDNESS_INTERVAL_PLACEHOLDER"
+              - name: EPLB_EXPERT_LOAD_DUMP_DIR
+                value: "EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER"
+              - name: PREFIX_CACHING
+                value: "PREFIX_CACHING_PLACEHOLDER"
+              # - name: VLLM_USE_FLASHINFER_MOE_FP8
+              #   value: "1"
               - name: VLLM_USE_DEEP_GEMM
                 value: "1"
               - name: NVIDIA_GDRCOPY
                 value: enabled
+
+              - name: PYTORCH_CUDA_ALLOC_CONF
+                value: "expandable_segments:False"
+
 
               # NVSHMEM config (DeepEP only, not needed for flashinfer_moe_a2a)
               - name: NVSHMEM_CUMEM_HANDLE_TYPE
@@ -314,11 +365,13 @@ spec:
               # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
               - name: UCX_NET_DEVICES
                 value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+              - name: UCX_TLS
+                value: "^cuda_ipc"
 
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S
                 value: "1800"
-
+              
               # Debug logging
               - name: VLLM_LOGGING_LEVEL
                 value: INFO

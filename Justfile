@@ -14,6 +14,17 @@ DEV_POD_NAME := NAME_PREFIX + "-vllm-dev"
 
 MODEL := env("MODEL", "nvidia/DeepSeek-R1-0528-NVFP4-v2")
 MODEL_LABEL := file_name(MODEL)
+DECODE_LWS_SIZE := env("DECODE_LWS_SIZE", "4")
+DECODE_EPLB_ENABLED := env("DECODE_EPLB_ENABLED", "true")
+EPLB_USE_ASYNC := env("EPLB_USE_ASYNC", "false")
+EPLB_STEP_INTERVAL := env("EPLB_STEP_INTERVAL", "3000")
+EPLB_NUM_REDUNDANT_EXPERTS := env("EPLB_NUM_REDUNDANT_EXPERTS", "32")
+EPLB_WINDOW_SIZE := env("EPLB_WINDOW_SIZE", "100")
+EPLB_LOG_BALANCEDNESS := env("EPLB_LOG_BALANCEDNESS", "true")
+EPLB_LOG_BALANCEDNESS_INTERVAL := env("EPLB_LOG_BALANCEDNESS_INTERVAL", "")
+EPLB_EXPERT_LOAD_DUMP_DIR := env("EPLB_EXPERT_LOAD_DUMP_DIR", "/mnt/lustre/" + NAME_PREFIX + "/eplb-dumps/" + DEPLOY_NAME)
+PREFIX_CACHING := env("PREFIX_CACHING", "true")
+PREFILL_EPLB_ENABLED := env("PREFILL_EPLB_ENABLED", "false")
 
 GB200_DIR := "gb200"
 DEV_DIR := "dev"
@@ -94,7 +105,7 @@ poke:
 
 
 parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_LEN='128' OUTPUT_LEN='1000' N_WORKERS='4':
-  {{KN}} delete job parallel-guidellm --ignore-not-found=true \
+  {{KN}} delete job {{DEPLOY_NAME}}-guidellm --ignore-not-found=true \
   && env \
     N_WORKERS={{N_WORKERS}} \
     MAX_CONCURRENCY={{CONCURRENT_PER_WORKER}} \
@@ -102,9 +113,10 @@ parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_
     INPUT_LEN={{INPUT_LEN}} \
     OUTPUT_LEN={{OUTPUT_LEN}} \
     DEPLOY_NAME="{{DEPLOY_NAME}}" \
+    OWNER="{{NAME_PREFIX}}" \
     NAMESPACE="{{NAMESPACE}}" \
     OUTPUT_PATH="parallel-guidellm-$(date +%Y%m%d-%H%M%S)" \
-    envsubst '${N_WORKERS} ${MAX_CONCURRENCY} ${NUM_REQUESTS} ${INPUT_LEN} ${OUTPUT_LEN} ${OUTPUT_PATH} ${DEPLOY_NAME} ${NAMESPACE}' \
+    envsubst '${N_WORKERS} ${MAX_CONCURRENCY} ${NUM_REQUESTS} ${INPUT_LEN} ${OUTPUT_LEN} ${OUTPUT_PATH} ${DEPLOY_NAME} ${OWNER} ${NAMESPACE}' \
       < parallel-guidellm.yaml | {{KN}} apply -f -
 
 # Run inference-perf benchmark (kubernetes-sigs/inference-perf)
@@ -214,6 +226,17 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
           -e "s|VLLM_IMAGE_PLACEHOLDER|{{VLLM_IMAGE}}|g" \
           -e "s|FORK_REPO_PLACEHOLDER|{{FORK_REPO}}|g" \
           -e "s|FORK_BRANCH_PLACEHOLDER|{{FORK_BRANCH}}|g" \
+          -e "s|DECODE_LWS_SIZE_PLACEHOLDER|{{DECODE_LWS_SIZE}}|g" \
+          -e 's|DECODE_EPLB_ENABLED_PLACEHOLDER|"{{DECODE_EPLB_ENABLED}}"|g' \
+          -e 's|PREFILL_EPLB_ENABLED_PLACEHOLDER|"{{PREFILL_EPLB_ENABLED}}"|g' \
+          -e 's|EPLB_USE_ASYNC_PLACEHOLDER|"{{EPLB_USE_ASYNC}}"|g' \
+          -e 's|EPLB_STEP_INTERVAL_PLACEHOLDER|"{{EPLB_STEP_INTERVAL}}"|g' \
+          -e 's|EPLB_NUM_REDUNDANT_EXPERTS_PLACEHOLDER|"{{EPLB_NUM_REDUNDANT_EXPERTS}}"|g' \
+          -e 's|EPLB_WINDOW_SIZE_PLACEHOLDER|"{{EPLB_WINDOW_SIZE}}"|g' \
+          -e 's|EPLB_LOG_BALANCEDNESS_PLACEHOLDER|"{{EPLB_LOG_BALANCEDNESS}}"|g' \
+          -e 's|EPLB_LOG_BALANCEDNESS_INTERVAL_PLACEHOLDER|"{{EPLB_LOG_BALANCEDNESS_INTERVAL}}"|g' \
+          -e "s|EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER|{{EPLB_EXPERT_LOAD_DUMP_DIR}}/$DEPLOY_TS|g" \
+          -e 's|PREFIX_CACHING_PLACEHOLDER|"{{PREFIX_CACHING}}"|g' \
     | {{KN}} apply -f -
   rm -f {{GB200_DIR}}/kustomization.yaml
 
@@ -248,33 +271,45 @@ stop NOW='false':
   {{KN}} delete service {{DEPLOY_NAME}}-inference-gateway-istio --ignore-not-found=true &
   {{KN}} delete configmap {{DEPLOY_NAME}}-gateway-options --ignore-not-found=true &
   {{KN}} delete destinationrule {{DEPLOY_NAME}}-infpool-backend --ignore-not-found=true &
-  {{KN}} delete job parallel-guidellm --ignore-not-found=true $FORCE &
+  {{KN}} delete job {{DEPLOY_NAME}}-guidellm --ignore-not-found=true $FORCE &
   {{KN}} delete job inference-perf --ignore-not-found=true $FORCE &
   {{KN}} delete configmap inference-perf-config --ignore-not-found=true &
   wait
   {{KN}} delete sa {{DEPLOY_NAME}} --ignore-not-found=true
 
-# Restart LWS pods with latest config, without touching gateway/EPP/infpool
-restart-lws MODE='pd' DEV='false' WHICH='all':
+# Re-apply LWS specs with latest config (rolling update). Does not touch gateway/EPP/infpool.
+restart-lws MODE='pd' DEV='false':
   #!/usr/bin/env bash
   set -euo pipefail
-  # Re-render and apply LWS specs to pick up any config changes
   DEV_VENV=""
   if [ "{{DEV}}" = "true" ]; then DEV_VENV="{{VLLM_DEV_VENV}}"; fi
   DEPLOY_TS=$(date +%Y%m%d-%H%M%S)
   printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: {{NAME_PREFIX}}-\nresources:\n  - overlays/{{MODE}}\n' \
     > {{GB200_DIR}}/kustomization.yaml
-  RENDERED=$(kubectl kustomize {{GB200_DIR}} \
+  kubectl kustomize {{GB200_DIR}} \
     | sed -e "s/DEPLOY_TS_PLACEHOLDER/$DEPLOY_TS/g" \
           -e "s/OWNER_PLACEHOLDER/{{NAME_PREFIX}}/g" \
           -e "s|MODEL_PLACEHOLDER|{{MODEL}}|g" \
           -e "s|MODEL_LABEL_PLACEHOLDER|{{MODEL_LABEL}}|g" \
           -e "s|VLLM_DEV_VENV_PLACEHOLDER|$DEV_VENV|g" \
-          -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/{{NAME_PREFIX}}|g")
+          -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/{{NAME_PREFIX}}|g" \
+          -e "s|VLLM_IMAGE_PLACEHOLDER|{{VLLM_IMAGE}}|g" \
+          -e "s|FORK_REPO_PLACEHOLDER|{{FORK_REPO}}|g" \
+          -e "s|FORK_BRANCH_PLACEHOLDER|{{FORK_BRANCH}}|g" \
+          -e "s|DECODE_LWS_SIZE_PLACEHOLDER|{{DECODE_LWS_SIZE}}|g" \
+          -e 's|DECODE_EPLB_ENABLED_PLACEHOLDER|"{{DECODE_EPLB_ENABLED}}"|g' \
+          -e 's|PREFILL_EPLB_ENABLED_PLACEHOLDER|"{{PREFILL_EPLB_ENABLED}}"|g' \
+          -e 's|EPLB_USE_ASYNC_PLACEHOLDER|"{{EPLB_USE_ASYNC}}"|g' \
+          -e 's|EPLB_STEP_INTERVAL_PLACEHOLDER|"{{EPLB_STEP_INTERVAL}}"|g' \
+          -e 's|EPLB_NUM_REDUNDANT_EXPERTS_PLACEHOLDER|"{{EPLB_NUM_REDUNDANT_EXPERTS}}"|g' \
+          -e 's|EPLB_WINDOW_SIZE_PLACEHOLDER|"{{EPLB_WINDOW_SIZE}}"|g' \
+          -e 's|EPLB_LOG_BALANCEDNESS_PLACEHOLDER|"{{EPLB_LOG_BALANCEDNESS}}"|g' \
+          -e 's|EPLB_LOG_BALANCEDNESS_INTERVAL_PLACEHOLDER|"{{EPLB_LOG_BALANCEDNESS_INTERVAL}}"|g' \
+          -e "s|EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER|{{EPLB_EXPERT_LOAD_DUMP_DIR}}/$DEPLOY_TS|g" \
+          -e 's|PREFIX_CACHING_PLACEHOLDER|"{{PREFIX_CACHING}}"|g' \
+    | {{KN}} apply -f -
   rm -f {{GB200_DIR}}/kustomization.yaml
-
-  echo "$RENDERED" | {{KN}} apply -f -
-  echo "LWS reapplied ({{WHICH}}, dev={{DEV}}). Rolling update in progress."
+  echo "LWS reapplied (dev={{DEV}}). Rolling update in progress."
 
 restart MODE='pd' ROUTING='load-aware' DEV='false':
   #!/usr/bin/env bash
@@ -399,7 +434,8 @@ dev-build REMOTE=VLLM_DEV_REMOTE BRANCH=VLLM_DEV_BRANCH JOBS=VLLM_BUILD_JOBS:
   # Install build deps (--no-build-isolation means they must be in the venv)
   uv pip install "setuptools>=77.0.3,<81.0.0" "setuptools-scm>=8.0" \
     "cmake>=3.26.1" ninja "packaging>=24.2" wheel jinja2 "grpcio-tools>=1.76.0" \
-    pybind11 nixl==0.10.0
+    pybind11 nixl==0.10.0 \
+    "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git"
 
   # fetch and reset to requested branch
   git remote set-url origin {{REMOTE}}
@@ -572,7 +608,21 @@ process-traces N='':
   echo "Processing traces/$N ..."
   python3 profiling/process_traces.py "traces/$N"
 
+LUSTRE_PREFIX := "/mnt/lustre/" + NAME_PREFIX
+
+prep-datasets:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [ -z "{{NYANN_BENCH_DIR}}" ]; then
+    echo "Error: NYANN_BENCH_DIR is not set. Add it to .env or export it." >&2
+    exit 1
+  fi
+  cd "{{NYANN_BENCH_DIR}}"
+  just prep-corpus sharegpt "{{LUSTRE_PREFIX}}/corpus" "{{NAMESPACE}}"
+  just prep-gsm8k "{{LUSTRE_PREFIX}}" "{{NAMESPACE}}"
+
 NYANN_BENCH_DIR := env("NYANN_BENCH_DIR", "")
+NYANN_TAG := env("NYANN_TAG", "latest")
 
 # Wait for stack readiness, then launch nyann-bench load + eval jobs
 benchmark-stairs:
@@ -586,11 +636,11 @@ benchmark-stairs:
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_BENCH_DIR}}"
     just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
-      "{\"load\":{\"concurrency\":128},\"warmup\":{\"duration\":\"300s\",\"stagger\":true},\"sweep\":{\"min\":128,\"max\":1920,\"steps\":10,\"step_duration\":\"300s\"},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
-      8 {{NAMESPACE}} arm64 lustre pr-28 &
+      "{\"load\":{\"concurrency\":{{WARMUP_CONCURRENCY}}},\"warmup\":{\"duration\":\"300s\",\"stagger\":true},\"sweep\":{\"min\":{{SWEEP_MIN}},\"max\":{{SWEEP_MAX}},\"steps\":{{SWEEP_STEPS}},\"step_duration\":\"300s\"},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
+      8 {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
     just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
       "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
-      1 {{NAMESPACE}} arm64 lustre pr-28 &
+      1 {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
     wait
     echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
 
@@ -606,15 +656,17 @@ benchmark-constant:
     cd "{{NYANN_BENCH_DIR}}"
     just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
       "{\"load\":{\"concurrency\":1900,\"duration\":\"3600s\"},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
-      8 {{NAMESPACE}} arm64 lustre pr-28 &
+      8 {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
     just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
       "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
-      1 {{NAMESPACE}} arm64 lustre pr-28 &
+      1 {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
     wait
     echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
 
 # Stop nyann-bench benchmark jobs
 stop-nyann:
+  #!/usr/bin/env bash
+  set -euo pipefail
   {{KN}} delete job -l app={{NAME_PREFIX}}-sharegpt-load --ignore-not-found=true &
   {{KN}} delete job -l app={{NAME_PREFIX}}-poker-eval --ignore-not-found=true &
   wait
@@ -622,6 +674,10 @@ stop-nyann:
 # Tail nyann-bench job logs
 nyann-logs NAME:
   {{KN}} logs -l app={{NAME}} -c nyann-bench --tail=50 -f --max-log-requests=20
+
+# Tail parallel-guidellm job logs
+guidellm-logs:
+  {{KN}} logs -l job-name={{DEPLOY_NAME}}-guidellm -c poker --tail=50 -f --max-log-requests=20
 
 # Query Prometheus for per-stage benchmark metrics (requires port-forward: just prometheus)
 query-prometheus CLIENT_JOB=(NAME_PREFIX + "-sharegpt-load") DEPLOYMENT=DEPLOY_NAME EVAL_JOB=(NAME_PREFIX + "-poker-eval") *ARGS='':
@@ -634,6 +690,188 @@ query-prometheus CLIENT_JOB=(NAME_PREFIX + "-sharegpt-load") DEPLOYMENT=DEPLOY_N
   cd "{{NYANN_BENCH_DIR}}"
   just query-prometheus {{CLIENT_JOB}} {{DEPLOYMENT}} {{NAMESPACE}} '' {{EVAL_JOB}} {{ARGS}}
 
+# === EPLB Benchmarking ===
+
+EPLB_RESULTS_DIR := "benchmarks/eplb"
+
+# Restart the stack with EPLB disabled (baseline)
+eplb-bench-no MODE='pd':
+  DECODE_EPLB_ENABLED=false just restart {{MODE}}
+
+# Restart the stack with sync EPLB
+eplb-bench-sync MODE='pd':
+  DECODE_EPLB_ENABLED=true EPLB_USE_ASYNC=false just restart {{MODE}}
+
+# Restart the stack with async EPLB
+eplb-bench-async MODE='pd':
+  DECODE_EPLB_ENABLED=true EPLB_USE_ASYNC=true just restart {{MODE}}
+
+# Stop an EPLB benchmark run: kill nyann-bench jobs and LWS pods (keeps gateway/infpool)
+eplb-stop:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  just stop-nyann
+  {{KN}} delete lws {{DEPLOY_NAME}}-decode --ignore-not-found=true --grace-period=0 --force &
+  {{KN}} delete lws {{DEPLOY_NAME}}-prefill --ignore-not-found=true --grace-period=0 --force &
+  {{KN}} delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-decode --ignore-not-found=true --grace-period=0 --force &
+  {{KN}} delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-prefill --ignore-not-found=true --grace-period=0 --force &
+  wait
+
+# Stop everything (LWS + gateway + infpool) after the final EPLB run
+eplb-stop-all NOW='false':
+  just stop-nyann
+  just stop {{NOW}}
+
+BENCH_DATASET := env("BENCH_DATASET", "sharegpt")
+SWEEP_MIN := env("SWEEP_MIN", "128")
+SWEEP_MAX := env("SWEEP_MAX", "1920")
+SWEEP_STEPS := env("SWEEP_STEPS", "10")
+WARMUP_CONCURRENCY := env("WARMUP_CONCURRENCY", "128")
+
+# Collect benchmark results into benchmarks/eplb/<RUN_NAME>/
+eplb-collect RUN_NAME DATASET=BENCH_DATASET:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  OUT_DIR="{{EPLB_RESULTS_DIR}}/{{RUN_NAME}}"
+  mkdir -p "$OUT_DIR/eplb-logs"
+  echo "=== eplb-collect: {{RUN_NAME}} ==="
+
+  # 1. Snapshot config
+  echo "[1/4] Snapshotting config..."
+  {
+    echo "# EPLB Benchmark Config -- {{RUN_NAME}}"
+    echo "# Collected at $(date -Iseconds)"
+    echo "DEPLOY_USER={{NAME_PREFIX}}"
+    echo "DEPLOY_NAME={{DEPLOY_NAME}}"
+    echo "MODEL={{MODEL}}"
+    echo "DATASET={{DATASET}}"
+    echo "DECODE_LWS_SIZE={{DECODE_LWS_SIZE}}"
+    echo "VLLM_IMAGE={{VLLM_IMAGE}}"
+    echo "FORK_REPO={{FORK_REPO}}"
+    echo "FORK_BRANCH={{FORK_BRANCH}}"
+    echo "EPLB_EXPERT_LOAD_DUMP_DIR={{EPLB_EXPERT_LOAD_DUMP_DIR}}"
+    echo "SWEEP_MIN={{SWEEP_MIN}}"
+    echo "SWEEP_MAX={{SWEEP_MAX}}"
+    echo "SWEEP_STEPS={{SWEEP_STEPS}}"
+    echo "WARMUP_CONCURRENCY={{WARMUP_CONCURRENCY}}"
+    echo "COLLECT_TS=$(date -Iseconds)"
+  } > "$OUT_DIR/config.env"
+
+  # Read EPLB env vars and topology from the live decode pod
+  DECODE_POD=$({{KN}} get pods -l llm-d.ai/role=decode,llm-d.ai/owner={{NAME_PREFIX}} -o json 2>/dev/null | jq -r '.items[0].metadata.name // empty' || true)
+  if [ -n "$DECODE_POD" ]; then
+    POD_JSON=$({{KN}} get pod "$DECODE_POD" -o json 2>/dev/null || echo "{}")
+    MODE=$(echo "$POD_JSON" | jq -r '.metadata.labels["llm-d.ai/deployment"] // "unknown"')
+    echo "MODE=$MODE" >> "$OUT_DIR/config.env"
+    for VAR in A2A_BACKEND EPLB_ENABLED EPLB_USE_ASYNC EPLB_STEP_INTERVAL EPLB_NUM_REDUNDANT_EXPERTS EPLB_WINDOW_SIZE EPLB_LOG_BALANCEDNESS EPLB_LOG_BALANCEDNESS_INTERVAL EPLB_COMMUNICATOR EPLB_EXPERT_LOAD_DUMP_DIR PREFIX_CACHING; do
+      VAL=$(echo "$POD_JSON" | jq -r --arg var "$VAR" '.spec.containers[] | select(.name=="vllm") | .env[] | select(.name==$var) | .value // empty')
+      echo "DECODE_$VAR=$VAL" >> "$OUT_DIR/config.env"
+    done
+  else
+    echo "# WARNING: No decode pod found, EPLB env vars not captured" >> "$OUT_DIR/config.env"
+  fi
+
+  # Read LWS topology (replicas x size) for decode and prefill
+  DECODE_LWS_JSON=$({{KN}} get lws {{DEPLOY_NAME}}-decode -o json 2>/dev/null || echo "{}")
+  DECODE_LWS_REPLICAS=$(echo "$DECODE_LWS_JSON" | jq -r '.spec.replicas // empty')
+  DECODE_LWS_GROUP_SIZE=$(echo "$DECODE_LWS_JSON" | jq -r '.spec.leaderWorkerTemplate.size // empty')
+  echo "DECODE_LWS_REPLICAS=${DECODE_LWS_REPLICAS:-}" >> "$OUT_DIR/config.env"
+  echo "DECODE_LWS_GROUP_SIZE=${DECODE_LWS_GROUP_SIZE:-}" >> "$OUT_DIR/config.env"
+
+  PREFILL_LWS_JSON=$({{KN}} get lws {{DEPLOY_NAME}}-prefill -o json 2>/dev/null || echo "{}")
+  PREFILL_LWS_REPLICAS=$(echo "$PREFILL_LWS_JSON" | jq -r '.spec.replicas // empty')
+  PREFILL_LWS_GROUP_SIZE=$(echo "$PREFILL_LWS_JSON" | jq -r '.spec.leaderWorkerTemplate.size // empty')
+  echo "PREFILL_LWS_REPLICAS=${PREFILL_LWS_REPLICAS:-}" >> "$OUT_DIR/config.env"
+  echo "PREFILL_LWS_GROUP_SIZE=${PREFILL_LWS_GROUP_SIZE:-}" >> "$OUT_DIR/config.env"
+
+  # Read env vars from the live prefill pod (if exists)
+  PREFILL_POD=$({{KN}} get pods -l llm-d.ai/role=prefill,llm-d.ai/owner={{NAME_PREFIX}} -o json 2>/dev/null | jq -r '.items[0].metadata.name // empty' || true)
+  if [ -n "$PREFILL_POD" ]; then
+    PREFILL_POD_JSON=$({{KN}} get pod "$PREFILL_POD" -o json 2>/dev/null || echo "{}")
+    for VAR in A2A_BACKEND EPLB_ENABLED EPLB_LOG_BALANCEDNESS; do
+      VAL=$(echo "$PREFILL_POD_JSON" | jq -r --arg var "$VAR" '.spec.containers[] | select(.name=="vllm") | .env[] | select(.name==$var) | .value // empty')
+      echo "PREFILL_$VAR=$VAL" >> "$OUT_DIR/config.env"
+    done
+  fi
+
+  echo "[1/4] Config snapshot done."
+
+  # 2. Compute Prometheus time window and write to config.env
+  END_TS=$(date +%s)
+  if [ -n "${DECODE_POD:-}" ]; then
+    POD_CREATED=$(echo "$POD_JSON" | jq -r '.metadata.creationTimestamp // empty')
+    if [ -n "$POD_CREATED" ]; then
+      START_TS=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$POD_CREATED" +%s 2>/dev/null \
+              || date -d "$POD_CREATED" +%s 2>/dev/null \
+              || echo "$((END_TS - 7200))")
+    else
+      START_TS=$((END_TS - 7200))
+    fi
+  else
+    START_TS=$((END_TS - 7200))
+  fi
+  DURATION=$((END_TS - START_TS))
+  echo "PROM_START_TS=$START_TS" >> "$OUT_DIR/config.env"
+  echo "PROM_END_TS=$END_TS" >> "$OUT_DIR/config.env"
+  echo "PROM_DURATION_S=$DURATION" >> "$OUT_DIR/config.env"
+
+  # Query Prometheus (requires just prometheus port-forward on localhost:9090)
+  echo "[2/4] Querying Prometheus..."
+  python3 scripts/collect-prometheus.py "$OUT_DIR" || echo "WARNING: Prometheus collection failed — re-run with: just eplb-collect-prom {{RUN_NAME}}"
+  echo "[2/4] Prometheus done."
+
+  # 3. Copy EPLB logs and expert load dumps from Lustre (via a running decode pod)
+  echo "[3/4] Copying EPLB logs from Lustre..."
+  LUSTRE_POD="${DECODE_POD:-}"
+  if [ -z "$LUSTRE_POD" ]; then
+    LUSTRE_POD=$({{KN}} get pods -l llm-d.ai/role=prefill,llm-d.ai/owner={{NAME_PREFIX}} -o json 2>/dev/null | jq -r '.items[0].metadata.name // empty' || true)
+  fi
+
+  if [ -n "$LUSTRE_POD" ]; then
+    LUSTRE_LOG_DIR="/mnt/lustre/{{NAME_PREFIX}}/logs/decode"
+    LOG_FILES=$({{KN}} exec "$LUSTRE_POD" -c vllm -- bash -c "ls -t ${LUSTRE_LOG_DIR}/*.log 2>/dev/null | head -8" 2>/dev/null || true)
+    for LOG_FILE in $LOG_FILES; do
+      BASENAME=$(basename "$LOG_FILE")
+      {{KN}} cp -c vllm "${LUSTRE_POD}:${LOG_FILE}" "$OUT_DIR/eplb-logs/$BASENAME" 2>/dev/null || echo "Failed to copy $LOG_FILE"
+    done
+
+    echo "[4/4] Copying expert load dumps from Lustre..."
+    DUMP_BASE=$(echo "$POD_JSON" | jq -r '.spec.containers[] | select(.name=="vllm") | .env[] | select(.name=="EPLB_EXPERT_LOAD_DUMP_DIR") | .value // empty')
+    if [ -n "$DUMP_BASE" ]; then
+      for ROLE in decode prefill; do
+        DUMP_SUB="${DUMP_BASE}/${ROLE}"
+        if {{KN}} exec "$LUSTRE_POD" -c vllm -- test -d "$DUMP_SUB" 2>/dev/null; then
+          mkdir -p "$OUT_DIR/expert-load/$ROLE"
+          {{KN}} exec "$LUSTRE_POD" -c vllm -- tar cf - "$DUMP_SUB" 2>/dev/null \
+            | tar xf - -C "$OUT_DIR/expert-load/$ROLE" --strip-components=$(echo "$DUMP_SUB" | tr -cd '/' | wc -c) 2>/dev/null \
+            || echo "Failed to copy $DUMP_SUB"
+          FILE_COUNT=$(find "$OUT_DIR/expert-load/$ROLE" -name '*.json' 2>/dev/null | wc -l || echo 0)
+          echo "Copied $FILE_COUNT $ROLE expert load dump(s)"
+        fi
+      done
+      TOTAL=$(find "$OUT_DIR/expert-load" -name '*.json' 2>/dev/null | wc -l || echo 0)
+      if [ "$TOTAL" -eq 0 ]; then
+        echo "No expert load dumps found under $DUMP_BASE/{decode,prefill}"
+      fi
+    else
+      echo "No EPLB_EXPERT_LOAD_DUMP_DIR set on pod -- skipping expert load dumps"
+    fi
+  else
+    echo "WARNING: No decode/prefill pod running -- skipping Lustre file copy (eplb-logs, expert-load)."
+    echo "  Collect while pods are still running, or use 'just dev' to copy manually."
+  fi
+
+  echo "=== Done. Results collected in $OUT_DIR/ ==="
+  echo "  config.env       - deployment configuration"
+  echo "  prometheus.json   - Prometheus metric snapshots"
+  echo "  eplb-logs/        - decode pod logs from Lustre"
+  echo "  expert-load/      - expert load balance snapshots (JSON)"
+
+# Re-collect Prometheus metrics for an existing run (reads timestamps from config.env)
+eplb-collect-prom RUN_NAME:
+  python3 scripts/collect-prometheus.py "{{EPLB_RESULTS_DIR}}/{{RUN_NAME}}"
+
 # === Monitoring ===
 
 # Install Prometheus and Grafana (namespace-scoped, no cluster permissions needed)
@@ -642,13 +880,12 @@ start-monitoring:
   set -euo pipefail
   mkdir -p .tmp
   export NAMESPACE="{{NAMESPACE}}"
-  export DEPLOY_USER="{{NAME_PREFIX}}"
   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
   helm repo add grafana https://grafana.github.io/helm-charts --force-update
   helm repo update
   envsubst '${NAMESPACE}' < {{MONITORING_DIR}}/prometheus-rbac.yaml | kubectl apply -f -
   envsubst '${NAMESPACE}' < {{MONITORING_DIR}}/grafana-rbac.yaml | kubectl apply -f -
-  envsubst '${NAMESPACE} ${DEPLOY_USER}' < {{MONITORING_DIR}}/prometheus-values.yaml > .tmp/prometheus-values.yaml
+  envsubst '${NAMESPACE}' < {{MONITORING_DIR}}/prometheus-values.yaml > .tmp/prometheus-values.yaml
   envsubst '${NAMESPACE}' < {{MONITORING_DIR}}/grafana-values.yaml > .tmp/grafana-values.yaml
   helm upgrade --install prometheus prometheus-community/prometheus \
     -n {{NAMESPACE}} -f .tmp/prometheus-values.yaml \
@@ -744,3 +981,36 @@ kv-sweep-collect:
 # Clean up KV sweep jobs
 kv-sweep-clean:
   {{KN}} delete jobs -l app=kv-sweep --ignore-not-found=true
+
+# Download recent decode logs from Lustre into decode_logs/<name>
+download-decode-logs name max_files:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  OUT_DIR="decode_logs/{{name}}"
+  mkdir -p "$OUT_DIR"
+
+  LUSTRE_LOG_DIR="/mnt/lustre/{{NAME_PREFIX}}/logs/decode"
+
+  POD="{{DEV_POD_NAME}}"
+  if ! {{KN}} get pod "$POD" &>/dev/null; then
+    echo "ERROR: Dev pod $POD not found. Start it with 'just dev-start'."
+    exit 1
+  fi
+
+  echo "Listing logs in $LUSTRE_LOG_DIR (via $POD)..."
+  LOG_FILES=$({{KN}} exec "$POD" -- bash -c "ls -t ${LUSTRE_LOG_DIR}/*.log 2>/dev/null | head -{{max_files}}" 2>/dev/null || true)
+  if [ -z "$LOG_FILES" ]; then
+    echo "No log files found in $LUSTRE_LOG_DIR"
+    exit 0
+  fi
+
+  COUNT=0
+  for LOG_FILE in $LOG_FILES; do
+    BASENAME=$(basename "$LOG_FILE")
+    echo "  $BASENAME"
+    {{KN}} cp "${POD}:${LOG_FILE}" "$OUT_DIR/$BASENAME" 2>/dev/null || echo "  Failed to copy $LOG_FILE"
+    COUNT=$((COUNT + 1))
+  done
+
+  echo "Downloaded $COUNT log(s) to $OUT_DIR/"

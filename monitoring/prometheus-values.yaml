@@ -18,9 +18,6 @@ extraScrapeConfigs: |
           names:
             - ${NAMESPACE}
     relabel_configs:
-      - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_owner]
-        regex: ${DEPLOY_USER}
-        action: keep
       - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
         regex: decode
         action: keep
@@ -36,6 +33,8 @@ extraScrapeConfigs: |
         target_label: node
       - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_model]
         target_label: model
+      - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_owner]
+        target_label: owner
       - source_labels: [__meta_kubernetes_pod_container_port_number]
         regex: '820(.)'
         target_label: rank
@@ -50,9 +49,6 @@ extraScrapeConfigs: |
           names:
             - ${NAMESPACE}
     relabel_configs:
-      - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_owner]
-        regex: ${DEPLOY_USER}
-        action: keep
       - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
         regex: prefill
         action: keep
@@ -68,6 +64,8 @@ extraScrapeConfigs: |
         target_label: node
       - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_model]
         target_label: model
+      - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_owner]
+        target_label: owner
       - source_labels: [__meta_kubernetes_pod_container_port_number]
         regex: '800(.)'
         target_label: rank
@@ -82,9 +80,6 @@ extraScrapeConfigs: |
           names:
             - ${NAMESPACE}
     relabel_configs:
-      - source_labels: [__meta_kubernetes_pod_name]
-        regex: ${DEPLOY_USER}-.*
-        action: keep
       - source_labels: [__meta_kubernetes_pod_container_name]
         regex: nyann-bench
         action: keep
@@ -108,7 +103,7 @@ extraScrapeConfigs: |
             - ${NAMESPACE}
     relabel_configs:
       - source_labels: [__meta_kubernetes_pod_label_inferencepool]
-        regex: ${DEPLOY_USER}-.*
+        regex: .+
         action: keep
       - source_labels: [__meta_kubernetes_pod_ip]
         target_label: __address__

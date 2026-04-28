@@ -1,9 +1,10 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: parallel-guidellm
+  name: ${DEPLOY_NAME}-guidellm
   labels:
-    app: guide-llm
+    app: ${DEPLOY_NAME}-guidellm
+    llm-d.ai/owner: ${OWNER}
 spec:
   parallelism: ${N_WORKERS}
   completions: ${N_WORKERS}

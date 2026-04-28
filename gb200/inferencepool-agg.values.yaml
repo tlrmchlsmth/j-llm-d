@@ -6,12 +6,10 @@ inferenceExtension:
   image:
     name: llm-d-inference-scheduler
     hub: ghcr.io/llm-d
-    tag: v0.5.0
+    tag: v0.6.0
   extProcPort: 9002
   monitoring:
     interval: "10s"
-    secret:
-      name: ${DEPLOY_NAME}-sa-metrics-reader-secret
     prometheus:
       enabled: false
   affinity:
@@ -52,10 +50,10 @@ inferenceExtension:
 inferencePool:
   name: ${DEPLOY_NAME}-infpool
   targetPorts:
-    - number: 8000
-    - number: 8001
-    - number: 8002
-    - number: 8003
+    - number: 8200
+    - number: 8201
+    - number: 8202
+    - number: 8203
   modelServers:
     matchLabels:
       llm-d.ai/inferenceServing: "true"

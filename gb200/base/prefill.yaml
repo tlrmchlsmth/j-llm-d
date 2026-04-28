@@ -25,6 +25,16 @@ spec:
       spec:
         serviceAccountName: wide-ep
         terminationGracePeriodSeconds: 0
+        # affinity:
+        #   nodeAffinity:
+        #     requiredDuringSchedulingIgnoredDuringExecution:
+        #       nodeSelectorTerms:
+        #       - matchExpressions:
+        #         - key: kubernetes.io/hostname
+        #           operator: NotIn
+        #           values:
+        #           - "10.0.130.202"
+        #           - "10.0.133.53"
         volumes:
           - name: dshm
             emptyDir:
@@ -56,7 +66,7 @@ spec:
               - -c
             args:
               - |-
-                set -euo pipefail
+                set -euxo pipefail
                 # Persist logs to Lustre so they survive LWS pod recreation
                 LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/prefill
                 mkdir -p "$LOG_DIR"
@@ -98,6 +108,28 @@ spec:
                     --data-parallel-rpc-port 5555"
                 fi
 
+                # EPLB config for prefill (off by default)
+                EPLB_ARGS=""
+                if [ "${EPLB_ENABLED:-false}" = "true" ]; then
+                  EPLB_LOG_INTERVAL=${EPLB_LOG_BALANCEDNESS_INTERVAL:-$(( ${EPLB_STEP_INTERVAL:-3000} / 3 ))}
+                  EPLB_ASYNC_BOOL=$( [ "${EPLB_USE_ASYNC:-false}" = "true" ] && echo true || echo false )
+                  EPLB_LOG_BOOL=$( [ "${EPLB_LOG_BALANCEDNESS:-false}" = "true" ] && echo true || echo false )
+                  EPLB_DUMP_DIR="${EPLB_EXPERT_LOAD_DUMP_DIR:-}"
+                  DUMP_DIR_JSON=""
+                  if [ -n "$EPLB_DUMP_DIR" ]; then
+                    EPLB_DUMP_DIR="${EPLB_DUMP_DIR}/prefill"
+                    mkdir -p "$EPLB_DUMP_DIR"
+                    DUMP_DIR_JSON=",\"expert_load_dump_dir\":\"${EPLB_DUMP_DIR}\""
+                  fi
+                  EPLB_JSON="{\"window_size\":${EPLB_WINDOW_SIZE:-100},\"step_interval\":${EPLB_STEP_INTERVAL:-3000},\"num_redundant_experts\":${EPLB_NUM_REDUNDANT_EXPERTS:-32},\"communicator\":\"${EPLB_COMMUNICATOR:-nixl}\",\"use_async\":${EPLB_ASYNC_BOOL},\"log_balancedness\":${EPLB_LOG_BOOL},\"log_balancedness_interval\":${EPLB_LOG_INTERVAL}${DUMP_DIR_JSON}}"
+                  EPLB_ARGS="--enable-eplb --eplb-config"
+                fi
+
+                PREFIX_CACHE_ARG="--enable-prefix-caching"
+                if [ "${PREFIX_CACHING:-true}" = "false" ]; then
+                  PREFIX_CACHE_ARG="--no-prefix-caching"
+                fi
+
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
                   GPU_START=$((R * TP_SIZE))
                   GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
@@ -117,13 +149,15 @@ spec:
                     --enable-expert-parallel \
                     $DP_FLAGS $RANK_FLAGS \
                     --trust-remote-code \
-                    --kv_transfer_config "$KV_TRANSFER_CONFIG" \
+                    ${KV_TRANSFER_CONFIG:+--kv_transfer_config "$KV_TRANSFER_CONFIG"} \
                     --gpu-memory-utilization 0.85 \
                     --moe-backend ${MOE_BACKEND} \
-                    --all2all-backend "flashinfer_nvlink_one_sided" \
+                    --all2all-backend "${A2A_BACKEND}" \
                     --disable_cascade_attn \
-                    --api-server-count 4 \
+                    --api-server-count 1 \
                     --async-scheduling \
+                    $EPLB_ARGS ${EPLB_JSON:-} \
+                    $PREFIX_CACHE_ARG \
                     --kv-cache-dtype fp8 \
                     --enable-force-include-usage &
                 done
@@ -190,8 +224,32 @@ spec:
                 value: /usr/lib64
               - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
                 value: "1"
+              - name: MOE_BACKEND
+                value: auto
+              - name: A2A_BACKEND
+                value: deepep_high_throughput
               - name: NVIDIA_GDRCOPY
                 value: enabled
+              - name: EPLB_ENABLED
+                value: "PREFILL_EPLB_ENABLED_PLACEHOLDER"
+              - name: EPLB_USE_ASYNC
+                value: "EPLB_USE_ASYNC_PLACEHOLDER"
+              - name: EPLB_STEP_INTERVAL
+                value: "EPLB_STEP_INTERVAL_PLACEHOLDER"
+              - name: EPLB_NUM_REDUNDANT_EXPERTS
+                value: "EPLB_NUM_REDUNDANT_EXPERTS_PLACEHOLDER"
+              - name: EPLB_WINDOW_SIZE
+                value: "EPLB_WINDOW_SIZE_PLACEHOLDER"
+              - name: EPLB_LOG_BALANCEDNESS
+                value: "EPLB_LOG_BALANCEDNESS_PLACEHOLDER"
+              - name: EPLB_LOG_BALANCEDNESS_INTERVAL
+                value: "EPLB_LOG_BALANCEDNESS_INTERVAL_PLACEHOLDER"
+              - name: EPLB_EXPERT_LOAD_DUMP_DIR
+                value: "EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER"
+              - name: EPLB_COMMUNICATOR
+                value: nixl
+              - name: PREFIX_CACHING
+                value: "PREFIX_CACHING_PLACEHOLDER"
 
               # Override container default that disables VMM
               - name: NVSHMEM_DISABLE_CUDA_VMM

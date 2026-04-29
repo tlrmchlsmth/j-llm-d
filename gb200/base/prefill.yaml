@@ -142,7 +142,7 @@ spec:
 
             env:
               - name: VLLM_USE_V2_MODEL_RUNNER
-                value: "1"
+                value: "0"
               #- name: VLLM_NAN_DETECT
               #  value: "1"
               #- name: VLLM_ATTENTION_NAN_DETECT

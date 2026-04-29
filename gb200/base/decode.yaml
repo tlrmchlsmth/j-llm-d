@@ -267,7 +267,8 @@ spec:
                     --moe-backend ${MOE_BACKEND} \
                     --all2all-backend "${A2A_BACKEND}" \
                     --async-scheduling \
-                    --api-server-count 1 \
+                    --api-server-count 4 \
+                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
                     $EPLB_ARGS ${EPLB_JSON:-} \
                     $PREFIX_CACHE_ARG \
                     --kv-cache-dtype fp8 \
@@ -308,11 +309,14 @@ spec:
               - name: VLLM_DEV_VENV
                 value: VLLM_DEV_VENV_PLACEHOLDER
 
-              # DeepEP low-latency only: NVFP4 dispatch + masked_gemm
-              #- name: VLLM_DEEPEPLL_NVFP4_DISPATCH
-              #  value: "1"
-              #- name: VLLM_FLASHINFER_MOE_BACKEND
-              #  value: "masked_gemm"
+              - name: VLLM_DEEPEPLL_NVFP4_DISPATCH
+                value: "1"
+              - name: VLLM_FLASHINFER_MOE_BACKEND
+                value: "masked_gemm"
+              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
+                value: "1"
+              - name: VLLM_ENABLE_MOE_DP_CHUNK
+                value: "0"
 
               - name: MAX_TOKENS
                 value: "1024"
@@ -339,9 +343,6 @@ spec:
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
-                value: "1"
-
-              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"
 
               # Common vLLM settings

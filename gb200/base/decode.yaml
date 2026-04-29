@@ -382,9 +382,6 @@ spec:
               - name: NVIDIA_GDRCOPY
                 value: enabled
 
-              - name: PYTORCH_CUDA_ALLOC_CONF
-                value: "expandable_segments:False"
-
 
               # NVSHMEM config (DeepEP only, not needed for flashinfer_moe_a2a)
               - name: NVSHMEM_CUMEM_HANDLE_TYPE

@@ -25,16 +25,6 @@ spec:
       spec:
         serviceAccountName: wide-ep
         terminationGracePeriodSeconds: 0
-        # affinity:
-        #   nodeAffinity:
-        #     requiredDuringSchedulingIgnoredDuringExecution:
-        #       nodeSelectorTerms:
-        #       - matchExpressions:
-        #         - key: kubernetes.io/hostname
-        #           operator: NotIn
-        #           values:
-        #           - "10.0.130.202"
-        #           - "10.0.133.53"
         volumes:
           - name: dshm
             emptyDir:
@@ -94,6 +84,21 @@ spec:
                 fi
 
                 uv pip install --upgrade mistral_common
+
+                DEEPEP_WHEEL_DIR="LUSTRE_PREFIX_PLACEHOLDER/wheels"
+                if [ "BUILD_DEEPEP_WHEEL_PLACEHOLDER" = "true" ]; then
+                  echo "=== Waiting for DeepEP wheel on Lustre ==="
+                  while ! ls "$DEEPEP_WHEEL_DIR"/deep_ep-*.whl &>/dev/null; do
+                    sleep 5
+                  done
+                  echo "=== DeepEP wheel found ==="
+                fi
+
+                DEEPEP_WHL=$(ls "$DEEPEP_WHEEL_DIR"/deep_ep-*.whl 2>/dev/null | sort -V | tail -1 || true)
+                if [ -n "$DEEPEP_WHL" ]; then
+                  echo "Installing custom DeepEP wheel: $DEEPEP_WHL"
+                  uv pip install --force-reinstall --no-deps "$DEEPEP_WHL"
+                fi
 
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))
@@ -178,10 +183,8 @@ spec:
             env:
               - name: VLLM_USE_V2_MODEL_RUNNER
                 value: "1"
-              #- name: VLLM_NAN_DETECT
-              #  value: "1"
-              #- name: VLLM_ATTENTION_NAN_DETECT
-              #  value: "1"
+              - name: VLLM_COMPUTE_NANS_IN_LOGITS
+                value: "1"
 
               - name: VLLM_NO_USAGE_STATS
                 value: "1"
@@ -208,9 +211,9 @@ spec:
 
               # Compile caches - persist across restarts for faster startup
               - name: VLLM_CACHE_ROOT
-                value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_extdp
+                value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_prefill
               - name: FLASHINFER_CACHE_DIR
-                value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_extdp
+                value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_prefill
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE

@@ -25,16 +25,6 @@ spec:
       spec:
         serviceAccountName: wide-ep
         terminationGracePeriodSeconds: 0
-        # affinity:
-        #   nodeAffinity:
-        #     requiredDuringSchedulingIgnoredDuringExecution:
-        #       nodeSelectorTerms:
-        #       - matchExpressions:
-        #         - key: kubernetes.io/hostname
-        #           operator: NotIn
-        #           values:
-        #           - "10.0.130.202"
-        #           - "10.0.133.53"
         volumes:
           - name: dshm
             emptyDir:
@@ -162,6 +152,45 @@ spec:
 
                 uv pip install --upgrade mistral_common
 
+                DEEPEP_WHEEL_DIR="LUSTRE_PREFIX_PLACEHOLDER/wheels"
+                if [ "BUILD_DEEPEP_WHEEL_PLACEHOLDER" = "true" ]; then
+                  if [ "${LWS_WORKER_INDEX:-0}" = "0" ]; then
+                    echo "=== Building DeepEP wheel on decode leader ==="
+                    SRCDIR="LUSTRE_PREFIX_PLACEHOLDER/deepep-src"
+                    if [ ! -d "$SRCDIR/.git" ]; then
+                      git clone --branch DEEPEP_BRANCH_PLACEHOLDER DEEPEP_REPO_PLACEHOLDER "$SRCDIR"
+                    else
+                      cd "$SRCDIR"
+                      git fetch origin DEEPEP_BRANCH_PLACEHOLDER
+                      git checkout DEEPEP_BRANCH_PLACEHOLDER
+                      git reset --hard origin/DEEPEP_BRANCH_PLACEHOLDER
+                      cd /
+                    fi
+                    cd "$SRCDIR"
+                    echo "Building from $(git log -1 --oneline)..."
+                    uv pip wheel --no-deps --no-build-isolation -w /tmp/deepep-wheels .
+                    mkdir -p "$DEEPEP_WHEEL_DIR"
+                    rm -f "$DEEPEP_WHEEL_DIR"/deep_ep-*.whl
+                    cp /tmp/deepep-wheels/deep_ep-*.whl "$DEEPEP_WHEEL_DIR"/
+                    rm -rf /tmp/deepep-wheels
+                    echo "=== DeepEP wheel built ==="
+                    ls -lh "$DEEPEP_WHEEL_DIR"/deep_ep-*.whl
+                    cd /
+                  else
+                    echo "=== Waiting for DeepEP wheel on Lustre ==="
+                    while ! ls "$DEEPEP_WHEEL_DIR"/deep_ep-*.whl &>/dev/null; do
+                      sleep 5
+                    done
+                    echo "=== DeepEP wheel found ==="
+                  fi
+                fi
+
+                DEEPEP_WHL=$(ls "$DEEPEP_WHEEL_DIR"/deep_ep-*.whl 2>/dev/null | sort -V | tail -1 || true)
+                if [ -n "$DEEPEP_WHL" ]; then
+                  echo "Installing custom DeepEP wheel: $DEEPEP_WHL"
+                  uv pip install --force-reinstall --no-deps "$DEEPEP_WHL"
+                fi
+
                 # Derive batch-size-dependent env vars from MAX_TOKENS
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
                 # NVSHMEM_QP_DEPTH only needed for DeepEP
@@ -268,7 +297,7 @@ spec:
 
             env:
               - name: VLLM_USE_V2_MODEL_RUNNER
-                value: "1"
+                value: "0"
 
               - name: VLLM_NO_USAGE_STATS
                 value: "1"
@@ -346,6 +375,8 @@ spec:
                 value: "PREFIX_CACHING_PLACEHOLDER"
               # - name: VLLM_USE_FLASHINFER_MOE_FP8
               #   value: "1"
+              - name: VLLM_COMPUTE_NANS_IN_LOGITS
+                value: "1"
               - name: VLLM_USE_DEEP_GEMM
                 value: "1"
               - name: NVIDIA_GDRCOPY

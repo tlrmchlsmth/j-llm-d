@@ -52,7 +52,7 @@ Key components:
 Decode and prefill pods differ in important ways:
 
 - **Decode**: Has routing sidecar init containers (proxy ports 8000-8003 → vLLM ports 8200-8203). Uses `deepep_low_latency` all2all backend and MNNVL for cross-pod NVLink fabric. `TP_SIZE` defaults to 1 (pure EP).
-- **Prefill**: No routing sidecars — serves directly on ports 8000-8003. Uses `deepep_high_throughput` all2all backend. `TP_SIZE` defaults to 4 (TP within pod, EP across pods).
+- **Prefill**: No routing sidecars — serves directly on ports 8000-8003. Uses `deepep_high_throughput` all2all backend. `TP_SIZE` defaults to 1 (pure EP, same as decode).
 
 The `TP_SIZE` env var controls tensor parallelism per DP rank. `DP_SIZE_LOCAL` is derived as `4 / TP_SIZE` (4 GPUs per pod). Changing `TP_SIZE` changes the TP/EP tradeoff without modifying the launch script.
 

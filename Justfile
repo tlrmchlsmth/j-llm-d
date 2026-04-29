@@ -25,6 +25,7 @@ EPLB_LOG_BALANCEDNESS_INTERVAL := env("EPLB_LOG_BALANCEDNESS_INTERVAL", "")
 EPLB_EXPERT_LOAD_DUMP_DIR := env("EPLB_EXPERT_LOAD_DUMP_DIR", "/mnt/lustre/" + NAME_PREFIX + "/eplb-dumps/" + DEPLOY_NAME)
 PREFIX_CACHING := env("PREFIX_CACHING", "true")
 PREFILL_EPLB_ENABLED := env("PREFILL_EPLB_ENABLED", "false")
+BUILD_DEEPEP_WHEEL := env("BUILD_DEEPEP_WHEEL", "false")
 
 GB200_DIR := "gb200"
 DEV_DIR := "dev"
@@ -191,6 +192,10 @@ apply-infpool-dr:
   envsubst '${DEPLOY_NAME} ${INFPOOL_IP_SVC}' < {{GB200_DIR}}/infpool-backend-dr.yaml | {{KN}} apply -f -
   echo "DestinationRule applied for $INFPOOL_IP_SVC"
 
+DEEPEP_WHEEL_DIR := "/mnt/lustre/" + NAME_PREFIX + "/wheels"
+DEEPEP_REPO := env("DEEPEP_REPO", "https://github.com/tlrmchlsmth/DeepEP.git")
+DEEPEP_BRANCH := env("DEEPEP_BRANCH", "gb200-llm-d")
+
 VLLM_DEV_VENV := "/mnt/lustre/" + NAME_PREFIX + "/vllm-venv"
 VLLM_DEV_SRC := "/mnt/lustre/" + NAME_PREFIX + "/vllm-dev"
 VLLM_DEV_REMOTE := "https://github.com/vllm-project/vllm.git"
@@ -237,6 +242,9 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
           -e 's|EPLB_LOG_BALANCEDNESS_INTERVAL_PLACEHOLDER|"{{EPLB_LOG_BALANCEDNESS_INTERVAL}}"|g' \
           -e "s|EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER|{{EPLB_EXPERT_LOAD_DUMP_DIR}}/$DEPLOY_TS|g" \
           -e 's|PREFIX_CACHING_PLACEHOLDER|"{{PREFIX_CACHING}}"|g' \
+          -e 's|BUILD_DEEPEP_WHEEL_PLACEHOLDER|{{BUILD_DEEPEP_WHEEL}}|g' \
+          -e "s|DEEPEP_REPO_PLACEHOLDER|{{DEEPEP_REPO}}|g" \
+          -e "s|DEEPEP_BRANCH_PLACEHOLDER|{{DEEPEP_BRANCH}}|g" \
     | {{KN}} apply -f -
   rm -f {{GB200_DIR}}/kustomization.yaml
 
@@ -307,6 +315,9 @@ restart-lws MODE='pd' DEV='false':
           -e 's|EPLB_LOG_BALANCEDNESS_INTERVAL_PLACEHOLDER|"{{EPLB_LOG_BALANCEDNESS_INTERVAL}}"|g' \
           -e "s|EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER|{{EPLB_EXPERT_LOAD_DUMP_DIR}}/$DEPLOY_TS|g" \
           -e 's|PREFIX_CACHING_PLACEHOLDER|"{{PREFIX_CACHING}}"|g' \
+          -e 's|BUILD_DEEPEP_WHEEL_PLACEHOLDER|{{BUILD_DEEPEP_WHEEL}}|g' \
+          -e "s|DEEPEP_REPO_PLACEHOLDER|{{DEEPEP_REPO}}|g" \
+          -e "s|DEEPEP_BRANCH_PLACEHOLDER|{{DEEPEP_BRANCH}}|g" \
     | {{KN}} apply -f -
   rm -f {{GB200_DIR}}/kustomization.yaml
   echo "LWS reapplied (dev={{DEV}}). Rolling update in progress."
@@ -435,7 +446,7 @@ dev-build REMOTE=VLLM_DEV_REMOTE BRANCH=VLLM_DEV_BRANCH JOBS=VLLM_BUILD_JOBS:
   uv pip install "setuptools>=77.0.3,<81.0.0" "setuptools-scm>=8.0" \
     "cmake>=3.26.1" ninja "packaging>=24.2" wheel jinja2 "grpcio-tools>=1.76.0" \
     pybind11 nixl==0.10.0 \
-    "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git"
+    "deep_ep @ git+{{DEEPEP_REPO}}@{{DEEPEP_BRANCH}}"
 
   # fetch and reset to requested branch
   git remote set-url origin {{REMOTE}}
@@ -466,6 +477,36 @@ dev-build REMOTE=VLLM_DEV_REMOTE BRANCH=VLLM_DEV_BRANCH JOBS=VLLM_BUILD_JOBS:
 # Tail the dev build log
 dev-build-log:
   {{KN}} exec {{DEV_POD_NAME}} -- tail -n 30 -f /mnt/lustre/{{NAME_PREFIX}}/build.log
+
+# Build a DeepEP wheel on the dev pod and save to Lustre
+build-deepep-wheel:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{KN}} exec -i {{DEV_POD_NAME}} -- bash <<'SCRIPT'
+  set -euxo pipefail
+  source {{VLLM_DEV_VENV}}/bin/activate 2>/dev/null || source /opt/vllm/bin/activate
+
+  SRCDIR="/mnt/lustre/{{NAME_PREFIX}}/deepep-src"
+  if [ ! -d "$SRCDIR/.git" ]; then
+    git clone --branch {{DEEPEP_BRANCH}} {{DEEPEP_REPO}} "$SRCDIR"
+  else
+    cd "$SRCDIR"
+    git remote set-url origin {{DEEPEP_REPO}}
+    git fetch origin {{DEEPEP_BRANCH}}
+    git checkout {{DEEPEP_BRANCH}}
+    git reset --hard origin/{{DEEPEP_BRANCH}}
+  fi
+
+  cd "$SRCDIR"
+  echo "Building DeepEP wheel from $(git log -1 --oneline)..."
+  pip wheel --no-deps --no-build-isolation -w /tmp/deepep-wheels .
+
+  mkdir -p {{DEEPEP_WHEEL_DIR}}
+  cp /tmp/deepep-wheels/deep_ep-*.whl {{DEEPEP_WHEEL_DIR}}/
+  rm -rf /tmp/deepep-wheels
+  echo "Wheel saved to {{DEEPEP_WHEEL_DIR}}:"
+  ls -lh {{DEEPEP_WHEEL_DIR}}/deep_ep-*.whl
+  SCRIPT
 
 # Ephemeral pod with the decode image + Lustre for quick checks
 DECODE_IMAGE := "ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091"
@@ -764,7 +805,7 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
     POD_JSON=$({{KN}} get pod "$DECODE_POD" -o json 2>/dev/null || echo "{}")
     MODE=$(echo "$POD_JSON" | jq -r '.metadata.labels["llm-d.ai/deployment"] // "unknown"')
     echo "MODE=$MODE" >> "$OUT_DIR/config.env"
-    for VAR in A2A_BACKEND EPLB_ENABLED EPLB_USE_ASYNC EPLB_STEP_INTERVAL EPLB_NUM_REDUNDANT_EXPERTS EPLB_WINDOW_SIZE EPLB_LOG_BALANCEDNESS EPLB_LOG_BALANCEDNESS_INTERVAL EPLB_COMMUNICATOR EPLB_EXPERT_LOAD_DUMP_DIR PREFIX_CACHING; do
+    for VAR in A2A_BACKEND EPLB_ENABLED EPLB_USE_ASYNC EPLB_STEP_INTERVAL EPLB_NUM_REDUNDANT_EXPERTS EPLB_WINDOW_SIZE EPLB_LOG_BALANCEDNESS EPLB_LOG_BALANCEDNESS_INTERVAL EPLB_COMMUNICATOR EPLB_EXPERT_LOAD_DUMP_DIR PREFIX_CACHING VLLM_USE_V2_MODEL_RUNNER; do
       VAL=$(echo "$POD_JSON" | jq -r --arg var "$VAR" '.spec.containers[] | select(.name=="vllm") | .env[] | select(.name==$var) | .value // empty')
       echo "DECODE_$VAR=$VAL" >> "$OUT_DIR/config.env"
     done
@@ -789,7 +830,7 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
   PREFILL_POD=$({{KN}} get pods -l llm-d.ai/role=prefill,llm-d.ai/owner={{NAME_PREFIX}} -o json 2>/dev/null | jq -r '.items[0].metadata.name // empty' || true)
   if [ -n "$PREFILL_POD" ]; then
     PREFILL_POD_JSON=$({{KN}} get pod "$PREFILL_POD" -o json 2>/dev/null || echo "{}")
-    for VAR in A2A_BACKEND EPLB_ENABLED EPLB_LOG_BALANCEDNESS; do
+    for VAR in A2A_BACKEND EPLB_ENABLED EPLB_LOG_BALANCEDNESS EPLB_COMMUNICATOR VLLM_USE_V2_MODEL_RUNNER; do
       VAL=$(echo "$PREFILL_POD_JSON" | jq -r --arg var "$VAR" '.spec.containers[] | select(.name=="vllm") | .env[] | select(.name==$var) | .value // empty')
       echo "PREFILL_$VAR=$VAL" >> "$OUT_DIR/config.env"
     done
@@ -821,36 +862,53 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
   python3 scripts/collect-prometheus.py "$OUT_DIR" || echo "WARNING: Prometheus collection failed — re-run with: just eplb-collect-prom {{RUN_NAME}}"
   echo "[2/4] Prometheus done."
 
-  # 3. Copy EPLB logs and expert load dumps from Lustre (via a running decode pod)
+  # 3. Copy EPLB logs and expert load dumps from Lustre (via any pod with Lustre access)
   echo "[3/4] Copying EPLB logs from Lustre..."
-  LUSTRE_POD="${DECODE_POD:-}"
+  LUSTRE_POD=$({{KN}} get pod {{NAME_PREFIX}}-vllm-dev -o jsonpath='{.metadata.name}' 2>/dev/null || true)
+  LUSTRE_CTR_FLAG=""
+  if [ -z "$LUSTRE_POD" ]; then
+    LUSTRE_POD="${DECODE_POD:-}"
+    LUSTRE_CTR_FLAG="-c vllm"
+  fi
   if [ -z "$LUSTRE_POD" ]; then
     LUSTRE_POD=$({{KN}} get pods -l llm-d.ai/role=prefill,llm-d.ai/owner={{NAME_PREFIX}} -o json 2>/dev/null | jq -r '.items[0].metadata.name // empty' || true)
+    LUSTRE_CTR_FLAG="-c vllm"
+  fi
+  if [ -n "$LUSTRE_POD" ]; then
+    echo "Using pod $LUSTRE_POD for Lustre access"
   fi
 
   if [ -n "$LUSTRE_POD" ]; then
-    LUSTRE_LOG_DIR="/mnt/lustre/{{NAME_PREFIX}}/logs/decode"
-    LOG_FILES=$({{KN}} exec "$LUSTRE_POD" -c vllm -- bash -c "ls -t ${LUSTRE_LOG_DIR}/*.log 2>/dev/null | head -8" 2>/dev/null || true)
-    for LOG_FILE in $LOG_FILES; do
-      BASENAME=$(basename "$LOG_FILE")
-      {{KN}} cp -c vllm "${LUSTRE_POD}:${LOG_FILE}" "$OUT_DIR/eplb-logs/$BASENAME" 2>/dev/null || echo "Failed to copy $LOG_FILE"
+    LUSTRE_BASE="/mnt/lustre/{{NAME_PREFIX}}/logs"
+    for ROLE in decode prefill; do
+      ROLE_LOG_DIR="${LUSTRE_BASE}/${ROLE}"
+      if {{KN}} exec "$LUSTRE_POD" $LUSTRE_CTR_FLAG -- test -d "$ROLE_LOG_DIR" 2>/dev/null; then
+        mkdir -p "$OUT_DIR/eplb-logs/$ROLE"
+        {{KN}} exec "$LUSTRE_POD" $LUSTRE_CTR_FLAG -- tar cf - -C "$LUSTRE_BASE" "$ROLE" 2>/dev/null \
+          | tar xf - -C "$OUT_DIR/eplb-logs/$ROLE" --strip-components=1 2>/dev/null \
+          || echo "Failed to copy $ROLE logs"
+        FILE_COUNT=$(find "$OUT_DIR/eplb-logs/$ROLE" -name '*.log' 2>/dev/null | wc -l | tr -d ' ')
+        echo "Copied $FILE_COUNT $ROLE log(s)"
+      fi
     done
 
     echo "[4/4] Copying expert load dumps from Lustre..."
     DUMP_BASE=$(echo "$POD_JSON" | jq -r '.spec.containers[] | select(.name=="vllm") | .env[] | select(.name=="EPLB_EXPERT_LOAD_DUMP_DIR") | .value // empty')
     if [ -n "$DUMP_BASE" ]; then
+      DUMP_PARENT=$(dirname "$DUMP_BASE")
+      DUMP_LEAF=$(basename "$DUMP_BASE")
       for ROLE in decode prefill; do
-        DUMP_SUB="${DUMP_BASE}/${ROLE}"
-        if {{KN}} exec "$LUSTRE_POD" -c vllm -- test -d "$DUMP_SUB" 2>/dev/null; then
+        DUMP_SUB="${DUMP_LEAF}/${ROLE}"
+        if {{KN}} exec "$LUSTRE_POD" $LUSTRE_CTR_FLAG -- test -d "${DUMP_PARENT}/${DUMP_SUB}" 2>/dev/null; then
           mkdir -p "$OUT_DIR/expert-load/$ROLE"
-          {{KN}} exec "$LUSTRE_POD" -c vllm -- tar cf - "$DUMP_SUB" 2>/dev/null \
-            | tar xf - -C "$OUT_DIR/expert-load/$ROLE" --strip-components=$(echo "$DUMP_SUB" | tr -cd '/' | wc -c) 2>/dev/null \
+          {{KN}} exec "$LUSTRE_POD" $LUSTRE_CTR_FLAG -- tar cf - -C "$DUMP_PARENT" "$DUMP_SUB" 2>/dev/null \
+            | tar xf - -C "$OUT_DIR/expert-load/$ROLE" --strip-components=2 2>/dev/null \
             || echo "Failed to copy $DUMP_SUB"
-          FILE_COUNT=$(find "$OUT_DIR/expert-load/$ROLE" -name '*.json' 2>/dev/null | wc -l || echo 0)
+          FILE_COUNT=$(find "$OUT_DIR/expert-load/$ROLE" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
           echo "Copied $FILE_COUNT $ROLE expert load dump(s)"
         fi
       done
-      TOTAL=$(find "$OUT_DIR/expert-load" -name '*.json' 2>/dev/null | wc -l || echo 0)
+      TOTAL=$(find "$OUT_DIR/expert-load" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
       if [ "$TOTAL" -eq 0 ]; then
         echo "No expert load dumps found under $DUMP_BASE/{decode,prefill}"
       fi
@@ -865,7 +923,7 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
   echo "=== Done. Results collected in $OUT_DIR/ ==="
   echo "  config.env       - deployment configuration"
   echo "  prometheus.json   - Prometheus metric snapshots"
-  echo "  eplb-logs/        - decode pod logs from Lustre"
+  echo "  eplb-logs/        - decode + prefill pod logs from Lustre"
   echo "  expert-load/      - expert load balance snapshots (JSON)"
 
 # Re-collect Prometheus metrics for an existing run (reads timestamps from config.env)

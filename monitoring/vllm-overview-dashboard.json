@@ -3104,7 +3104,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(nyann_eval_correct[5m]) / rate(nyann_eval_total[5m])",
+          "expr": "rate(nyann_eval_correct{pod=~\"${owner}-.*\"}[5m]) / rate(nyann_eval_total{pod=~\"${owner}-.*\"}[5m])",
           "instant": false,
           "legendFormat": "{{workload}} ({{pod}})",
           "range": true,
@@ -3233,7 +3233,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (workload) (rate(nyann_eval_correct[10s]))",
+          "expr": "sum by (workload) (rate(nyann_eval_correct{pod=~\"${owner}-.*\"}[10s]))",
           "instant": false,
           "legendFormat": "{{workload}} correct",
           "range": true,
@@ -3245,7 +3245,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum by (workload) (rate(nyann_eval_incorrect[10s]))",
+          "expr": "sum by (workload) (rate(nyann_eval_incorrect{pod=~\"${owner}-.*\"}[10s]))",
           "instant": false,
           "legendFormat": "{{workload}} incorrect",
           "range": true,
@@ -3344,7 +3344,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(nyann_requests_total[10s]))",
+          "expr": "sum(rate(nyann_requests_total{pod=~\"${owner}-.*\"}[10s]))",
           "instant": false,
           "legendFormat": "total req/s",
           "range": true,
@@ -3356,7 +3356,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(nyann_requests_total{status=\"error\"}[10s]))",
+          "expr": "sum(rate(nyann_requests_total{pod=~\"${owner}-.*\", status=\"error\"}[10s]))",
           "instant": false,
           "legendFormat": "errors/s",
           "range": true,
@@ -3457,7 +3457,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(nyann_ttft_seconds_bucket[10s])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(nyann_ttft_seconds_bucket{pod=~\"${owner}-.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -3469,7 +3469,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(nyann_ttft_seconds_bucket[10s])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(nyann_ttft_seconds_bucket{pod=~\"${owner}-.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -3481,7 +3481,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(nyann_ttft_seconds_bucket[10s])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(nyann_ttft_seconds_bucket{pod=~\"${owner}-.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -3582,7 +3582,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(nyann_itl_seconds_bucket[10s])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(nyann_itl_seconds_bucket{pod=~\"${owner}-.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -3594,7 +3594,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(nyann_itl_seconds_bucket[10s])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(nyann_itl_seconds_bucket{pod=~\"${owner}-.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -3606,7 +3606,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(nyann_itl_seconds_bucket[10s])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(nyann_itl_seconds_bucket{pod=~\"${owner}-.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -3704,7 +3704,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(nyann_concurrency)",
+          "expr": "sum(nyann_concurrency{pod=~\"${owner}-.*\"})",
           "instant": false,
           "legendFormat": "total concurrency",
           "range": true,
@@ -3716,7 +3716,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "nyann_concurrency",
+          "expr": "nyann_concurrency{pod=~\"${owner}-.*\"}",
           "instant": false,
           "legendFormat": "{{pod}}",
           "range": true,
@@ -5322,6 +5322,28 @@
         },
         "refresh": 2,
         "regex": "/^(.*?)-(prefill|decode)-.*$/",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(vllm:num_requests_running, pod)",
+        "hide": 2,
+        "includeAll": true,
+        "label": "Owner",
+        "name": "owner",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(vllm:num_requests_running, pod)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "/^(.*?)-wide-ep-(prefill|decode)-.*$/",
         "sort": 1,
         "type": "query"
       }

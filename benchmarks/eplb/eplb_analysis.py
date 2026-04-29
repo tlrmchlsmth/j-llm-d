@@ -191,7 +191,14 @@ class RunConfig:
     @property
     def label(self) -> str:
         """Short human-readable label for plots."""
-        return f"{self.mode}/{self.eplb_mode}"
+        base = f"{self.mode}/{self.eplb_mode}"
+        if self.communicator and self.communicator != "nixl":
+            base += f" [{self.communicator}]"
+        return base
+
+    @property
+    def communicator(self) -> str:
+        return self.raw.get("DECODE_EPLB_COMMUNICATOR", "nixl")
 
     @property
     def decode_log_balancedness(self) -> bool:
@@ -214,7 +221,10 @@ class RunConfig:
                 log_bal_off.append("prefill")
             if log_bal_off:
                 eplb_part += f" log_bal=off({'+'.join(log_bal_off)})"
-        return f"{self.mode} | {eplb_part} | {self.topology_str}"
+        comm_part = ""
+        if self.communicator and self.communicator != "nixl":
+            comm_part = f" | comm={self.communicator}"
+        return f"{self.mode} | {eplb_part} | {self.topology_str}{comm_part}"
 
     def __repr__(self) -> str:
         parts = [
@@ -371,6 +381,11 @@ class ExpertLoadData:
     @property
     def steps(self) -> list[int]:
         return [s["step"] for s in self.data["snapshots"]]
+
+    def closest_snapshot_idx(self, step: int) -> int:
+        """Return the index of the snapshot whose step is closest to *step*."""
+        all_steps = self.steps
+        return int(np.argmin([abs(s - step) for s in all_steps]))
 
     def balancedness_series(self) -> pd.DataFrame:
         """Compute per-snapshot balancedness (mean and worst layer)."""
@@ -600,8 +615,11 @@ def balancedness_comparison_table(
             bal = expert.balancedness_series()
             if bal.empty:
                 continue
+            role = model_key.split("/")[0] if "/" in model_key else None
+            label = f"{name} ({role})" if role else name
             rows.append({
-                "run": name,
+                "run": label,
+                "role": role or "unknown",
                 "eplb": run.config.eplb_mode,
                 "model": expert.model,
                 "snapshots": expert.num_snapshots,
@@ -921,20 +939,31 @@ def plot_kv_cache_usage(
 def plot_balancedness_comparison(
     runs: dict[str, RunData],
     title: str = "Balancedness Comparison",
+    snapshot_idx: int = -1,
+    show_heatmaps: bool = True,
 ):
-    """Overlay balancedness over time for all runs that have expert load data."""
+    """Overlay balancedness over time for all runs that have expert load data.
+
+    When *show_heatmaps* is True (default), an additional figure is produced
+    with one expert-load heatmap per run/role (final snapshot by default).
+    """
+    # --- time-series plot ---
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle(title, fontsize=11)
 
+    entries: list[tuple[str, ExpertLoadData]] = []
     for name, run in runs.items():
-        for _model_key, expert in run.expert_loads.items():
+        for model_key, expert in run.expert_loads.items():
             bal = expert.balancedness_series()
             if bal.empty:
                 continue
+            role = model_key.split("/")[0] if "/" in model_key else None
+            label = f"{name} ({role})" if role else name
             axes[0].plot(bal["step"], bal["mean_balancedness"],
-                         marker="o", markersize=2, label=name, alpha=0.8)
+                         marker="o", markersize=2, label=label, alpha=0.8)
             axes[1].plot(bal["step"], bal["worst_balancedness"],
-                         marker="s", markersize=2, label=name, alpha=0.8)
+                         marker="s", markersize=2, label=label, alpha=0.8)
+            entries.append((label, expert))
 
     for ax, ylabel, sub_title in [
         (axes[0], "Mean Balancedness", "Mean (across layers)"),
@@ -947,6 +976,99 @@ def plot_balancedness_comparison(
         ax.axhline(y=1.0, color="green", linestyle="--", alpha=0.4)
         ax.legend(fontsize=8)
         ax.grid(alpha=0.3)
+    plt.tight_layout()
+
+    # --- heatmap grid ---
+    if show_heatmaps and entries:
+        n = len(entries)
+        fig_h, axes_h = plt.subplots(
+            n, 1,
+            figsize=(max(14, entries[0][1].num_physical * 0.06), max(4, entries[0][1].num_layers * 0.12) * n),
+            squeeze=False,
+        )
+        fig_h.suptitle(f"{title} — Expert Load Heatmaps", fontsize=11)
+        for i, (label, expert) in enumerate(entries):
+            plot_expert_load_heatmap(
+                expert, snapshot_idx=snapshot_idx,
+                title_suffix=f"  [{label}]", ax=axes_h[i, 0],
+            )
+        plt.tight_layout()
+
+
+def plot_rank_balance_at_steps(
+    run: RunData,
+    role: str = "decode",
+    steps: list[int] | None = None,
+):
+    """Show per-rank load heatmap + per-layer balancedness for a run at given steps.
+
+    Args:
+        run: A loaded RunData object.
+        role: ``"decode"`` or ``"prefill"`` (matches the key prefix in
+              ``run.expert_loads``). Falls back to the first available entry
+              when there are no subdirectory-keyed loads.
+        steps: Step numbers to visualize.  The closest available snapshot is
+               used for each.  ``None`` defaults to ``[first, last]``.
+    """
+    expert = None
+    for key, val in run.expert_loads.items():
+        if key.startswith(f"{role}/") or (role in key):
+            expert = val
+            break
+    if expert is None:
+        candidates = list(run.expert_loads.keys())
+        if not candidates:
+            print(f"No expert load data in run '{run.name}'")
+            return
+        expert = run.expert_loads[candidates[0]]
+        print(f"Role '{role}' not found, falling back to '{candidates[0]}'")
+
+    if steps is None:
+        all_steps = expert.steps
+        steps = [all_steps[0], all_steps[-1]]
+
+    n = len(steps)
+    fig, axes = plt.subplots(
+        n, 2,
+        figsize=(16, max(4, expert.num_layers * 0.1) * n),
+        squeeze=False,
+    )
+    fig.suptitle(
+        f"{run.name} — {role}  |  {expert.model}  |  EP={expert.world_size}",
+        fontsize=11,
+    )
+
+    for row, target_step in enumerate(steps):
+        idx = expert.closest_snapshot_idx(target_step)
+        snap, load, _ = expert.snapshot(idx)
+        actual_step = snap["step"]
+        rank_load = load.reshape(
+            expert.num_layers, expert.world_size, expert.experts_per_rank
+        ).sum(axis=2)
+
+        im = axes[row, 0].imshow(
+            rank_load, aspect="auto", interpolation="nearest", cmap="YlOrRd",
+        )
+        axes[row, 0].set_xlabel("Rank")
+        axes[row, 0].set_ylabel("Layer")
+        axes[row, 0].set_title(f"Rank Load  (step {actual_step})")
+        fig.colorbar(im, ax=axes[row, 0], label="Tokens", shrink=0.8)
+
+        mean_load = rank_load.mean(axis=1)
+        max_load = rank_load.max(axis=1)
+        bal = np.where(max_load > 0, mean_load / max_load, 0.0)
+        layers = np.arange(expert.num_layers)
+        axes[row, 1].barh(layers, bal, color="steelblue")
+        axes[row, 1].set_xlabel("Balancedness (mean / max)")
+        axes[row, 1].set_ylabel("Layer")
+        axes[row, 1].set_title(
+            f"Per-Layer Balance  (step {actual_step})  "
+            f"avg={bal.mean():.3f}  worst={bal.min():.3f}@L{int(bal.argmin())}"
+        )
+        axes[row, 1].set_xlim(0, 1.05)
+        axes[row, 1].axvline(x=1.0, color="green", linestyle="--", alpha=0.5)
+        axes[row, 1].invert_yaxis()
+
     plt.tight_layout()
 
 

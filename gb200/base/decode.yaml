@@ -347,9 +347,6 @@ spec:
               - name: TP_SIZE
                 value: "1"
 
-              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
-                value: "1"
-
               # DeepEP LL sgl fork allocates two buffers, only one of which is required for MNNVL.
               # Wasted 1Gb per rank by default, otherwise.
               - name: VLLM_DEEPEP_BUFFER_SIZE_MB

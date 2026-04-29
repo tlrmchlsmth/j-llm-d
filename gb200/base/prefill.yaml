@@ -120,6 +120,7 @@ spec:
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
                     --gpu-memory-utilization 0.85 \
                     --all2all-backend "deepep_high_throughput" \
+                    --disable_cascade_attn \
                     --api-server-count 4 \
                     --async-scheduling \
                     --kv-cache-dtype fp8 \

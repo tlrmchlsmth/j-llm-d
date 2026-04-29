@@ -20,16 +20,18 @@ spec:
     runAsGroup: 0
   containers:
     - name: dev
-      image: quay.io/tms/vllm-dev:ef2c4f7
+      image: quay.io/tms/vllm-dev:deepep-v2
       imagePullPolicy: Always
       command: ["sleep", "infinity"]
       resources:
         requests:
           cpu: "32"
           memory: 512Gi
+          nvidia.com/gpu: "2"
         limits:
           cpu: "32"
           memory: 512Gi
+          nvidia.com/gpu: "2"
       env:
         - name: HF_TOKEN
           valueFrom:

@@ -1,0 +1,112 @@
+FROM nvidia/cuda:13.0.2-devel-ubuntu22.04
+
+ARG PYTHON_VERSION=3.12
+ARG NVSHMEM_VER=3.3.24
+
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /workspace
+
+# System dependencies (mirrors upstream vLLM base stage)
+RUN apt-get update -y \
+    && apt-get install -y --no-install-recommends \
+        ccache \
+        software-properties-common \
+        git \
+        curl \
+        sudo \
+        wget \
+        libibverbs-dev \
+        libnuma-dev \
+        numactl \
+        gcc-10 \
+        g++-10 \
+        zsh \
+        tmux \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 110 \
+        --slave /usr/bin/g++ g++ /usr/bin/g++-10 \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update -y \
+    && apt-get install -y --no-install-recommends \
+        python${PYTHON_VERSION} \
+        python${PYTHON_VERSION}-dev \
+        python${PYTHON_VERSION}-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && $HOME/.local/bin/uv venv /opt/venv --python ${PYTHON_VERSION} --seed \
+    && rm -f /usr/bin/python3 /usr/bin/python3-config /usr/bin/pip \
+    && ln -s /opt/venv/bin/python3 /usr/bin/python3 \
+    && ln -s /opt/venv/bin/python3-config /usr/bin/python3-config \
+    && ln -s /opt/venv/bin/pip /usr/bin/pip \
+    && python3 --version
+
+ENV PATH="/opt/venv/bin:/root/.local/bin:$PATH"
+ENV VIRTUAL_ENV="/opt/venv"
+ENV UV_HTTP_TIMEOUT=500
+ENV UV_INDEX_STRATEGY="unsafe-best-match"
+ENV UV_LINK_MODE=copy
+
+# Clone vLLM to get requirements files
+RUN git clone --depth 1 --branch deepep-v2-integration \
+        https://github.com/tlrmchlsmth/vllm.git /opt/vllm
+
+# PyTorch (separate layer to stay under registry size limits)
+RUN uv pip install torch==2.11.0 torchaudio==2.11.0 torchvision==0.26.0 \
+        --extra-index-url https://download.pytorch.org/whl/cu130
+
+# Remaining vLLM Python deps
+RUN uv pip install \
+        -r /opt/vllm/requirements/cuda.txt \
+        --extra-index-url https://download.pytorch.org/whl/cu130
+
+# NVSHMEM (download only — needed at DeepEP build time on-cluster)
+RUN ARCH=$(uname -m) \
+    && case "${ARCH}" in \
+        x86_64|amd64) NVSHMEM_SUBDIR="linux-x86_64" ;; \
+        aarch64|arm64) NVSHMEM_SUBDIR="linux-sbsa" ;; \
+        *) echo "Unsupported arch: ${ARCH}" >&2; exit 1 ;; \
+    esac \
+    && NVSHMEM_FILE="libnvshmem-${NVSHMEM_SUBDIR}-${NVSHMEM_VER}_cuda13-archive.tar.xz" \
+    && NVSHMEM_URL="https://developer.download.nvidia.com/compute/nvshmem/redist/libnvshmem/${NVSHMEM_SUBDIR}/${NVSHMEM_FILE}" \
+    && mkdir -p /opt/nvshmem \
+    && wget -q "${NVSHMEM_URL}" -O /tmp/nvshmem.tar.xz \
+    && tar -xf /tmp/nvshmem.tar.xz --strip-components=1 -C /opt/nvshmem \
+    && rm /tmp/nvshmem.tar.xz \
+    && rm -rf /opt/nvshmem/lib/bin /opt/nvshmem/lib/share
+ENV NVSHMEM_DIR=/opt/nvshmem
+
+# DeepEP v2 (clone source — actual build happens on GPU node)
+RUN git clone --branch epv2-release \
+        https://github.com/deepseek-ai/DeepEP.git /opt/DeepEP_v2
+
+# vLLM editable install (Python-only, C++ extensions from precompiled wheel)
+# Pin the precompiled wheel commit to the branch's merge-base with main
+# so it works with --depth 1 shallow clone
+RUN cd /opt/vllm \
+    && VLLM_USE_PRECOMPILED=1 \
+       VLLM_PRECOMPILED_WHEEL_COMMIT=c8bbe05189babd69312876c1dcdc80912207e154 \
+       uv pip install -e . \
+        --extra-index-url https://download.pytorch.org/whl/cu130
+
+# Dev/test deps (minimal — just what we need for MoE EP tests)
+RUN uv pip install pytest pytest-asyncio pytest-forked \
+        --extra-index-url https://download.pytorch.org/whl/cu130
+
+# NIXL for KV transfer connectors
+RUN uv pip install nixl-cu13
+
+# NCCL 2.30.4+ (required by DeepEP v2)
+# Must be installed LAST to avoid being downgraded by vLLM/NIXL deps
+RUN uv pip install "nvidia-nccl-cu13>=2.30.4" --no-deps
+
+# ccache: disable hash_dir (uv builds in random temp dirs, causes 100% miss)
+RUN echo "hash_dir = false" > /etc/ccache.conf
+
+# Dotfiles (zsh, tmux, neovim, fzf)
+RUN git clone https://github.com/tlrmchlsmth/dotfiles /root/.dotfiles \
+    && cd /root/.dotfiles && bash install.sh
+
+ENV TORCH_CUDA_ARCH_LIST="9.0a;10.0+PTX" \
+    CMAKE_CXX_COMPILER_LAUNCHER=ccache \
+    CMAKE_C_COMPILER_LAUNCHER=ccache
+
+CMD ["sleep", "infinity"]

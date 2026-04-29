@@ -239,7 +239,7 @@ spec:
 
             env:
               - name: VLLM_USE_V2_MODEL_RUNNER
-                value: "1"
+                value: "0"
 
               - name: VLLM_NO_USAGE_STATS
                 value: "1"

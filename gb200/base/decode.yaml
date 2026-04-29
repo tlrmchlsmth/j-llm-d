@@ -286,6 +286,11 @@ spec:
               - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"
 
+              # DeepEP LL sgl fork allocates two buffers, only one of which is required for MNNVL.
+              # Wasted 1Gb per rank by default, otherwise.
+              - name: VLLM_DEEPEP_BUFFER_SIZE_MB
+                value: "0"
+
               # Common vLLM settings
               - name: TRITON_LIBCUDA_PATH
                 value: /usr/lib64

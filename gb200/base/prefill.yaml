@@ -119,7 +119,7 @@ spec:
                     --trust-remote-code \
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
                     --gpu-memory-utilization 0.85 \
-                    --all2all-backend "flashinfer_nvlink_one_sided" \
+                    --all2all-backend "deepep_high_throughput" \
                     --disable_cascade_attn \
                     --api-server-count 4 \
                     --async-scheduling \
@@ -143,10 +143,6 @@ spec:
             env:
               - name: VLLM_USE_V2_MODEL_RUNNER
                 value: "0"
-              #- name: VLLM_NAN_DETECT
-              #  value: "1"
-              #- name: VLLM_ATTENTION_NAN_DETECT
-              #  value: "1"
 
               - name: VLLM_NO_USAGE_STATS
                 value: "1"
@@ -182,6 +178,9 @@ spec:
                 value: "1"
 
               - name: VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE
+                value: "1"
+
+              - name: VLLM_USE_DEEP_GEMM
                 value: "1"
 
               # Common vLLM settings

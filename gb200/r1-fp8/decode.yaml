@@ -151,6 +151,7 @@ spec:
                 fi
 
                 uv pip install --upgrade mistral_common
+                uv pip install --no-build-isolation -e /opt/DeepEP_v2
 
                 # Derive batch-size-dependent env vars from MAX_TOKENS
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS

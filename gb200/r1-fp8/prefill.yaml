@@ -84,6 +84,7 @@ spec:
                 fi
 
                 uv pip install --upgrade mistral_common
+                uv pip install --no-build-isolation -e /opt/DeepEP_v2
 
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))

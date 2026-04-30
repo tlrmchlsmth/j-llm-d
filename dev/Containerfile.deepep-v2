@@ -1,4 +1,4 @@
-FROM nvidia/cuda:13.0.2-devel-ubuntu22.04
+FROM docker.io/nvidia/cuda:13.0.2-devel-ubuntu22.04
 
 ARG PYTHON_VERSION=3.12
 ARG NVSHMEM_VER=3.3.24
@@ -74,7 +74,7 @@ RUN ARCH=$(uname -m) \
     && rm -rf /opt/nvshmem/lib/bin /opt/nvshmem/lib/share
 ENV NVSHMEM_DIR=/opt/nvshmem
 
-# DeepEP v2 (clone source — actual build happens on GPU node)
+# DeepEP v2 (installed on-pod at startup — needs GPU for CUDA kernel compilation)
 RUN git clone --branch epv2-release \
         https://github.com/deepseek-ai/DeepEP.git /opt/DeepEP_v2
 
@@ -97,6 +97,10 @@ RUN uv pip install nixl-cu13
 # NCCL 2.30.4+ (required by DeepEP v2)
 # Must be installed LAST to avoid being downgraded by vLLM/NIXL deps
 RUN uv pip install "nvidia-nccl-cu13>=2.30.4" --no-deps
+
+# DeepEP v2 editable install (CUDA kernels JIT-compile on first use at runtime)
+RUN EP_NCCL_ROOT_DIR=/opt/venv/lib/python3.12/site-packages/nvidia/nccl \
+    uv pip install --no-build-isolation -e /opt/DeepEP_v2
 
 # ccache: disable hash_dir (uv builds in random temp dirs, causes 100% miss)
 RUN echo "hash_dir = false" > /etc/ccache.conf

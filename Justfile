@@ -171,6 +171,27 @@ apply-infpool-dr:
   envsubst '${DEPLOY_NAME} ${INFPOOL_IP_SVC}' < {{GB200_DIR}}/infpool-backend-dr.yaml | {{KN}} apply -f -
   echo "DestinationRule applied for $INFPOOL_IP_SVC"
 
+DEEPEP_V2_IMAGE := "quay.io/rh-ee-ecrncevi/deepep-v2"
+DEEPEP_V2_VLLM_REPO := "https://github.com/tlrmchlsmth/vllm.git"
+DEEPEP_V2_VLLM_BRANCH := "deepep-v2-integration"
+
+# Build and push the DeepEP v2 dev image, tagged with the vLLM commit hash
+build-deepep-v2:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  VLLM_HASH=$(git ls-remote "{{DEEPEP_V2_VLLM_REPO}}" "refs/heads/{{DEEPEP_V2_VLLM_BRANCH}}" | awk '{print $1}')
+  if [ -z "$VLLM_HASH" ]; then
+    echo "ERROR: could not resolve {{DEEPEP_V2_VLLM_BRANCH}} on {{DEEPEP_V2_VLLM_REPO}}" >&2
+    exit 1
+  fi
+  TAG="{{DEEPEP_V2_IMAGE}}:${VLLM_HASH}"
+  LATEST="{{DEEPEP_V2_IMAGE}}:latest"
+  echo "Building $TAG"
+  podman build -f dev/Containerfile.deepep-v2 -t "$TAG" -t "$LATEST" dev/
+  podman push "$TAG"
+  podman push "$LATEST"
+  echo "Pushed $TAG + $LATEST"
+
 VLLM_DEV_VENV := "/mnt/lustre/" + NAME_PREFIX + "/vllm-venv"
 VLLM_DEV_SRC := "/mnt/lustre/" + NAME_PREFIX + "/vllm-dev"
 VLLM_DEV_REMOTE := "https://github.com/vllm-project/vllm.git"
@@ -210,6 +231,8 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
   envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/gateway.yaml | {{KN}} apply -f -
   if [ "{{MODE}}" = "pd" ]; then
     just deploy_inferencepool pd
+  elif [ "{{MODE}}" = "r1-fp8-pd" ]; then
+    just deploy_inferencepool r1-fp8-pd
   elif [ "{{MODE}}" = "agg" ]; then
     if [ "{{ROUTING}}" = "load-aware" ]; then
       just deploy_inferencepool agg
@@ -323,9 +346,9 @@ logs-clean ROLE='decode' KEEP='5':
 update-dev-env:
   kubectl exec tms-vllm-dev -- bash -c "cd /mnt/lustre/tms/vllm-dev && git fetch tms && git reset --hard tms/cutedsl-moe-nvfp4 && find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null"
 
-# Deploy the persistent dev pod (CPU-only, for editing/compiling vLLM on Lustre)
+# Deploy the persistent dev pod (GPU, for building/testing DeepEP v2)
 dev-start:
-  envsubst < {{DEV_DIR}}/dev-pod.yaml | {{KN}} apply -f -
+  DEEPEP_V2_IMAGE="{{DEEPEP_V2_IMAGE}}" envsubst < {{DEV_DIR}}/dev-pod.yaml | {{KN}} apply -f -
   {{KN}} wait --for=condition=Ready pod/{{DEV_POD_NAME}} --timeout=300s
 
 # Exec into the dev pod

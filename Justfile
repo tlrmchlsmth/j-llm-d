@@ -171,6 +171,25 @@ apply-infpool-dr:
   envsubst '${DEPLOY_NAME} ${INFPOOL_IP_SVC}' < {{GB200_DIR}}/infpool-backend-dr.yaml | {{KN}} apply -f -
   echo "DestinationRule applied for $INFPOOL_IP_SVC"
 
+DEEPEP_V2_IMAGE := "quay.io/rh-ee-ecrncevi/deepep-v2"
+DEEPEP_V2_VLLM_REPO := "https://github.com/tlrmchlsmth/vllm.git"
+DEEPEP_V2_VLLM_BRANCH := "deepep-v2-integration"
+
+# Build and push the DeepEP v2 dev image, tagged with the vLLM commit hash
+build-deepep-v2:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  VLLM_HASH=$(git ls-remote "{{DEEPEP_V2_VLLM_REPO}}" "refs/heads/{{DEEPEP_V2_VLLM_BRANCH}}" | awk '{print $1}')
+  if [ -z "$VLLM_HASH" ]; then
+    echo "ERROR: could not resolve {{DEEPEP_V2_VLLM_BRANCH}} on {{DEEPEP_V2_VLLM_REPO}}" >&2
+    exit 1
+  fi
+  TAG="{{DEEPEP_V2_IMAGE}}:${VLLM_HASH}"
+  echo "Building $TAG"
+  podman build -f dev/Containerfile.deepep-v2 -t "$TAG" dev/
+  podman push "$TAG"
+  echo "Pushed $TAG"
+
 VLLM_DEV_VENV := "/mnt/lustre/" + NAME_PREFIX + "/vllm-venv"
 VLLM_DEV_SRC := "/mnt/lustre/" + NAME_PREFIX + "/vllm-dev"
 VLLM_DEV_REMOTE := "https://github.com/vllm-project/vllm.git"

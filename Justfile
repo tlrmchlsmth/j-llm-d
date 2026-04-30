@@ -231,6 +231,8 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
   envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/gateway.yaml | {{KN}} apply -f -
   if [ "{{MODE}}" = "pd" ]; then
     just deploy_inferencepool pd
+  elif [ "{{MODE}}" = "r1-fp8-pd" ]; then
+    just deploy_inferencepool r1-fp8-pd
   elif [ "{{MODE}}" = "agg" ]; then
     if [ "{{ROUTING}}" = "load-aware" ]; then
       just deploy_inferencepool agg

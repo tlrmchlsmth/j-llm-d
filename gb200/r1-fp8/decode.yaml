@@ -4,7 +4,7 @@ metadata:
   name: wide-ep-decode
   labels:
     llm-d.ai/inferenceServing: "true"
-    llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+    llm-d.ai/model: DeepSeek-R1-0528
     llm-d.ai/role: decode
 spec:
   replicas: 1
@@ -19,7 +19,7 @@ spec:
         labels:
           llm-d.ai/deploy-ts: DEPLOY_TS_PLACEHOLDER
           llm-d.ai/inferenceServing: "true"
-          llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+          llm-d.ai/model: DeepSeek-R1-0528
           llm-d.ai/owner: OWNER_PLACEHOLDER
           llm-d.ai/role: decode
       spec:
@@ -147,7 +147,7 @@ spec:
                   echo "Using dev venv at ${VLLM_DEV_VENV}"
                   source "${VLLM_DEV_VENV}/bin/activate"
                 else
-                  source /opt/vllm/bin/activate
+                  source /opt/venv/bin/activate
                 fi
 
                 uv pip install --upgrade mistral_common
@@ -186,7 +186,7 @@ spec:
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
                   CUDA_VISIBLE_DEVICES=$GPUS $NSYS_PREFIX vllm serve $PROFILER_ARGS \
-                    nvidia/DeepSeek-R1-0528-NVFP4-v2 \
+                    deepseek-ai/DeepSeek-R1-0528 \
                     --disable-uvicorn-access-log \
                     --port $((8200 + R)) \
                     --tensor-parallel-size $TP_SIZE \
@@ -203,7 +203,7 @@ spec:
                     --max-num-seqs $MAX_TOKENS \
                     --disable_cascade_attn \
                     --max-cudagraph-capture-size $MAX_TOKENS \
-                    --all2all-backend "flashinfer_nvlink_one_sided" \
+                    --all2all-backend "deepep_v2" \
                     --async-scheduling \
                     --api-server-count 4 \
                     --enable-eplb \
@@ -250,12 +250,6 @@ spec:
               - name: VLLM_DEV_VENV
                 value: VLLM_DEV_VENV_PLACEHOLDER
 
-              # DeepEP low-latency only: NVFP4 dispatch + masked_gemm
-              #- name: VLLM_DEEPEPLL_NVFP4_DISPATCH
-              #  value: "1"
-              #- name: VLLM_FLASHINFER_MOE_BACKEND
-              #  value: "masked_gemm"
-
               - name: MAX_TOKENS
                 value: "1024"
 
@@ -281,9 +275,6 @@ spec:
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
-                value: "1"
-
-              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"
 
               # Common vLLM settings

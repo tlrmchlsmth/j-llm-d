@@ -74,9 +74,10 @@ RUN ARCH=$(uname -m) \
     && rm -rf /opt/nvshmem/lib/bin /opt/nvshmem/lib/share
 ENV NVSHMEM_DIR=/opt/nvshmem
 
-# DeepEP v2 (clone source — actual build happens on GPU node)
+# DeepEP v2 (CUDA kernels JIT-compile on first use)
 RUN git clone --branch epv2-release \
         https://github.com/deepseek-ai/DeepEP.git /opt/DeepEP_v2
+RUN uv pip install --no-build-isolation -e /opt/DeepEP_v2
 
 # vLLM editable install (Python-only, C++ extensions from precompiled wheel)
 # Pin the precompiled wheel commit to the branch's merge-base with main

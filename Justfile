@@ -187,7 +187,7 @@ build-deepep-v2:
   TAG="{{DEEPEP_V2_IMAGE}}:${VLLM_HASH}"
   echo "Building $TAG"
   podman build -f dev/Containerfile.deepep-v2 -t "$TAG" dev/
-  podman push "$TAG"
+  podman push --compression-format=zstd:chunked "$TAG"
   echo "Pushed $TAG"
 
 VLLM_DEV_VENV := "/mnt/lustre/" + NAME_PREFIX + "/vllm-venv"

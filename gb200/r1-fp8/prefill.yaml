@@ -7,13 +7,13 @@ metadata:
     llm-d.ai/model: DeepSeek-R1-0528
     llm-d.ai/role: prefill
 spec:
-  replicas: 2
+  replicas: 1
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 1
+    size: 2
     workerTemplate:
       metadata:
         labels:
@@ -84,6 +84,9 @@ spec:
                 fi
 
                 uv pip install --upgrade mistral_common
+                uv pip install nixl-cu13
+                uv pip install "nvidia-nccl-cu13>=2.30.4" --no-deps
+                ln -sf /opt/venv/lib/python3.12/site-packages/nixl_cu13 /opt/venv/lib/python3.12/site-packages/nixl
 
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))
@@ -118,12 +121,13 @@ spec:
                     $DP_FLAGS $RANK_FLAGS \
                     --trust-remote-code \
                     --kv_transfer_config "$KV_TRANSFER_CONFIG" \
-                    --gpu-memory-utilization 0.85 \
+                    --gpu-memory-utilization 0.75 \
                     --all2all-backend "deepep_v2" \
                     --disable_cascade_attn \
                     --api-server-count 4 \
                     --async-scheduling \
                     --kv-cache-dtype fp8 \
+                    --enforce-eager \
                     --enable-force-include-usage &
                 done
 
@@ -147,6 +151,9 @@ spec:
               #  value: "1"
               #- name: VLLM_ATTENTION_NAN_DETECT
               #  value: "1"
+
+              - name: EP_BUFFER_DEBUG
+                value: "1"
 
               - name: VLLM_NO_USAGE_STATS
                 value: "1"

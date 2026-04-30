@@ -151,6 +151,9 @@ spec:
                 fi
 
                 uv pip install --upgrade mistral_common
+                uv pip install nixl-cu13
+                uv pip install "nvidia-nccl-cu13>=2.30.4" --no-deps
+                ln -sf /opt/venv/lib/python3.12/site-packages/nixl_cu13 /opt/venv/lib/python3.12/site-packages/nixl
 
                 # Derive batch-size-dependent env vars from MAX_TOKENS
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
@@ -204,6 +207,7 @@ spec:
                     --disable_cascade_attn \
                     --max-cudagraph-capture-size $MAX_TOKENS \
                     --all2all-backend "deepep_v2" \
+                    --enforce-eager \
                     --async-scheduling \
                     --api-server-count 4 \
                     --enable-eplb \
@@ -239,6 +243,9 @@ spec:
 
             env:
               - name: VLLM_USE_V2_MODEL_RUNNER
+                value: "1"
+
+              - name: EP_BUFFER_DEBUG
                 value: "1"
 
               - name: VLLM_NO_USAGE_STATS

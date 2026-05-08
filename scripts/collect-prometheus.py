@@ -84,8 +84,41 @@ def hq(quantile: float, metric: str, pod_sel: str, rate_win: str = RATE_WIN) -> 
     return f'histogram_quantile({quantile}, sum(rate({metric}{pod_sel}[{rate_win}])) by (le))'
 
 
-def build_instant_defs(p: str) -> list[tuple[str, str]]:
-    """Return (key, promql) pairs for instant queries."""
+def hq_by_rank(quantile: float, metric: str, pod_sel: str, rate_win: str = RATE_WIN) -> str:
+    return (f'histogram_quantile({quantile}, '
+            f'sum(rate({metric}{pod_sel}[{rate_win}])) by (le, pod, rank))')
+
+
+def build_per_rank_range_defs(p: str) -> list[tuple[str, str]]:
+    """Per-pod/rank range queries for load-vs-latency correlation.
+
+    Returns time series grouped by (pod, rank) so values can be aligned
+    to any expert-load dump step via its timestamp.
+    """
+    defs = []
+    for prefix, metric in [
+        ("e2e", "vllm:e2e_request_latency_seconds_bucket"),
+        ("decode_time", "vllm:request_decode_time_seconds_bucket"),
+        ("itl", "vllm:inter_token_latency_seconds_bucket"),
+    ]:
+        for pct in ["0.5", "0.99"]:
+            label = {"0.5": "p50", "0.99": "p99"}[pct]
+            defs.append((f"per_rank_{prefix}_{label}_range",
+                         hq_by_rank(float(pct), metric, p)))
+    defs.append((
+        "per_rank_gen_tokens_per_sec_range",
+        f"sum(rate(vllm:generation_tokens_total{p}[{RATE_WIN}])) by (pod, rank)",
+    ))
+    return defs
+
+
+def build_instant_defs(p: str, rate_win: str = RATE_WIN) -> list[tuple[str, str]]:
+    """Return (key, promql) pairs for instant queries.
+
+    *rate_win* controls the ``rate()`` window used for counters and
+    histograms.  For per-stage queries, pass the actual stage duration
+    (e.g. ``"300s"``) so the rate covers exactly the stage.
+    """
     defs = []
 
     histograms = [
@@ -99,15 +132,15 @@ def build_instant_defs(p: str) -> list[tuple[str, str]]:
     for prefix, metric in histograms:
         for pct in ["0.5", "0.95", "0.99"]:
             label = {"0.5": "p50", "0.95": "p95", "0.99": "p99"}[pct]
-            defs.append((f"{prefix}_{label}", hq(float(pct), metric, p)))
+            defs.append((f"{prefix}_{label}", hq(float(pct), metric, p, rate_win)))
 
     defs.extend([
-        ("gen_tokens_per_sec", f"sum(rate(vllm:generation_tokens_total{p}[{RATE_WIN}]))"),
-        ("prompt_tokens_per_sec", f"sum(rate(vllm:prompt_tokens_total{p}[{RATE_WIN}]))"),
+        ("gen_tokens_per_sec", f"sum(rate(vllm:generation_tokens_total{p}[{rate_win}]))"),
+        ("prompt_tokens_per_sec", f"sum(rate(vllm:prompt_tokens_total{p}[{rate_win}]))"),
         ("requests_running", f"sum(vllm:num_requests_running{p})"),
         ("requests_waiting", f"sum(vllm:num_requests_waiting{p})"),
         ("kv_cache_usage", f"avg(vllm:kv_cache_usage_perc{p})"),
-        ("nixl_xfer_p99", hq(0.99, "vllm:nixl_xfer_time_seconds_bucket", p)),
+        ("nixl_xfer_p99", hq(0.99, "vllm:nixl_xfer_time_seconds_bucket", p, rate_win)),
     ])
     return defs
 
@@ -187,9 +220,10 @@ def detect_stages(
     if not stage_vals:
         return []
 
-    expected = _compute_expected_concurrencies(config)
+    unique_stages = sorted(set(int(v) for _, v in stage_vals))
+    print(f"  Raw nyann_stage samples: {len(stage_vals)}, unique indices: {unique_stages}")
 
-    # Group consecutive samples by stage index
+    # Group consecutive samples by nyann_stage index
     segments: list[tuple[int, float, float]] = []  # (stage_idx, start_ts, end_ts)
     prev_stage = None
     seg_start = None
@@ -204,30 +238,55 @@ def detect_stages(
     if prev_stage is not None and seg_start is not None:
         segments.append((prev_stage, seg_start, stage_vals[-1][0]))
 
-    # If stage index resets (new run started), keep only the last run
+    # If stage index resets to 0 (new benchmark run started), keep only the last run.
     last_run_start = 0
     for i in range(1, len(segments)):
-        if segments[i][0] <= segments[i - 1][0]:
+        if segments[i][0] == 0 and segments[i - 1][0] > 0:
             last_run_start = i
     segments = segments[last_run_start:]
 
+    # Deduplicate: merge consecutive segments with the same stage index
+    if segments:
+        merged: list[tuple[int, float, float]] = [segments[0]]
+        for seg in segments[1:]:
+            if seg[0] == merged[-1][0]:
+                merged[-1] = (merged[-1][0], merged[-1][1], seg[2])
+            elif seg[0] > merged[-1][0]:
+                merged.append(seg)
+        segments = merged
+
+    # Trim warmup from stage 0: nyann_stage=0 covers both the warmup ramp
+    # and the first sweep step.  The warmup duration is fixed at 300s.
+    warmup_dur = int(config.get("WARMUP_DURATION", 300))
+    if segments:
+        s0_dur = segments[0][2] - segments[0][1]
+        if s0_dur > warmup_dur + 30:
+            s0 = segments[0]
+            segments[0] = (s0[0], s0[1] + warmup_dur, s0[2])
+            print(f"  Trimmed {warmup_dur}s warmup from stage 0 ({s0_dur:.0f}s -> {s0_dur - warmup_dur:.0f}s)")
+        elif s0_dur > warmup_dur:
+            print(f"  WARNING: Stage 0 is {s0_dur:.0f}s, only {s0_dur - warmup_dur:.0f}s after warmup trim — keeping as-is. Set WARMUP_DURATION in config.env if warmup is not {warmup_dur}s.")
+
     stages = []
+    stage_num = 0
     for stage_idx, start_ts, end_ts in segments:
-        if expected and stage_idx in expected:
-            concurrency = expected[stage_idx]
+        if end_ts - start_ts < 30:
+            continue
+        conc_samples = [int(c) for t, c in conc_vals
+                        if start_ts <= t <= end_ts and c > 0]
+        if conc_samples:
+            concurrency = int(sorted(conc_samples)[len(conc_samples) // 2])
         else:
-            conc_samples = [c for t, c in conc_vals
-                           if start_ts <= t <= end_ts and c > 0]
-            concurrency = (int(sorted(conc_samples)[len(conc_samples) // 2])
-                           if conc_samples else 0)
+            concurrency = 0
         if concurrency == 0:
             continue
         stages.append(dict(
-            stage=stage_idx,
+            stage=stage_num,
             concurrency=concurrency,
             start_time=start_ts,
             end_time=end_ts,
         ))
+        stage_num += 1
 
     return stages
 
@@ -270,7 +329,6 @@ def main():
     p = '{pod=~"' + deploy + '-.*"}'
     deploy_user = config.get("DEPLOY_USER", deploy.split("-")[0])
     nyann_load_p = '{pod=~"' + deploy_user + '-sharegpt-load-.*"}'
-    instant_defs = build_instant_defs(p)
     range_defs = build_range_defs(p, nyann_load_p)
 
     combined: dict = {}
@@ -308,19 +366,38 @@ def main():
         bench_end = end_ts
         print("No benchmark stages detected (nyann_concurrency not found or empty)")
 
-    # 3. Global instant queries at end of benchmark
-    print(f"Querying {len(instant_defs)} global instant metrics at time={bench_end}...")
-    for key, query in instant_defs:
+    # 3. Global instant queries covering the entire benchmark (post-warmup)
+    if stages:
+        bench_start = int(stages[0]["start_time"])
+        bench_dur = max(bench_end - bench_start, 60)
+        bench_win = f"{bench_dur}s"
+    else:
+        bench_win = RATE_WIN
+    global_defs = build_instant_defs(p, rate_win=bench_win)
+    print(f"Querying {len(global_defs)} global instant metrics at time={bench_end} "
+          f"(rate_win={bench_win})...")
+    for key, query in global_defs:
         record(key, prom_query(query, ts=bench_end))
 
-    # 4. Per-stage instant queries
+    # 4. Per-stage instant queries (rate window = stage duration)
     if stages:
-        print(f"Querying per-stage instant metrics ({len(stages)} x {len(instant_defs)} queries)...")
+        n_metrics = len(build_instant_defs(p))
+        print(f"Querying per-stage instant metrics ({len(stages)} x {n_metrics} queries)...")
         for s in stages:
             stage_end = int(s["end_time"])
-            print(f"  Stage {s['stage']} (concurrency={s['concurrency']}, end={stage_end})")
-            for key, query in instant_defs:
+            stage_dur = max(int(s["end_time"] - s["start_time"]), 60)
+            stage_win = f"{stage_dur}s"
+            stage_defs = build_instant_defs(p, rate_win=stage_win)
+            print(f"  Stage {s['stage']} (concurrency={s['concurrency']}, "
+                  f"end={stage_end}, rate_win={stage_win})")
+            for key, query in stage_defs:
                 record(f"stage_{s['stage']}_{key}", prom_query(query, ts=stage_end))
+
+    # 5. Per-rank range queries (for load-vs-latency correlation)
+    per_rank_defs = build_per_rank_range_defs(p)
+    print(f"Querying {len(per_rank_defs)} per-rank range metrics...")
+    for key, query in per_rank_defs:
+        record(key, prom_query_range(query, start_ts, end_ts))
 
     # Write output
     out_path = run_dir / "prometheus.json"

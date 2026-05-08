@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -92,6 +93,27 @@ class RunConfig:
         return int(self.raw.get("DECODE_EPLB_NUM_REDUNDANT_EXPERTS", "32"))
 
     @property
+    def prefill_num_redundant(self) -> int:
+        return int(self.raw.get("PREFILL_EPLB_NUM_REDUNDANT_EXPERTS",
+                                self.raw.get("DECODE_EPLB_NUM_REDUNDANT_EXPERTS", "32")))
+
+    @property
+    def redundant_str(self) -> str:
+        """Short string for redundant experts, prefill first.
+
+        Only shows RE for roles where EPLB is enabled.
+        Examples: 'RE=P32/D32', 'RE=D32', 'RE=P64'.
+        """
+        parts = []
+        if self.prefill_eplb_enabled:
+            parts.append(f"P{self.prefill_num_redundant}")
+        if self.eplb_enabled:
+            parts.append(f"D{self.num_redundant}")
+        if not parts:
+            return ""
+        return f"RE={'/'.join(parts)}"
+
+    @property
     def lws_size(self) -> int:
         return int(self.raw.get("DECODE_LWS_SIZE", "4"))
 
@@ -136,6 +158,17 @@ class RunConfig:
         return self.raw.get("DATASET", "sharegpt")
 
     @property
+    def fork(self) -> str:
+        """Fork repo + branch, e.g. 'neuralmagic/vllm@imarkov/eplb_study'."""
+        repo = self.raw.get("FORK_REPO", "")
+        branch = self.raw.get("FORK_BRANCH", "")
+        if repo:
+            short = repo.rstrip("/").rsplit("/", 2)
+            repo_name = "/".join(short[-2:]) if len(short) >= 2 else repo
+            return f"{repo_name}@{branch}" if branch else repo_name
+        return branch
+
+    @property
     def sweep_min(self) -> int | None:
         v = self.raw.get("SWEEP_MIN")
         return int(v) if v else None
@@ -149,6 +182,18 @@ class RunConfig:
     def sweep_steps(self) -> int | None:
         v = self.raw.get("SWEEP_STEPS")
         return int(v) if v else None
+
+    @property
+    def n_workers(self) -> int:
+        return int(self.raw.get("N_WORKERS", "8"))
+
+    @property
+    def isl(self) -> int:
+        return int(self.raw.get("ISL", "500"))
+
+    @property
+    def osl(self) -> int:
+        return int(self.raw.get("OSL", "1500"))
 
     @property
     def warmup_concurrency(self) -> int | None:
@@ -180,21 +225,47 @@ class RunConfig:
     def topology_str(self) -> str:
         """Human-readable topology: 'D=4 P=2' or 'D=4'."""
         parts = []
-        dp = self.decode_pods
-        if dp is not None:
-            parts.append(f"D={dp}")
         pp = self.prefill_pods
         if pp is not None:
             parts.append(f"P={pp}")
+        dp = self.decode_pods
+        if dp is not None:
+            parts.append(f"D={dp}")
         return " ".join(parts) if parts else "?"
 
     @property
     def label(self) -> str:
         """Short human-readable label for plots."""
         base = f"{self.mode}/{self.eplb_mode}"
+        if self.eplb_enabled or self.prefill_eplb_enabled:
+            base += f" {self.redundant_str}"
         if self.communicator and self.communicator != "nixl":
             base += f" [{self.communicator}]"
+        rs = self.routing_simulation_str
+        if rs:
+            base += f" {rs}"
         return base
+
+    @property
+    def decode_routing_simulation(self) -> str:
+        return self.raw.get("DECODE_VLLM_MOE_ROUTING_SIMULATION_STRATEGY", "")
+
+    @property
+    def prefill_routing_simulation(self) -> str:
+        return self.raw.get("PREFILL_VLLM_MOE_ROUTING_SIMULATION_STRATEGY", "")
+
+    @property
+    def routing_simulation_str(self) -> str:
+        """Short string for routing simulation: 'rs:uniform' or 'rs:uniform/none' if they differ."""
+        d = self.decode_routing_simulation
+        p = self.prefill_routing_simulation
+        if not d and not p:
+            return ""
+        d_short = d.replace("uniform_random", "uniform") if d else "none"
+        p_short = p.replace("uniform_random", "uniform") if p else "none"
+        if d_short == p_short:
+            return f"rs:{d_short}"
+        return f"rs:{p_short}/{d_short}"
 
     @property
     def communicator(self) -> str:
@@ -209,22 +280,29 @@ class RunConfig:
         return self.raw.get("PREFILL_EPLB_LOG_BALANCEDNESS", "").lower() == "true"
 
     @property
+    def log_balancedness_interval(self) -> int:
+        return int(self.raw.get("EPLB_LOG_BALANCEDNESS_INTERVAL",
+                                self.raw.get("DECODE_EPLB_LOG_BALANCEDNESS_INTERVAL", "0")))
+
+    @property
     def label_long(self) -> str:
-        """Detailed label including EPLB scope and topology."""
+        """Detailed label including EPLB scope and topology.
+
+        Note: ``RunData.label_long`` overrides this with runtime checks
+        (stats collection / no log balance suffixes).  This version is
+        based on config alone.
+        """
         eplb_part = f"eplb={self.eplb_mode}"
         if self.eplb_enabled or self.prefill_eplb_enabled:
-            eplb_part += f"({self.eplb_scope})"
-            log_bal_off = []
-            if self.eplb_enabled and not self.decode_log_balancedness:
-                log_bal_off.append("decode")
-            if self.prefill_eplb_enabled and not self.prefill_log_balancedness:
-                log_bal_off.append("prefill")
-            if log_bal_off:
-                eplb_part += f" log_bal=off({'+'.join(log_bal_off)})"
+            eplb_part += f"({self.eplb_scope}) {self.redundant_str}"
         comm_part = ""
         if self.communicator and self.communicator != "nixl":
             comm_part = f" | comm={self.communicator}"
-        return f"{self.mode} | {eplb_part} | {self.topology_str}{comm_part}"
+        rs_part = ""
+        rs = self.routing_simulation_str
+        if rs:
+            rs_part = f" | {rs}"
+        return f"{self.mode} | {eplb_part} | {self.topology_str}{comm_part}{rs_part}"
 
     def __repr__(self) -> str:
         parts = [
@@ -288,6 +366,10 @@ class PrometheusData:
         meta = self.raw.get("_stages")
         return meta if isinstance(meta, list) else None
 
+    def get_stages(self) -> list[dict]:
+        """Return stages as a list (empty if none)."""
+        return self.stages or []
+
     @property
     def n_stages(self) -> int:
         s = self.stages
@@ -315,6 +397,55 @@ class PrometheusData:
                 metric = key[len(prefix):]
                 out[metric] = self.instant(key)
         return out
+
+    def per_rank_table(
+        self,
+        at: float | None = None,
+        prefix: str = "per_rank_",
+    ) -> pd.DataFrame:
+        """Build a DataFrame of per-pod/rank metrics at a given timestamp.
+
+        Parses multi-series range query results that have ``pod`` and
+        ``rank`` labels.  For each metric, the value closest to *at* is
+        picked.  If *at* is ``None``, the last data point is used.
+
+        Returns a DataFrame indexed by ``(pod, rank)`` with one column
+        per metric (e.g. ``e2e_p99_range``, ``gen_tokens_per_sec_range``).
+        """
+        rows: dict[tuple[str, str], dict] = {}
+        for key in self.raw:
+            if not key.startswith(prefix):
+                continue
+            metric = key[len(prefix):]
+            entry = self.raw[key]
+            if entry.get("status") != "success":
+                continue
+            for series in entry.get("data", {}).get("result", []):
+                labels = series.get("metric", {})
+                pod = labels.get("pod", "")
+                rank = labels.get("rank", "")
+                values = series.get("values", [])
+                if not values:
+                    val = series.get("value", [None, None])
+                    try:
+                        v = float(val[1])
+                    except (TypeError, ValueError, IndexError):
+                        v = np.nan
+                else:
+                    if at is None:
+                        _, raw = values[-1]
+                    else:
+                        _, raw = min(values, key=lambda vv: abs(float(vv[0]) - at))
+                    try:
+                        v = float(raw)
+                    except (TypeError, ValueError):
+                        v = np.nan
+                rows.setdefault((pod, rank), {})[metric] = v
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame.from_dict(rows, orient="index")
+        df.index = pd.MultiIndex.from_tuples(df.index, names=["pod", "rank"])
+        return df.sort_index()
 
     def diagnose(self) -> pd.DataFrame:
         """Show status/result count/value for every key -- useful for debugging empty tables."""
@@ -382,24 +513,111 @@ class ExpertLoadData:
     def steps(self) -> list[int]:
         return [s["step"] for s in self.data["snapshots"]]
 
+    def _dedup_indices(self) -> list[int]:
+        """Return indices of the first snapshot for each unique step, sorted by step.
+
+        When multiple DP ranks dump to the same file, each step appears
+        multiple times with different data.  We keep the first occurrence
+        (one consistent rank) and sort by step for clean ascending plots.
+        """
+        snaps = self.data["snapshots"]
+        if not snaps:
+            return []
+        first_by_step: dict[int, int] = {}
+        for i, snap in enumerate(snaps):
+            if snap["step"] not in first_by_step:
+                first_by_step[snap["step"]] = i
+        return sorted(first_by_step.values(), key=lambda i: snaps[i]["step"])
+
+    def dedup_snapshots(self) -> list[dict]:
+        """One snapshot per step (first occurrence), sorted by step."""
+        indices = self._dedup_indices()
+        snaps = self.data["snapshots"]
+        return [snaps[i] for i in indices]
+
     def closest_snapshot_idx(self, step: int) -> int:
-        """Return the index of the snapshot whose step is closest to *step*."""
-        all_steps = self.steps
-        return int(np.argmin([abs(s - step) for s in all_steps]))
+        """Return the index of the snapshot whose step is closest to *step*.
+
+        Only considers deduplicated snapshots.
+        """
+        indices = self._dedup_indices()
+        snaps = self.data["snapshots"]
+        best = min(indices, key=lambda i: abs(snaps[i]["step"] - step))
+        return best
+
+    def rank_total_load(self, step: int | None = None) -> np.ndarray:
+        """Total load per EP rank at a given step (or last deduped snapshot).
+
+        Returns a 1-D array of shape ``(world_size,)`` where each element is
+        the total expert load (summed across layers and experts_per_rank) for
+        that EP rank.  Useful for correlating with per-rank latency.
+        """
+        if step is not None:
+            idx = self.closest_snapshot_idx(step)
+        else:
+            indices = self._dedup_indices()
+            idx = indices[-1] if indices else -1
+        _, load, _ = self.snapshot(idx)
+        rank_load = load.reshape(
+            self.num_layers, self.world_size, self.experts_per_rank
+        ).sum(axis=2)
+        return rank_load.sum(axis=0)
 
     def balancedness_series(self) -> pd.DataFrame:
-        """Compute per-snapshot balancedness (mean and worst layer)."""
+        """Compute per-snapshot balancedness (mean and worst layer).
+
+        Two flavours of "balancedness" are reported:
+
+        * **vllm_balancedness** – matches the formula used by vLLM's
+          ``eplb_state.py`` log line::
+
+              sum_r(mean_l(rank_load[l,r])) / sum_r(max_l(rank_load[l,r]))
+
+          This is a single global scalar that compares the average
+          rank-load (averaged across layers) to the worst-case
+          rank-load (max across layers).
+
+        * **mean_balancedness** / **worst_balancedness** – per-layer
+          balance ratio ``mean_r / max_r`` averaged (or min'd) across
+          layers.  Useful for identifying individual imbalanced layers
+          but can differ significantly from the vLLM metric.
+        """
         rows = []
-        for snap in self.data["snapshots"]:
+        for snap in self.dedup_snapshots():
             load = np.array(snap[self.load_key])
             rank_load = load.reshape(
                 self.num_layers, self.world_size, self.experts_per_rank
             ).sum(axis=2)
+
+            # Per-layer balancedness (existing metric)
             mean_load = rank_load.mean(axis=1)
             max_load = rank_load.max(axis=1)
             bal = np.where(max_load > 0, mean_load / max_load, 0.0)
+
+            # vLLM-matching global balancedness (eplb_state.py formula):
+            # avg_tokens = rank_load.mean(dim=0).sum(dim=0)
+            # max_tokens = rank_load.max(dim=0).values.sum(dim=0)
+            # vLLM logs this from expert_load_pass (latest, not window),
+            # so we compute both variants.
+            avg_tokens = rank_load.mean(axis=0).sum()
+            max_tokens = rank_load.max(axis=0).sum()
+            vllm_bal = avg_tokens / max_tokens if max_tokens > 0 else 0.0
+
+            latest_load = np.array(snap.get("latest_expert_load", []))
+            if latest_load.size > 0:
+                latest_rank = latest_load.reshape(
+                    self.num_layers, self.world_size, self.experts_per_rank
+                ).sum(axis=2)
+                avg_t = latest_rank.mean(axis=0).sum()
+                max_t = latest_rank.max(axis=0).sum()
+                vllm_bal_latest = avg_t / max_t if max_t > 0 else 0.0
+            else:
+                vllm_bal_latest = vllm_bal
+
             rows.append({
                 "step": snap["step"],
+                "vllm_balancedness": vllm_bal_latest,
+                "vllm_balancedness_window": vllm_bal,
                 "mean_balancedness": bal.mean(),
                 "worst_balancedness": bal.min(),
                 "worst_layer": int(bal.argmin()),
@@ -416,6 +634,148 @@ class RunData:
     config: RunConfig
     prometheus: PrometheusData | None = None
     expert_loads: dict[str, ExpertLoadData] = field(default_factory=dict)
+    step_timestamps: dict[str, list[tuple[int, float]]] = field(default_factory=dict)
+    """Per-role lists of ``(step, epoch)`` pairs parsed from EPLB logs."""
+
+    def _eplb_actually_ran(self, role: str = "decode") -> bool | None:
+        """Check if EPLB rebalanced at least once based on expert load dumps.
+
+        Returns None if no dump data is available for *role*.
+        """
+        for key, expert in self.expert_loads.items():
+            if key.startswith(f"{role}/") or (role in key):
+                max_step = max(expert.steps) if expert.steps else 0
+                return max_step >= self.config.step_interval
+        return None
+
+    def _effectively_off(self, role: str) -> bool:
+        """EPLB enabled but never rebalanced — either step_interval is huge or
+        the benchmark didn't run long enough."""
+        enabled = (self.config.eplb_enabled if role == "decode"
+                   else self.config.prefill_eplb_enabled)
+        if not enabled:
+            return False
+        if self.config.step_interval > 10000:
+            ran = self._eplb_actually_ran(role)
+            if ran is None:
+                return True
+            return not ran
+        return self._eplb_actually_ran(role) is False
+
+    @property
+    def _decode_stats_only(self) -> bool:
+        return self._effectively_off("decode")
+
+    @property
+    def _prefill_stats_only(self) -> bool:
+        return self._effectively_off("prefill")
+
+    @property
+    def effective_eplb_mode(self) -> str:
+        """Like ``config.eplb_mode`` but returns ``"off"`` when no rebalance happened."""
+        if self._decode_stats_only:
+            return "off"
+        return self.config.eplb_mode
+
+    def _log_bal_effectively_off(self, role: str) -> bool:
+        """True if log_balancedness interval is too large to have ever fired."""
+        interval = self.config.log_balancedness_interval
+        if interval == 0:
+            return False
+        for key, expert in self.expert_loads.items():
+            if key.startswith(f"{role}/") or (role in key):
+                max_step = max(expert.steps) if expert.steps else 0
+                return interval > max_step and interval > 10000
+        return interval > 10000
+
+    @property
+    def _notes_suffix(self) -> str:
+        if self.config.eplb_mode == "off":
+            return ""
+        notes = []
+        if self._decode_stats_only or self._prefill_stats_only:
+            notes.append("stats collection")
+        if self.config.eplb_enabled and self._log_bal_effectively_off("decode"):
+            notes.append("no log balance")
+        if not notes:
+            return ""
+        return f" ({', '.join(notes)})"
+
+    @property
+    def _effective_scope(self) -> str:
+        """Scope string that omits roles where EPLB is effectively off."""
+        d = self.config.eplb_enabled and not self._decode_stats_only
+        p = self.config.prefill_eplb_enabled and not self._prefill_stats_only
+        if d and p:
+            return "decode+prefill"
+        if d:
+            return "decode"
+        if p:
+            return "prefill"
+        return ""
+
+    @property
+    def label(self) -> str:
+        """Short label — shows eplb=off when no rebalance happened."""
+        base = f"{self.config.mode}/{self.effective_eplb_mode}"
+        if self.config.eplb_enabled or self.config.prefill_eplb_enabled:
+            base += f" {self.config.redundant_str}"
+        if self._effective_scope:
+            base += f" SI={self.config.step_interval}"
+        if self.config.communicator and self.config.communicator != "nixl":
+            base += f" [{self.config.communicator}]"
+        rs = self.config.routing_simulation_str
+        if rs:
+            base += f" {rs}"
+        return base + self._notes_suffix
+
+    @property
+    def label_long(self) -> str:
+        """Detailed label — shows eplb=off when no rebalance happened."""
+        c = self.config
+        eplb_part = f"eplb={self.effective_eplb_mode}"
+        scope = self._effective_scope
+        if scope:
+            eplb_part += f"({scope}) {c.redundant_str}"
+        elif c.eplb_enabled or c.prefill_eplb_enabled:
+            eplb_part += f" {c.redundant_str}"
+        comm_part = ""
+        if c.communicator and c.communicator != "nixl":
+            comm_part = f" | [{c.communicator}]"
+        rs_part = ""
+        rs = c.routing_simulation_str
+        if rs:
+            rs_part = f" | {rs}"
+        base = f"{c.mode} | {eplb_part} | {c.topology_str}{comm_part}{rs_part}"
+        return base + self._notes_suffix
+
+    def benchmark_max_step(self, role: str = "decode") -> int | None:
+        """Auto-detect the last EPLB step that falls within the benchmark window.
+
+        Uses the Prometheus stage timestamps and the ``(step, epoch)`` pairs
+        parsed from EPLB logs.  When multiple pod restarts produced overlapping
+        step numbers, only pairs whose timestamp falls within the Prometheus
+        benchmark window (first stage start … last stage end) are considered.
+
+        Returns ``None`` if either data source is missing.
+        """
+        if self.prometheus is None or not self.prometheus.stages:
+            return None
+        pairs = self.step_timestamps.get(role)
+        if not pairs:
+            return None
+        bench_start = self.prometheus.stages[0]["start_time"]
+        bench_end = self.prometheus.stages[-1]["end_time"]
+        # Allow a margin before the first stage for warmup EPLB steps
+        window_start = bench_start - 600
+        within = [
+            (step, ts) for step, ts in pairs
+            if window_start <= ts <= bench_end
+        ]
+        if not within:
+            return None
+        within.sort(key=lambda x: x[1])
+        return within[-1][0]
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +795,39 @@ def parse_config_env(path: Path) -> dict[str, str]:
             key, _, value = line.partition("=")
             result[key.strip()] = value.strip()
     return result
+
+
+_EPLB_STEP_RE = re.compile(
+    r"INFO\s+(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+.*EPLB step:\s+(\d+)\s+for model"
+)
+
+
+def _parse_eplb_log_steps(log_dir: Path, year: int | None = None) -> list[tuple[int, float]]:
+    """Extract ``(step, epoch)`` pairs from EPLB log files in *log_dir*.
+
+    Parses lines like::
+
+        (Worker_DP0_EP0 pid=1078) INFO 04-29 21:02:14 [...] EPLB step: 63000 ...
+
+    Multiple log files may exist from pod restarts with overlapping step
+    numbers.  All entries are returned (unsorted, with duplicates) so that
+    the caller can filter by the relevant time window.
+    """
+    if year is None:
+        year = datetime.now(timezone.utc).year
+
+    pairs: list[tuple[int, float]] = []
+    for log_file in sorted(log_dir.glob("*.log")):
+        for line in log_file.open():
+            m = _EPLB_STEP_RE.search(line)
+            if m is None:
+                continue
+            ts_str, step_str = m.group(1), m.group(2)
+            dt = datetime.strptime(f"{year}-{ts_str}", "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+            pairs.append((int(step_str), dt.timestamp()))
+    return pairs
 
 
 def load_run(name: str, results_dir: Path | str | None = None) -> RunData:
@@ -462,20 +855,41 @@ def load_run(name: str, results_dir: Path | str | None = None) -> RunData:
     expert_loads = {}
     expert_dir = run_dir / "expert-load"
     if expert_dir.exists():
+        def _try_load(p: Path, key: str) -> None:
+            try:
+                if p.suffix == ".jsonl":
+                    data = _load_jsonl_expert_dump(p)
+                else:
+                    with open(p) as f:
+                        data = json.load(f)
+                expert_loads[key] = _parse_expert_load(data)
+            except (json.JSONDecodeError, ValueError) as e:
+                import warnings
+                warnings.warn(f"Skipping corrupt expert load dump {p.name}: {e}")
+
         found_subdirs = False
         for role in ("decode", "prefill"):
             role_dir = expert_dir / role
             if role_dir.exists():
                 found_subdirs = True
-                for p in sorted(role_dir.glob("*_expert_load.json")):
-                    with open(p) as f:
-                        data = json.load(f)
-                    expert_loads[f"{role}/{p.stem}"] = _parse_expert_load(data)
+                for p in sorted(role_dir.glob("*_expert_load.json*")):
+                    _try_load(p, f"{role}/{p.stem}")
         if not found_subdirs:
-            for p in sorted(expert_dir.glob("*_expert_load.json")):
-                with open(p) as f:
-                    data = json.load(f)
-                expert_loads[p.stem] = _parse_expert_load(data)
+            for p in sorted(expert_dir.glob("*_expert_load.json*")):
+                _try_load(p, p.stem)
+
+    step_timestamps: dict[str, list[tuple[int, float]]] = {}
+    log_dir = run_dir / "eplb-logs"
+    if log_dir.exists():
+        for role in ("decode", "prefill"):
+            role_log_dir = log_dir / role
+            has_logs = role_log_dir.is_dir() and any(role_log_dir.glob("*.log"))
+            target = role_log_dir if has_logs else log_dir
+            pairs = _parse_eplb_log_steps(target)
+            if pairs:
+                step_timestamps[role] = pairs
+                if target is log_dir:
+                    break
 
     return RunData(
         name=name,
@@ -483,7 +897,48 @@ def load_run(name: str, results_dir: Path | str | None = None) -> RunData:
         config=config,
         prometheus=prom,
         expert_loads=expert_loads,
+        step_timestamps=step_timestamps,
     )
+
+
+def _load_jsonl_expert_dump(path: Path) -> dict:
+    """Load a JSONL expert-load dump into the legacy dict format.
+
+    The JSONL format (written by vLLM's ``eplb_state.py``) has one JSON
+    record per line.  Each record contains both per-model metadata
+    (``model_name``, ``world_size``, …) and per-snapshot data (``step``,
+    ``window_expert_load``, …).  We reassemble these into the legacy
+    single-JSON structure with a ``"snapshots"`` list so that the rest of
+    the analysis code works unchanged.
+    """
+    _METADATA_KEYS = {
+        "model_name", "world_size", "num_moe_layers",
+        "num_physical_experts", "num_logical_experts",
+        "num_redundant_experts", "window_size",
+    }
+    _SNAPSHOT_KEYS = {
+        "step", "window_expert_load", "latest_expert_load",
+        "physical_to_logical_map",
+    }
+
+    metadata: dict | None = None
+    snapshots: list[dict] = []
+
+    with open(path) as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            if metadata is None:
+                metadata = {k: record[k] for k in _METADATA_KEYS if k in record}
+            snapshots.append({k: record[k] for k in _SNAPSHOT_KEYS if k in record})
+
+    if metadata is None:
+        raise ValueError(f"Empty JSONL expert load dump: {path}")
+
+    metadata["snapshots"] = snapshots
+    return metadata
 
 
 def _parse_expert_load(
@@ -517,12 +972,167 @@ def list_runs(results_dir: Path | str | None = None) -> list[str]:
     )
 
 
+def load_config(name: str, results_dir: Path | str | None = None) -> RunConfig:
+    """Load only the config.env for a run (cheap — no Prometheus/dumps)."""
+    base = Path(results_dir) if results_dir else RESULTS_DIR
+    config_path = base / name / "config.env"
+    raw = parse_config_env(config_path) if config_path.exists() else {}
+    return RunConfig(name=name, raw=raw)
+
+
+def load_all_configs(
+    results_dir: Path | str | None = None,
+) -> dict[str, RunConfig]:
+    """Load configs for all runs (cheap — no Prometheus/dumps)."""
+    return {name: load_config(name, results_dir) for name in list_runs(results_dir)}
+
+
+def load_runs(
+    names: list[str] | dict[str, RunConfig],
+    results_dir: Path | str | None = None,
+) -> dict[str, RunData]:
+    """Load full RunData for the given runs.
+
+    Accepts either a list of names or a dict from ``filter_runs``.
+    """
+    if isinstance(names, dict):
+        names = list(names.keys())
+    return {name: load_run(name, results_dir) for name in names}
+
+
 def load_all_runs(
     results_dir: Path | str | None = None,
 ) -> dict[str, RunData]:
-    """Load all runs from the results directory."""
+    """Load all runs from the results directory (expensive)."""
     names = list_runs(results_dir)
     return {name: load_run(name, results_dir) for name in names}
+
+
+def _match_config(
+    name: str,
+    c: RunConfig,
+    *,
+    mode: str | None = None,
+    eplb: bool | None = None,
+    eplb_mode: str | None = None,
+    eplb_scope: str | None = None,
+    model: str | None = None,
+    dataset: str | None = None,
+    decode_pods: int | None = None,
+    prefill_pods: int | None = None,
+    topology: str | None = None,
+    routing_simulation: str | None = None,
+    name_contains: str | None = None,
+    name_excludes: str | None = None,
+    fork: str | None = None,
+) -> bool:
+    """Return True if config passes all filters."""
+    if mode is not None and c.mode != mode:
+        return False
+    if eplb is not None and c.eplb_enabled != eplb:
+        return False
+    if eplb_mode is not None and c.eplb_mode != eplb_mode:
+        return False
+    if eplb_scope is not None and c.eplb_scope != eplb_scope:
+        return False
+    if model is not None and model.lower() not in c.model.lower():
+        return False
+    if dataset is not None and c.dataset != dataset:
+        return False
+    if decode_pods is not None and c.decode_pods != decode_pods:
+        return False
+    if prefill_pods is not None and c.prefill_pods != prefill_pods:
+        return False
+    if topology is not None and topology not in c.topology_str:
+        return False
+    if routing_simulation is not None and routing_simulation not in c.routing_simulation_str:
+        return False
+    if name_contains is not None and name_contains not in name:
+        return False
+    if name_excludes is not None and name_excludes in name:
+        return False
+    if fork is not None and fork.lower() not in c.fork.lower():
+        return False
+    return True
+
+
+def filter_runs(
+    runs: dict[str, RunData] | dict[str, RunConfig] | list[str] | None = None,
+    *,
+    results_dir: Path | str | None = None,
+    mode: str | None = None,
+    eplb: bool | None = None,
+    eplb_mode: str | None = None,
+    eplb_scope: str | None = None,
+    model: str | None = None,
+    dataset: str | None = None,
+    decode_pods: int | None = None,
+    prefill_pods: int | None = None,
+    topology: str | None = None,
+    routing_simulation: str | None = None,
+    name_contains: str | None = None,
+    name_excludes: str | None = None,
+    fork: str | None = None,
+    custom: callable | None = None,
+) -> dict[str, RunConfig]:
+    """Filter runs by config properties.  Returns ``{name: RunConfig}``.
+
+    *runs* can be:
+    - ``None`` — auto-discovers all runs via ``list_runs()``
+    - a list of run names
+    - a ``dict[str, RunConfig]`` (from a previous ``filter_runs`` call)
+    - a ``dict[str, RunData]`` (from ``load_runs`` / ``load_all_runs``)
+
+    The result is always ``dict[str, RunConfig]`` — cheap to produce.
+    Pass it to ``load_runs()`` to get the full data.
+
+    All filters are AND-ed.  ``None`` means "don't filter on this field".
+
+    Args:
+        results_dir: Override for the results root directory.
+        mode: ``"pd"`` or ``"decode-bench"``.
+        eplb: Whether decode EPLB is enabled.
+        eplb_mode: ``"sync"``, ``"async"``, or ``"off"``.
+        eplb_scope: ``"decode"``, ``"prefill"``, ``"decode+prefill"``, ``"none"``.
+        model: Substring match on model name (case-insensitive).
+        dataset: Exact dataset match.
+        decode_pods: Exact number of decode pods.
+        prefill_pods: Exact number of prefill pods.
+        topology: Substring match on topology_str (e.g. ``"D=4"``).
+        routing_simulation: Substring match on routing_simulation_str.
+        name_contains: Substring match on run name.
+        name_excludes: Exclude runs whose name contains this substring.
+        fork: Substring match on fork repo/branch (case-insensitive).
+        custom: Arbitrary predicate ``(name, config_or_run) -> bool``.
+
+    Returns:
+        Filtered ``dict[str, RunConfig]``.  Pass to ``load_runs()`` for full data.
+    """
+    if runs is None:
+        configs = load_all_configs(results_dir)
+    elif isinstance(runs, list):
+        configs = {n: load_config(n, results_dir) for n in runs}
+    elif runs and isinstance(next(iter(runs.values())), RunData):
+        configs = {n: r.config for n, r in runs.items()}
+    else:
+        configs = runs
+
+    filter_kw = dict(
+        mode=mode, eplb=eplb, eplb_mode=eplb_mode, eplb_scope=eplb_scope,
+        model=model, dataset=dataset, decode_pods=decode_pods,
+        prefill_pods=prefill_pods, topology=topology,
+        routing_simulation=routing_simulation, name_contains=name_contains,
+        name_excludes=name_excludes, fork=fork,
+    )
+
+    out = {}
+    for name, c in configs.items():
+        if not _match_config(name, c, **filter_kw):
+            continue
+        if custom is not None and not custom(name, c):
+            continue
+        out[name] = c
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -553,7 +1163,8 @@ def metrics_comparison_table(
             "mode": run.config.mode,
             "eplb": run.config.eplb_mode,
             "dataset": run.config.dataset,
-            "redundant": run.config.num_redundant,
+            "decode_redundant": run.config.num_redundant,
+            "prefill_redundant": run.config.prefill_num_redundant,
             "interval": run.config.step_interval,
             "lws_size": run.config.lws_size,
             "decode_pods": run.config.decode_pods,
@@ -590,7 +1201,7 @@ def stage_metrics_table(
         "decode_time_p50", "decode_time_p95", "decode_time_p99",
     }
     rows = []
-    for stage_meta in run.prometheus.stages:
+    for stage_meta in run.prometheus.get_stages():
         idx = stage_meta["stage"]
         row: dict = {
             "stage": idx,
@@ -605,29 +1216,56 @@ def stage_metrics_table(
     return pd.DataFrame(rows).set_index("stage")
 
 
+def _resolve_max_step(
+    max_step: int | str | None, run: RunData, role: str
+) -> int | None:
+    if isinstance(max_step, str):
+        return run.benchmark_max_step(role) if max_step == "auto" else None
+    if isinstance(max_step, (int, float)):
+        return int(max_step)
+    return None
+
+
 def balancedness_comparison_table(
     runs: dict[str, RunData],
+    role: str = "decode",
+    max_step: int | str | None = "auto",
 ) -> pd.DataFrame:
-    """Build a comparison DataFrame of expert load balancedness across runs."""
+    """Build a comparison DataFrame of expert load balancedness across runs.
+
+    Args:
+        role: ``"decode"`` or ``"prefill"`` — only show dumps for this role.
+        max_step: Trim snapshots beyond this step.  ``"auto"`` (default)
+                  derives the cutoff per run from Prometheus stages + EPLB log
+                  timestamps.  Pass an explicit ``int`` to use a fixed cutoff
+                  for all runs, or ``None`` to disable trimming.
+    """
     rows = []
     for name, run in runs.items():
+        cutoff = _resolve_max_step(max_step, run, role)
         for model_key, expert in run.expert_loads.items():
+            key_role = model_key.split("/")[0] if "/" in model_key else None
+            if key_role is not None and key_role != role:
+                continue
             bal = expert.balancedness_series()
             if bal.empty:
                 continue
-            role = model_key.split("/")[0] if "/" in model_key else None
-            label = f"{name} ({role})" if role else name
+            if cutoff is not None:
+                bal = bal[bal["step"] <= cutoff]
+                if bal.empty:
+                    continue
+            label = run.label
             rows.append({
                 "run": label,
-                "role": role or "unknown",
                 "eplb": run.config.eplb_mode,
-                "model": expert.model,
-                "snapshots": expert.num_snapshots,
+                "snapshots": len(bal),
                 "final_mean_bal": bal["mean_balancedness"].iloc[-1],
                 "final_worst_bal": bal["worst_balancedness"].iloc[-1],
+                "final_worst_layer": int(bal["worst_layer"].iloc[-1]),
                 "avg_mean_bal": bal["mean_balancedness"].mean(),
                 "avg_worst_bal": bal["worst_balancedness"].mean(),
             })
+            break
     return pd.DataFrame(rows).set_index("run")
 
 
@@ -767,6 +1405,8 @@ def plot_balancedness_over_time(
     if own_fig:
         fig, ax = plt.subplots(figsize=(10, 4))
 
+    ax.plot(bal["step"], bal["vllm_balancedness"], marker="^", markersize=3,
+            label="vLLM logged")
     ax.plot(bal["step"], bal["mean_balancedness"], marker="o", markersize=3,
             label="Mean (across layers)")
     ax.plot(bal["step"], bal["worst_balancedness"], marker="s", markersize=3,
@@ -824,7 +1464,7 @@ def plot_latency_comparison(
         if run.prometheus is None or run.prometheus.n_stages == 0:
             continue
         points = []
-        for stage_meta in run.prometheus.stages:
+        for stage_meta in run.prometheus.get_stages():
             idx = stage_meta["stage"]
             conc = stage_meta["concurrency"]
             val = run.prometheus.stage_instant(idx, metric)
@@ -850,7 +1490,7 @@ def plot_latency_comparison(
         vals = [0.0] * len(concurrencies)
         for conc, v in points:
             vals[conc_to_idx[conc]] = v
-        run_label = runs[name].config.label if name in runs else name
+        run_label = runs[name].label if name in runs else name
         ax.bar(x + i * width, vals, width, label=run_label)
 
     ax.set_ylabel("Latency (ms)")
@@ -865,29 +1505,60 @@ def plot_latency_comparison(
 
 def plot_throughput_comparison(
     runs: dict[str, RunData],
-    title: str = "Throughput Comparison",
+    metric: str = "gen_tokens_per_sec",
+    title: str | None = None,
 ):
-    """Bar chart comparing output token throughput across runs."""
-    labels = []
-    gen_tps = []
-    prompt_tps = []
-    for name, run in runs.items():
-        labels.append(name)
-        gen = run.prometheus.instant("gen_tokens_per_sec") if run.prometheus else None
-        prompt = run.prometheus.instant("prompt_tokens_per_sec") if run.prometheus else None
-        gen_tps.append(gen or 0)
-        prompt_tps.append(prompt or 0)
+    """Per-stage throughput bar chart across runs.
 
-    x = np.arange(len(labels))
-    width = 0.35
-    fig, ax = plt.subplots(figsize=(max(8, len(labels) * 1.5), 5))
-    ax.bar(x - width / 2, gen_tps, width, label="Output tok/s", color="steelblue")
-    ax.bar(x + width / 2, prompt_tps, width, label="Prompt tok/s", color="coral")
+    Shows one group of bars per concurrency stage, with one bar per run.
+    Mirrors the layout of ``plot_latency_comparison``.
+
+    Args:
+        metric: Prometheus instant metric key
+                (e.g. ``"gen_tokens_per_sec"``, ``"prompt_tokens_per_sec"``).
+        title: Plot title (auto-generated from metric if ``None``).
+    """
+    if title is None:
+        title = f"{metric} by Concurrency Stage"
+
+    run_stages: dict[str, list[tuple[int, float]]] = {}
+    all_concurrencies: set[int] = set()
+
+    for name, run in runs.items():
+        if run.prometheus is None or run.prometheus.n_stages == 0:
+            continue
+        points = []
+        for stage_meta in run.prometheus.get_stages():
+            idx = stage_meta["stage"]
+            conc = stage_meta["concurrency"]
+            val = run.prometheus.stage_instant(idx, metric)
+            if val is not None:
+                points.append((conc, val))
+                all_concurrencies.add(conc)
+        if points:
+            run_stages[run.label] = points
+
+    if not run_stages or not all_concurrencies:
+        print("No throughput data to plot"); return
+
+    sorted_conc = sorted(all_concurrencies)
+    n_runs = len(run_stages)
+    width = 0.8 / max(n_runs, 1)
+    x = np.arange(len(sorted_conc))
+
+    fig, ax = plt.subplots(figsize=(max(10, len(sorted_conc) * 1.2), 6))
+    for i, (label, points) in enumerate(run_stages.items()):
+        lookup = dict(points)
+        vals = [lookup.get(c, 0) for c in sorted_conc]
+        offset = (i - (n_runs - 1) / 2) * width
+        ax.bar(x + offset, vals, width, label=label, alpha=0.85)
+
+    ax.set_xlabel("Concurrency")
     ax.set_ylabel("Tokens / sec")
     ax.set_title(title)
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=30, ha="right")
-    ax.legend()
+    ax.set_xticklabels([str(c) for c in sorted_conc], rotation=30, ha="right")
+    ax.legend(fontsize=8)
     ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()
 
@@ -904,7 +1575,7 @@ def plot_throughput_timeseries(
             continue
         df = run.prometheus.range_series(metric_key)
         if df is not None:
-            ax.plot(df["time_min"], df["value"], label=name, alpha=0.8)
+            ax.plot(df["time_min"], df["value"], label=run.label, alpha=0.8)
 
     ax.set_xlabel("Time (min)")
     ax.set_ylabel("Tokens / sec")
@@ -925,7 +1596,7 @@ def plot_kv_cache_usage(
             continue
         df = run.prometheus.range_series("kv_cache_usage_range")
         if df is not None:
-            ax.plot(df["time_min"], df["value"] * 100, label=name, alpha=0.8)
+            ax.plot(df["time_min"], df["value"] * 100, label=run.label, alpha=0.8)
 
     ax.set_xlabel("Time (min)")
     ax.set_ylabel("KV Cache Usage (%)")
@@ -938,32 +1609,60 @@ def plot_kv_cache_usage(
 
 def plot_balancedness_comparison(
     runs: dict[str, RunData],
-    title: str = "Balancedness Comparison",
+    role: str = "decode",
+    max_step: int | str | None = "auto",
+    title: str | None = None,
     snapshot_idx: int = -1,
     show_heatmaps: bool = True,
 ):
     """Overlay balancedness over time for all runs that have expert load data.
 
-    When *show_heatmaps* is True (default), an additional figure is produced
-    with one expert-load heatmap per run/role (final snapshot by default).
+    Args:
+        role: ``"decode"`` or ``"prefill"`` — only show dumps for this role.
+        max_step: Trim snapshots beyond this step.  ``"auto"`` (default)
+                  derives the cutoff per run from Prometheus stages + EPLB log
+                  timestamps.  Pass an explicit ``int`` for a fixed cutoff,
+                  or ``None`` to disable trimming.
+        show_heatmaps: When True (default), produce an additional figure with
+            one expert-load heatmap per run (final snapshot by default).
     """
     # --- time-series plot ---
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    fig.suptitle(title, fontsize=11)
 
-    entries: list[tuple[str, ExpertLoadData]] = []
+    entries: list[tuple[str, ExpertLoadData, int | None]] = []
     for name, run in runs.items():
+        cutoff = _resolve_max_step(max_step, run, role)
         for model_key, expert in run.expert_loads.items():
+            key_role = model_key.split("/")[0] if "/" in model_key else None
+            if key_role is not None and key_role != role:
+                continue
             bal = expert.balancedness_series()
             if bal.empty:
                 continue
-            role = model_key.split("/")[0] if "/" in model_key else None
-            label = f"{name} ({role})" if role else name
+            if cutoff is not None:
+                bal = bal[bal["step"] <= cutoff]
+                if bal.empty:
+                    continue
+            label = run.label
             axes[0].plot(bal["step"], bal["mean_balancedness"],
                          marker="o", markersize=2, label=label, alpha=0.8)
             axes[1].plot(bal["step"], bal["worst_balancedness"],
                          marker="s", markersize=2, label=label, alpha=0.8)
-            entries.append((label, expert))
+            entries.append((label, expert, cutoff))
+            break
+
+    if title is None:
+        first_run = next(iter(runs.values()), None)
+        first_expert = entries[0][1] if entries else None
+        info_parts = [f"Balancedness Comparison ({role})"]
+        if first_run:
+            info_parts.append(first_run.config.model_short)
+            info_parts.append(f"dataset={first_run.config.dataset}")
+        if first_expert:
+            info_parts.append(f"EP={first_expert.world_size}")
+        title = "  |  ".join(info_parts)
+
+    fig.suptitle(title, fontsize=11)
 
     for ax, ylabel, sub_title in [
         (axes[0], "Mean Balancedness", "Mean (across layers)"),
@@ -987,9 +1686,12 @@ def plot_balancedness_comparison(
             squeeze=False,
         )
         fig_h.suptitle(f"{title} — Expert Load Heatmaps", fontsize=11)
-        for i, (label, expert) in enumerate(entries):
+        for i, (label, expert, cutoff) in enumerate(entries):
+            snap_idx = snapshot_idx
+            if cutoff is not None and snap_idx == -1:
+                snap_idx = expert.closest_snapshot_idx(cutoff)
             plot_expert_load_heatmap(
-                expert, snapshot_idx=snapshot_idx,
+                expert, snapshot_idx=snap_idx,
                 title_suffix=f"  [{label}]", ax=axes_h[i, 0],
             )
         plt.tight_layout()
@@ -1034,7 +1736,7 @@ def plot_rank_balance_at_steps(
         squeeze=False,
     )
     fig.suptitle(
-        f"{run.name} — {role}  |  {expert.model}  |  EP={expert.world_size}",
+        f"{run.label} — {role}  |  {expert.model}  |  EP={expert.world_size}",
         fontsize=11,
     )
 
@@ -1046,13 +1748,15 @@ def plot_rank_balance_at_steps(
             expert.num_layers, expert.world_size, expert.experts_per_rank
         ).sum(axis=2)
 
-        im = axes[row, 0].imshow(
+        ax_hm = axes[row, 0]
+        im = ax_hm.imshow(
             rank_load, aspect="auto", interpolation="nearest", cmap="YlOrRd",
         )
-        axes[row, 0].set_xlabel("Rank")
-        axes[row, 0].set_ylabel("Layer")
-        axes[row, 0].set_title(f"Rank Load  (step {actual_step})")
-        fig.colorbar(im, ax=axes[row, 0], label="Tokens", shrink=0.8)
+        ax_hm.set_xticks(np.arange(expert.world_size))
+        ax_hm.set_xlabel("Rank")
+        ax_hm.set_ylabel("Layer")
+        ax_hm.set_title(f"Rank Load  (step {actual_step})")
+        fig.colorbar(im, ax=ax_hm, label="Tokens", shrink=0.8)
 
         mean_load = rank_load.mean(axis=1)
         max_load = rank_load.max(axis=1)
@@ -1072,6 +1776,119 @@ def plot_rank_balance_at_steps(
     plt.tight_layout()
 
 
+def _step_epoch(run: RunData, role: str, step: int) -> float | None:
+    """Find the epoch timestamp for a given step from EPLB logs."""
+    pairs = run.step_timestamps.get(role, [])
+    for s, epoch in pairs:
+        if s == step:
+            return epoch
+    return None
+
+
+def plot_load_vs_latency(
+    run: RunData,
+    role: str = "decode",
+    step: int | None = None,
+    latency_metric: str = "e2e_p99_range",
+    title: str | None = None,
+):
+    """Scatter plot of per-rank expert load vs per-rank latency.
+
+    Requires per-rank Prometheus range metrics (collected with
+    ``build_per_rank_range_defs``) and expert load dumps.
+
+    The Prometheus value is sampled at the epoch timestamp of the
+    requested dump step, so latency and load are time-aligned.
+
+    Args:
+        run: A loaded RunData.
+        role: ``"decode"`` or ``"prefill"``.
+        step: Step number for the expert load snapshot (``None`` = last
+              in-benchmark step).
+        latency_metric: Column name from ``per_rank_table()``
+                        (e.g. ``"e2e_p99_range"``, ``"decode_time_p99_range"``).
+    """
+    if run.prometheus is None:
+        print("No Prometheus data"); return
+
+    # Resolve step and find its timestamp for time-aligned sampling
+    expert = None
+    for key, val in run.expert_loads.items():
+        if key.startswith(f"{role}/") or (role in key):
+            expert = val; break
+    if expert is None:
+        print(f"No expert load data for role '{role}'"); return
+
+    if step is None:
+        ms = run.benchmark_max_step(role)
+        step = ms if ms is not None else expert.dedup_snapshots()[-1]["step"]
+
+    at_ts = _step_epoch(run, role, step)
+
+    rank_df = run.prometheus.per_rank_table(at=at_ts)
+    if rank_df.empty:
+        print("No per-rank Prometheus metrics (re-run collect-prometheus.py)"); return
+    if latency_metric not in rank_df.columns:
+        print(f"Metric '{latency_metric}' not found. Available: {list(rank_df.columns)}"); return
+
+    rank_load = expert.rank_total_load(step)
+
+    deploy = run.config.raw.get("DEPLOY_NAME", "")
+    dp_local = 4 // int(run.config.raw.get("DECODE_TP_SIZE", run.config.raw.get("TP_SIZE", "1")))
+
+    latencies = []
+    loads = []
+    labels = []
+    for (pod, local_rank), row in rank_df.iterrows():
+        if role == "decode" and "decode" not in pod:
+            continue
+        if role == "prefill" and "prefill" not in pod:
+            continue
+        lat = row.get(latency_metric)
+        if lat is None or np.isnan(lat):
+            continue
+        parts = pod.rsplit("-", 1)
+        try:
+            pod_idx = int(parts[-1]) if parts else 0
+        except ValueError:
+            pod_idx = 0
+        global_rank = pod_idx * dp_local + int(local_rank)
+        if global_rank >= len(rank_load):
+            continue
+        latencies.append(lat * 1000)
+        loads.append(float(rank_load[global_rank]))
+        labels.append(f"p{pod_idx}r{local_rank}")
+
+    if not latencies:
+        print("No matching data points"); return
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.scatter(loads, latencies, s=60, alpha=0.7, edgecolors="k", linewidths=0.5)
+    for i, lbl in enumerate(labels):
+        ax.annotate(lbl, (loads[i], latencies[i]), fontsize=7,
+                    xytext=(4, 4), textcoords="offset points")
+
+    metric_short = latency_metric.replace("_range", "")
+    ax.set_xlabel("Total Expert Load (tokens)")
+    ax.set_ylabel(f"{metric_short} (ms)")
+    if title is None:
+        align = f"ts={at_ts:.0f}" if at_ts else "last value"
+        title = (f"{run.label} — {role} load vs latency\n"
+                 f"step={step}  |  {align}  |  {run.config.model_short}  |  EP={expert.world_size}")
+    ax.set_title(title, fontsize=10)
+    ax.grid(alpha=0.3)
+
+    if len(loads) >= 2:
+        z = np.polyfit(loads, latencies, 1)
+        xs = np.linspace(min(loads), max(loads), 50)
+        ax.plot(xs, np.polyval(z, xs), "--", color="red", alpha=0.5,
+                label=f"slope={z[0]:.2e}")
+        corr = np.corrcoef(loads, latencies)[0, 1]
+        ax.legend(title=f"r={corr:.3f}", fontsize=8)
+
+    plt.tight_layout()
+
+
 def plot_latency_timeseries(
     runs: dict[str, RunData],
     metric_key: str = "ttft_p99_range",
@@ -1084,7 +1901,7 @@ def plot_latency_timeseries(
             continue
         df = run.prometheus.range_series(metric_key)
         if df is not None:
-            ax.plot(df["time_min"], df["value"] * 1000, label=name, alpha=0.8)
+            ax.plot(df["time_min"], df["value"] * 1000, label=run.label, alpha=0.8)
 
     ax.set_xlabel("Time (min)")
     ax.set_ylabel("Latency (ms)")
@@ -1112,7 +1929,7 @@ def plot_phase_time_comparison(
     decode_ms = []
     queue_ms = []
     for name, run in runs.items():
-        labels.append(name)
+        labels.append(run.label)
         if run.prometheus is None:
             prefill_ms.append(0)
             decode_ms.append(0)
@@ -1152,14 +1969,15 @@ def plot_phase_time_timeseries(
     for name, run in runs.items():
         if run.prometheus is None:
             continue
+        lbl = run.label
         df_dec = run.prometheus.range_series("decode_time_p99_range")
         if df_dec is not None:
             axes[0].plot(df_dec["time_min"], df_dec["value"] * 1000,
-                         label=name, alpha=0.8)
+                         label=lbl, alpha=0.8)
         df_pf = run.prometheus.range_series("prefill_time_p99_range")
         if df_pf is not None:
             axes[1].plot(df_pf["time_min"], df_pf["value"] * 1000,
-                         label=name, alpha=0.8)
+                         label=lbl, alpha=0.8)
 
     for ax, sub_title in [(axes[0], "Decode P99"), (axes[1], "Prefill P99")]:
         ax.set_xlabel("Time (min)")
@@ -1170,6 +1988,364 @@ def plot_phase_time_timeseries(
     plt.tight_layout()
 
 
+# ---------------------------------------------------------------------------
+# Plotting: per-rank latency analysis
+# ---------------------------------------------------------------------------
+
+
+def _per_rank_range_series(
+    prom: PrometheusData,
+    metric_key: str,
+    role: str = "decode",
+) -> pd.DataFrame:
+    """Parse a per-rank range metric into a tidy DataFrame.
+
+    Returns columns: ``timestamp``, ``time_min``, ``pod``, ``rank``, ``value``.
+    Only pods matching *role* are included.
+    """
+    entry = prom.raw.get(metric_key, {})
+    if entry.get("status") != "success":
+        return pd.DataFrame()
+    results = entry.get("data", {}).get("result", [])
+    rows = []
+    for series in results:
+        labels = series.get("metric", {})
+        pod = labels.get("pod", "")
+        if role and role not in pod:
+            continue
+        rank = labels.get("rank", "0")
+        for ts_str, val_str in series.get("values", []):
+            try:
+                rows.append({
+                    "timestamp": float(ts_str),
+                    "pod": pod,
+                    "rank": int(rank),
+                    "value": float(val_str) if val_str != "NaN" else np.nan,
+                })
+            except (TypeError, ValueError):
+                continue
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    t0 = df["timestamp"].min()
+    df["time_min"] = (df["timestamp"] - t0) / 60
+    return df
+
+
+def _global_rank(pod: str, local_rank: int, dp_local: int = 4) -> int:
+    """Derive the EP global rank from pod name and local rank."""
+    parts = pod.rsplit("-", 1)
+    try:
+        pod_idx = int(parts[-1])
+    except (ValueError, IndexError):
+        pod_idx = 0
+    return pod_idx * dp_local + local_rank
+
+
+def _stage_window(prom: PrometheusData, stage_idx: int) -> tuple[float, float] | None:
+    """Return (start, end) timestamps for a stage's central half."""
+    stages = prom.get_stages()
+    if stage_idx >= len(stages):
+        return None
+    s = stages[stage_idx]
+    mid = (s["start_time"] + s["end_time"]) / 2
+    window = (s["end_time"] - s["start_time"]) / 4
+    return (mid - window, mid + window)
+
+
+def _rank_medians_for_stage(
+    df: pd.DataFrame,
+    prom: PrometheusData,
+    stage_idx: int,
+) -> dict[int, float]:
+    """Compute per-rank median values within a stage's time window."""
+    bounds = _stage_window(prom, stage_idx)
+    if bounds is None:
+        return {}
+    t0, t1 = bounds
+    sub = df[(df["timestamp"] >= t0) & (df["timestamp"] <= t1)]
+    out: dict[int, float] = {}
+    for (pod, rank), grp in sub.groupby(["pod", "rank"]):
+        gr = _global_rank(pod, rank)
+        vals = grp["value"].dropna()
+        if not vals.empty:
+            out[gr] = float(vals.median())
+    return out
+
+
+def plot_per_rank_latency_heatmap(
+    runs: dict[str, RunData],
+    metric: str = "itl_p99",
+    role: str = "decode",
+    stage: int | None = None,
+    title: str | None = None,
+):
+    """Heatmap of per-rank latency across concurrency stages (one subplot per run).
+
+    Rows = EP ranks, columns = concurrency stages.  Colour intensity shows the
+    median metric value within the stage's time window.
+
+    If *stage* is given, only that single stage column is shown.
+    """
+    key = f"per_rank_{metric}_range"
+    metric_label = metric.replace("_", " ").upper()
+    is_tps = "tokens_per_sec" in metric
+    scale = 1.0 if is_tps else 1000.0
+
+    valid = [(n, r) for n, r in runs.items()
+             if r.prometheus is not None and r.prometheus.n_stages > 0]
+    if not valid:
+        print("No per-stage data"); return
+
+    n = len(valid)
+    fig, axes = plt.subplots(1, n, figsize=(6 * n + 2, 8), squeeze=False)
+
+    for col, (name, run) in enumerate(valid):
+        ax = axes[0, col]
+        df = _per_rank_range_series(run.prometheus, key, role)
+        all_stages = run.prometheus.get_stages()
+
+        if df.empty or not all_stages:
+            ax.set_title(f"{run.label} — no data")
+            continue
+
+        stage_indices = [stage] if stage is not None else list(range(len(all_stages)))
+
+        conc_labels = []
+        matrix_cols = []
+        all_ranks: set[int] = set()
+        for si in stage_indices:
+            if si >= len(all_stages):
+                continue
+            rm = _rank_medians_for_stage(df, run.prometheus, si)
+            all_ranks.update(rm.keys())
+            matrix_cols.append(rm)
+            conc_labels.append(str(all_stages[si]["concurrency"]))
+
+        sorted_ranks = sorted(all_ranks)
+        mat = np.full((len(sorted_ranks), len(matrix_cols)), np.nan)
+        for ci, rm in enumerate(matrix_cols):
+            for ri, r in enumerate(sorted_ranks):
+                if r in rm:
+                    mat[ri, ci] = rm[r] * scale
+
+        im = ax.imshow(mat, aspect="auto", cmap="YlOrRd" if not is_tps else "YlGn")
+        ax.set_xticks(range(len(conc_labels)))
+        ax.set_xticklabels(conc_labels, fontsize=8)
+        ax.set_xlabel("Concurrency")
+        ax.set_yticks(range(len(sorted_ranks)))
+        ax.set_yticklabels([f"R{r}" for r in sorted_ranks], fontsize=7)
+        if col == 0:
+            ax.set_ylabel("EP Rank")
+        ax.set_title(f"{run.label}")
+        plt.colorbar(im, ax=ax, shrink=0.6,
+                     label=f"{metric_label} ({'tok/s' if is_tps else 'ms'})")
+
+    fig.suptitle(title or f"Per-Rank {metric_label} by Stage ({role})",
+                 fontsize=12, y=1.02)
+    plt.tight_layout()
+
+
+def plot_per_rank_latency_spread(
+    runs: dict[str, RunData],
+    metric: str = "itl_p99",
+    role: str = "decode",
+    title: str | None = None,
+):
+    """Per-stage min/median/max spread across ranks, one subplot per run.
+
+    For each concurrency stage the plot shows a point for the median across
+    ranks and error bars spanning the min-max range.
+    """
+    key = f"per_rank_{metric}_range"
+    metric_label = metric.replace("_", " ").upper()
+    is_tps = "tokens_per_sec" in metric
+    scale = 1.0 if is_tps else 1000.0
+    colors = plt.cm.tab10.colors
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    for i, (name, run) in enumerate(runs.items()):
+        if run.prometheus is None or run.prometheus.n_stages == 0:
+            continue
+        df = _per_rank_range_series(run.prometheus, key, role)
+        if df.empty:
+            continue
+
+        stages = run.prometheus.get_stages()
+        concs, meds, los, his = [], [], [], []
+        for si, sm in enumerate(stages):
+            rm = _rank_medians_for_stage(df, run.prometheus, si)
+            if not rm:
+                continue
+            vals = np.array(list(rm.values())) * scale
+            concs.append(sm["concurrency"])
+            meds.append(np.median(vals))
+            los.append(np.min(vals))
+            his.append(np.max(vals))
+
+        if not concs:
+            continue
+        meds_a, los_a, his_a = np.array(meds), np.array(los), np.array(his)
+        color = colors[i % len(colors)]
+        x = np.arange(len(concs))
+        offset = (i - len(runs) / 2) * 0.15
+
+        ax.errorbar(x + offset, meds_a,
+                    yerr=[meds_a - los_a, his_a - meds_a],
+                    fmt="o-", capsize=4, color=color, linewidth=1.5,
+                    label=run.label, alpha=0.85)
+
+    ax.set_xticks(range(len(concs)))
+    ax.set_xticklabels([str(c) for c in concs], fontsize=9)
+    ax.set_xlabel("Concurrency")
+    unit = "tok/s" if is_tps else "ms"
+    ax.set_ylabel(f"{metric_label} ({unit})")
+    ax.set_title(title or f"Per-Rank {metric_label} Spread by Stage ({role})")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+
+
+def plot_per_rank_comparison(
+    runs: dict[str, RunData],
+    metric: str = "itl_p99",
+    role: str = "decode",
+    stage: int | None = None,
+    title: str | None = None,
+):
+    """Bar chart of per-rank latency at a given concurrency stage.
+
+    If *stage* is ``None``, plots one facet per stage in the first run that
+    has stage data.  When a single stage index is given, draws a single chart.
+    """
+    key = f"per_rank_{metric}_range"
+    metric_label = metric.replace("_", " ").upper()
+    is_tps = "tokens_per_sec" in metric
+    scale = 1.0 if is_tps else 1000.0
+
+    ref_stages = None
+    for run in runs.values():
+        if run.prometheus and run.prometheus.n_stages > 0:
+            ref_stages = run.prometheus.get_stages()
+            break
+    if ref_stages is None:
+        print("No stage data"); return
+
+    stage_indices = [stage] if stage is not None else list(range(len(ref_stages)))
+
+    n_stages = len(stage_indices)
+    fig, axes = plt.subplots(1, n_stages,
+                             figsize=(max(12, 5 * n_stages), 5),
+                             squeeze=False, sharey=True)
+
+    for col, si in enumerate(stage_indices):
+        ax = axes[0, col]
+        conc = ref_stages[si]["concurrency"] if si < len(ref_stages) else "?"
+
+        all_data: list[tuple[str, dict[int, float]]] = []
+        all_ranks: set[int] = set()
+
+        for name, run in runs.items():
+            if run.prometheus is None:
+                continue
+            df = _per_rank_range_series(run.prometheus, key, role)
+            if df.empty:
+                continue
+            rm = _rank_medians_for_stage(df, run.prometheus, si)
+            rank_vals = {r: v * scale for r, v in rm.items()}
+            all_ranks.update(rank_vals.keys())
+            all_data.append((run.label, rank_vals))
+
+        if not all_data:
+            ax.set_title(f"C={conc} — no data"); continue
+
+        sorted_ranks = sorted(all_ranks)
+        n_runs = len(all_data)
+        x = np.arange(len(sorted_ranks))
+        width = 0.8 / max(n_runs, 1)
+
+        for j, (label, rank_vals) in enumerate(all_data):
+            vals = [rank_vals.get(r, 0) for r in sorted_ranks]
+            ax.bar(x + j * width - 0.4 + width / 2, vals, width,
+                   label=label, alpha=0.85)
+
+        ax.set_xlabel("EP Rank")
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"R{r}" for r in sorted_ranks], fontsize=7, rotation=90)
+        ax.set_title(f"Concurrency = {conc}")
+        ax.grid(axis="y", alpha=0.3)
+        if col == 0:
+            unit = "tok/s" if is_tps else "ms"
+            ax.set_ylabel(f"{metric_label} ({unit})")
+
+    axes[0, 0].legend(fontsize=8)
+    fig.suptitle(title or f"Per-Rank {metric_label} by Stage ({role})",
+                 fontsize=12, y=1.02)
+    plt.tight_layout()
+
+
+def per_rank_stats_table(
+    runs: dict[str, RunData],
+    role: str = "decode",
+    stage: int | None = None,
+    metrics: list[str] | None = None,
+) -> pd.DataFrame:
+    """Per-rank latency stats broken down by concurrency stage.
+
+    Returns a multi-indexed DataFrame (run × stage × metric) with mean, std,
+    min, max, max/mean ratio, and the slowest/fastest ranks.
+
+    If *stage* is given, only that stage is included.  Otherwise all stages.
+    """
+    if metrics is None:
+        metrics = ["itl_p50", "itl_p99", "decode_time_p50", "decode_time_p99",
+                    "gen_tokens_per_sec"]
+
+    rows = []
+    for name, run in runs.items():
+        if run.prometheus is None or run.prometheus.n_stages == 0:
+            continue
+        stage_list = run.prometheus.get_stages()
+        indices = [stage] if stage is not None else list(range(len(stage_list)))
+
+        for si in indices:
+            if si >= len(stage_list):
+                continue
+            conc = stage_list[si]["concurrency"]
+
+            for metric in metrics:
+                key = f"per_rank_{metric}_range"
+                df = _per_rank_range_series(run.prometheus, key, role)
+                if df.empty:
+                    continue
+
+                rank_medians = _rank_medians_for_stage(df, run.prometheus, si)
+                if not rank_medians:
+                    continue
+
+                vals = np.array(list(rank_medians.values()))
+                is_tps = "tokens_per_sec" in metric
+                sc = 1.0 if is_tps else 1000.0
+
+                rows.append({
+                    "run": run.label,
+                    "concurrency": conc,
+                    "metric": metric,
+                    "mean": vals.mean() * sc,
+                    "std": vals.std() * sc,
+                    "min": vals.min() * sc,
+                    "max": vals.max() * sc,
+                    "max/mean": vals.max() / vals.mean() if vals.mean() > 0 else np.nan,
+                    "min_rank": int(min(rank_medians, key=rank_medians.get)),
+                    "max_rank": int(max(rank_medians, key=rank_medians.get)),
+                })
+
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).set_index(["run", "concurrency", "metric"])
+
+
 def plot_pareto_frontier(
     runs: dict[str, RunData],
     gpus_per_pod: int = 4,
@@ -1177,76 +2353,97 @@ def plot_pareto_frontier(
 ):
     """Plot throughput-per-GPU vs per-user output speed across concurrency stages.
 
-    Each run produces a curve from its per-stage metrics. Points on the upper-right
-    are optimal — you can't improve throughput without sacrificing interactivity or
-    vice versa.
-
-    The subtitle shows model, topology, and EPLB configuration details.
-
-    Args:
-        gpus_per_pod: GPUs per pod (default 4 for GB200).
+    Each run produces a curve from its per-stage metrics.  Points toward the
+    upper-right are Pareto-optimal.
     """
     fig, ax = plt.subplots(figsize=(12, 7))
     markers = ["o", "s", "D", "^", "v", "P", "X", "*"]
-
-    subtitle_parts: list[str] = []
+    models: set[str] = set()
 
     for i, (name, run) in enumerate(runs.items()):
         if run.prometheus is None or run.prometheus.n_stages == 0:
             continue
 
-        total_gpus = 0
-        dp, pp = run.config.decode_pods, run.config.prefill_pods
-        if dp is not None:
-            total_gpus += dp * gpus_per_pod
-        if pp is not None:
-            total_gpus += pp * gpus_per_pod
-        if total_gpus == 0:
-            total_gpus = 1
+        dp = run.config.decode_pods or 0
+        pp = run.config.prefill_pods or 0
+        total_gpus = (dp + pp) * gpus_per_pod or 1
 
-        x_vals = []  # per-user TPS (interactivity)
-        y_vals = []  # system TPS per GPU (throughput efficiency)
-        concurrencies = []
-
-        for stage_meta in run.prometheus.stages:
-            idx = stage_meta["stage"]
-            conc = stage_meta["concurrency"]
-            gen_tps = run.prometheus.stage_instant(idx, "gen_tokens_per_sec")
-            itl = run.prometheus.stage_instant(idx, "itl_p50")
-
-            if gen_tps is None or gen_tps <= 0:
+        x_vals, y_vals = [], []
+        for stage in run.prometheus.get_stages():
+            gen_tps = run.prometheus.stage_instant(stage["stage"], "gen_tokens_per_sec")
+            conc = stage["concurrency"]
+            if not gen_tps or gen_tps <= 0 or conc <= 0:
                 continue
-
-            per_user_tps = 1.0 / itl if itl and itl > 0 else gen_tps / max(conc, 1)
-            tps_per_gpu = gen_tps / total_gpus
-
-            x_vals.append(per_user_tps)
-            y_vals.append(tps_per_gpu)
-            concurrencies.append(conc)
+            x_vals.append(gen_tps / conc)
+            y_vals.append(gen_tps / total_gpus)
 
         if not x_vals:
             continue
 
-        marker = markers[i % len(markers)]
-        ax.plot(x_vals, y_vals, marker=marker, markersize=7, linewidth=1.5,
-                label=run.config.label_long, alpha=0.85)
+        ax.plot(x_vals, y_vals, marker=markers[i % len(markers)],
+                markersize=7, linewidth=1.5, label=run.label_long, alpha=0.85)
+        models.add(run.config.model_short)
 
-        for x, y, c in zip(x_vals, y_vals, concurrencies):
-            ax.annotate(str(c), (x, y), textcoords="offset points",
-                        xytext=(5, 5), fontsize=7, alpha=0.7)
+    if len(models) > 1:
+        print(f"WARNING: comparing runs with different models: {models}")
 
-        if not subtitle_parts:
-            subtitle_parts.append(run.config.model_short)
-            subtitle_parts.append(f"{total_gpus} GPUs")
-
-    ax.set_xlabel("Per-User Output Speed (tokens/s)")
-    ax.set_ylabel("System Throughput per GPU (tokens/s)")
+    subtitle = "  |  ".join([*models, f"1 node = {gpus_per_pod}xGB200"])
     main_title = title or "Throughput vs Interactivity (Pareto Frontier)"
-    subtitle = "  |  ".join(subtitle_parts) if subtitle_parts else ""
-    if subtitle:
-        ax.set_title(f"{main_title}\n{subtitle}", fontsize=11)
-    else:
-        ax.set_title(main_title)
+    ax.set_title(f"{main_title}\n{subtitle}", fontsize=11)
+    ax.set_xlabel("Tokens/s/user")
+    ax.set_ylabel("Tokens/s/GPU")
+    ax.legend(loc="best", fontsize=9)
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+
+
+def plot_throughput_vs_concurrency(
+    runs: dict[str, RunData],
+    gpus_per_pod: int = 4,
+    title: str | None = None,
+):
+    """Plot output tokens/s per decode GPU vs total concurrency per GPU.
+
+    Total concurrency = per-worker concurrency * n_workers.
+    X-axis is normalized by decode GPUs to make different topologies comparable.
+    """
+    fig, ax = plt.subplots(figsize=(12, 7))
+    markers = ["o", "s", "D", "^", "v", "P", "X", "*"]
+    models: set[str] = set()
+
+    for i, (name, run) in enumerate(runs.items()):
+        if run.prometheus is None or run.prometheus.n_stages == 0:
+            continue
+
+        dp = run.config.decode_pods or 0
+        decode_gpus = dp * gpus_per_pod or 1
+        n_workers = run.config.n_workers
+
+        x_vals, y_vals = [], []
+        for stage in run.prometheus.get_stages():
+            gen_tps = run.prometheus.stage_instant(stage["stage"], "gen_tokens_per_sec")
+            conc = stage["concurrency"]
+            if not gen_tps or gen_tps <= 0 or conc <= 0:
+                continue
+            total_conc = conc * n_workers
+            x_vals.append(total_conc / decode_gpus)
+            y_vals.append(gen_tps / decode_gpus)
+
+        if not x_vals:
+            continue
+
+        ax.plot(x_vals, y_vals, marker=markers[i % len(markers)],
+                markersize=7, linewidth=1.5, label=run.label_long, alpha=0.85)
+        models.add(run.config.model_short)
+
+    if len(models) > 1:
+        print(f"WARNING: comparing runs with different models: {models}")
+
+    subtitle = "  |  ".join([*models, f"1 node = {gpus_per_pod}xGB200"])
+    main_title = title or "Decode Throughput vs Concurrency (per GPU)"
+    ax.set_title(f"{main_title}\n{subtitle}", fontsize=11)
+    ax.set_xlabel("Total concurrency / decode GPU")
+    ax.set_ylabel("Output tokens/s / decode GPU")
     ax.legend(loc="best", fontsize=9)
     ax.grid(alpha=0.3)
     plt.tight_layout()

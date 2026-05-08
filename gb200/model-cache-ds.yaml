@@ -15,13 +15,13 @@ spec:
         nvidia.com/gpu.present: "true"
       initContainers:
         - name: download
-          image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
+          image: VLLM_IMAGE_PLACEHOLDER
           securityContext:
             runAsUser: 0
             runAsGroup: 0
           command: ["/bin/sh", "-c"]
           args:
-            - huggingface-cli download MODEL_PLACEHOLDER
+            - hf download MODEL_PLACEHOLDER
           env:
             - name: HF_HOME
               value: /mnt/local/hf_cache
@@ -37,13 +37,13 @@ spec:
           resources:
             requests:
               cpu: 2
-              memory: 4Gi
+              memory: 16Gi
             limits:
               cpu: 2
-              memory: 4Gi
+              memory: 16Gi
       containers:
         - name: idle
-          image: quay.io/tms/llm-d-cuda-dev:0e22cd6-07e22e2-00a944e
+          image: VLLM_IMAGE_PLACEHOLDER
           command: ["sleep", "infinity"]
           resources:
             requests:

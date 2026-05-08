@@ -14,18 +14,15 @@ DEV_POD_NAME := NAME_PREFIX + "-vllm-dev"
 
 MODEL := env("MODEL", "nvidia/DeepSeek-R1-0528-NVFP4-v2")
 MODEL_LABEL := file_name(MODEL)
-DECODE_LWS_SIZE := env("DECODE_LWS_SIZE", "4")
-DECODE_EPLB_ENABLED := env("DECODE_EPLB_ENABLED", "true")
-EPLB_USE_ASYNC := env("EPLB_USE_ASYNC", "false")
-EPLB_STEP_INTERVAL := env("EPLB_STEP_INTERVAL", "3000")
-EPLB_NUM_REDUNDANT_EXPERTS := env("EPLB_NUM_REDUNDANT_EXPERTS", "32")
-EPLB_WINDOW_SIZE := env("EPLB_WINDOW_SIZE", "100")
-EPLB_LOG_BALANCEDNESS := env("EPLB_LOG_BALANCEDNESS", "true")
-EPLB_LOG_BALANCEDNESS_INTERVAL := env("EPLB_LOG_BALANCEDNESS_INTERVAL", "")
+# Config knobs — NOT exported so that profile loading in _render-manifests can override defaults.
+# Defaults are applied in _render-manifests after profile loading.
 EPLB_EXPERT_LOAD_DUMP_DIR := env("EPLB_EXPERT_LOAD_DUMP_DIR", "/mnt/lustre/" + NAME_PREFIX + "/eplb-dumps/" + DEPLOY_NAME)
-PREFIX_CACHING := env("PREFIX_CACHING", "true")
-PREFILL_EPLB_ENABLED := env("PREFILL_EPLB_ENABLED", "false")
-BUILD_DEEPEP_WHEEL := env("BUILD_DEEPEP_WHEEL", "false")
+
+# Load a named config profile: PROFILE=eplb-study just start pd
+# Profile files live in profiles/<name>.env. Inline env vars override profile values.
+PROFILE := env("PROFILE", "")
+
+# Profiler defaults are applied in _render-manifests after profile loading.
 
 GB200_DIR := "gb200"
 DEV_DIR := "dev"
@@ -206,48 +203,115 @@ VLLM_IMAGE := env("VLLM_IMAGE", "ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091")
 FORK_REPO := env("FORK_REPO", "")
 FORK_BRANCH := env("FORK_BRANCH", "")
 
-start MODE='pd' ROUTING='load-aware' DEV='false':
+# Render kustomize manifests, substitute placeholders, and apply.
+# Called by start and restart-lws — the single source of truth for manifest rendering.
+_render-manifests MODE DEV_VENV='':
   #!/usr/bin/env bash
   set -euo pipefail
-  export DEPLOY_NAME="{{DEPLOY_NAME}}"
+
+  # Load profile if specified — only sets vars not already in the environment,
+  # so inline env vars (e.g. EPLB_USE_ASYNC=true PROFILE=x just start) always win.
+  if [ -n "{{PROFILE}}" ]; then
+    PROFILE_FILE="profiles/{{PROFILE}}.env"
+    if [ ! -f "$PROFILE_FILE" ]; then
+      echo "ERROR: Profile not found: $PROFILE_FILE" >&2; exit 1
+    fi
+    echo "Loading profile: {{PROFILE}}"
+    while IFS='=' read -r key val || [ -n "$key" ]; do
+      [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+      key="${key#"${key%%[! ]*}"}"; key="${key%"${key##*[! ]}"}"
+      [ -z "${!key+x}" ] && export "$key=$val"
+    done < "$PROFILE_FILE"
+  fi
+
+  # Apply defaults for config knobs (inline env > profile > .env > these defaults)
+  : "${DECODE_LWS_SIZE:=4}"
+  : "${DECODE_EPLB_ENABLED:=true}"
+  : "${EPLB_USE_ASYNC:=false}"
+  : "${EPLB_STEP_INTERVAL:=3000}"
+  : "${EPLB_NUM_REDUNDANT_EXPERTS:=32}"
+  : "${EPLB_WINDOW_SIZE:=100}"
+  : "${EPLB_LOG_BALANCEDNESS:=true}"
+  : "${EPLB_LOG_BALANCEDNESS_INTERVAL:=}"
+  : "${EPLB_EXPERT_LOAD_DUMP_DIR:={{EPLB_EXPERT_LOAD_DUMP_DIR}}}"
+  : "${PREFIX_CACHING:=true}"
+  : "${PREFILL_EPLB_ENABLED:=false}"
+  : "${PREFILL_EPLB_NUM_REDUNDANT_EXPERTS:=${EPLB_NUM_REDUNDANT_EXPERTS}}"
+  : "${DECODE_VLLM_MOE_ROUTING_SIMULATION_STRATEGY:=}"
+  : "${PREFILL_VLLM_MOE_ROUTING_SIMULATION_STRATEGY:=}"
+  : "${BUILD_DEEPEP_WHEEL:=false}"
+  : "${DECODE_ENABLE_PROFILING:=0}"
+  : "${DECODE_PROFILER_TYPE:=torch}"
+  : "${DECODE_PROFILER_DELAY_SECS:=120}"
+  : "${DECODE_PROFILER_DURATION_SECS:=10}"
+  : "${DECODE_PROFILER_DELAY_ITERS:=5}"
+  : "${DECODE_PROFILER_MAX_ITERS:=3}"
+  : "${PREFILL_ENABLE_PROFILING:=0}"
+  : "${PREFILL_PROFILER_TYPE:=torch}"
+  : "${PREFILL_PROFILER_DELAY_SECS:=120}"
+  : "${PREFILL_PROFILER_DURATION_SECS:=10}"
+  : "${PREFILL_PROFILER_DELAY_ITERS:=5}"
+  : "${PREFILL_PROFILER_MAX_ITERS:=3}"
+
   DEPLOY_TS=$(date +%Y%m%d-%H%M%S)
 
-  # Generate wrapper kustomization with user-specific namePrefix
   printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: {{NAME_PREFIX}}-\nresources:\n  - overlays/{{MODE}}\n' \
     > {{GB200_DIR}}/kustomization.yaml
-  # Render kustomize, substitute placeholders, apply in one shot (no double rollout)
-  DEV_VENV=""
-  if [ "{{DEV}}" = "true" ]; then
-    DEV_VENV="{{VLLM_DEV_VENV}}"
-    echo "Dev mode: VLLM_DEV_VENV=$DEV_VENV"
-  fi
+
   kubectl kustomize {{GB200_DIR}} \
     | sed -e "s/DEPLOY_TS_PLACEHOLDER/$DEPLOY_TS/g" \
           -e "s/OWNER_PLACEHOLDER/{{NAME_PREFIX}}/g" \
           -e "s|MODEL_PLACEHOLDER|{{MODEL}}|g" \
           -e "s|MODEL_LABEL_PLACEHOLDER|{{MODEL_LABEL}}|g" \
-          -e "s|VLLM_DEV_VENV_PLACEHOLDER|$DEV_VENV|g" \
+          -e "s|VLLM_DEV_VENV_PLACEHOLDER|{{DEV_VENV}}|g" \
           -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/{{NAME_PREFIX}}|g" \
           -e "s|VLLM_IMAGE_PLACEHOLDER|{{VLLM_IMAGE}}|g" \
           -e "s|FORK_REPO_PLACEHOLDER|{{FORK_REPO}}|g" \
           -e "s|FORK_BRANCH_PLACEHOLDER|{{FORK_BRANCH}}|g" \
-          -e "s|DECODE_LWS_SIZE_PLACEHOLDER|{{DECODE_LWS_SIZE}}|g" \
-          -e 's|DECODE_EPLB_ENABLED_PLACEHOLDER|"{{DECODE_EPLB_ENABLED}}"|g' \
-          -e 's|PREFILL_EPLB_ENABLED_PLACEHOLDER|"{{PREFILL_EPLB_ENABLED}}"|g' \
-          -e 's|EPLB_USE_ASYNC_PLACEHOLDER|"{{EPLB_USE_ASYNC}}"|g' \
-          -e 's|EPLB_STEP_INTERVAL_PLACEHOLDER|"{{EPLB_STEP_INTERVAL}}"|g' \
-          -e 's|EPLB_NUM_REDUNDANT_EXPERTS_PLACEHOLDER|"{{EPLB_NUM_REDUNDANT_EXPERTS}}"|g' \
-          -e 's|EPLB_WINDOW_SIZE_PLACEHOLDER|"{{EPLB_WINDOW_SIZE}}"|g' \
-          -e 's|EPLB_LOG_BALANCEDNESS_PLACEHOLDER|"{{EPLB_LOG_BALANCEDNESS}}"|g' \
-          -e 's|EPLB_LOG_BALANCEDNESS_INTERVAL_PLACEHOLDER|"{{EPLB_LOG_BALANCEDNESS_INTERVAL}}"|g' \
-          -e "s|EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER|{{EPLB_EXPERT_LOAD_DUMP_DIR}}/$DEPLOY_TS|g" \
-          -e 's|PREFIX_CACHING_PLACEHOLDER|"{{PREFIX_CACHING}}"|g' \
-          -e 's|BUILD_DEEPEP_WHEEL_PLACEHOLDER|{{BUILD_DEEPEP_WHEEL}}|g' \
+          -e "s|DECODE_LWS_SIZE_PLACEHOLDER|${DECODE_LWS_SIZE}|g" \
+          -e "s|DECODE_EPLB_ENABLED_PLACEHOLDER|\"${DECODE_EPLB_ENABLED}\"|g" \
+          -e "s|PREFILL_EPLB_ENABLED_PLACEHOLDER|\"${PREFILL_EPLB_ENABLED}\"|g" \
+          -e "s|EPLB_USE_ASYNC_PLACEHOLDER|\"${EPLB_USE_ASYNC}\"|g" \
+          -e "s|EPLB_STEP_INTERVAL_PLACEHOLDER|\"${EPLB_STEP_INTERVAL}\"|g" \
+          -e "s|DECODE_EPLB_NUM_REDUNDANT_EXPERTS_PLACEHOLDER|\"${EPLB_NUM_REDUNDANT_EXPERTS}\"|g" \
+          -e "s|PREFILL_EPLB_NUM_REDUNDANT_EXPERTS_PLACEHOLDER|\"${PREFILL_EPLB_NUM_REDUNDANT_EXPERTS}\"|g" \
+          -e "s|EPLB_WINDOW_SIZE_PLACEHOLDER|\"${EPLB_WINDOW_SIZE}\"|g" \
+          -e "s|EPLB_LOG_BALANCEDNESS_PLACEHOLDER|\"${EPLB_LOG_BALANCEDNESS}\"|g" \
+          -e "s|EPLB_LOG_BALANCEDNESS_INTERVAL_PLACEHOLDER|\"${EPLB_LOG_BALANCEDNESS_INTERVAL}\"|g" \
+          -e "s|EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER|${EPLB_EXPERT_LOAD_DUMP_DIR}/$DEPLOY_TS|g" \
+          -e "s|PREFIX_CACHING_PLACEHOLDER|\"${PREFIX_CACHING}\"|g" \
+          -e "s|DECODE_VLLM_MOE_ROUTING_SIMULATION_STRATEGY_PLACEHOLDER|\"${DECODE_VLLM_MOE_ROUTING_SIMULATION_STRATEGY}\"|g" \
+          -e "s|PREFILL_VLLM_MOE_ROUTING_SIMULATION_STRATEGY_PLACEHOLDER|\"${PREFILL_VLLM_MOE_ROUTING_SIMULATION_STRATEGY}\"|g" \
+          -e "s|BUILD_DEEPEP_WHEEL_PLACEHOLDER|${BUILD_DEEPEP_WHEEL}|g" \
           -e "s|DEEPEP_REPO_PLACEHOLDER|{{DEEPEP_REPO}}|g" \
           -e "s|DEEPEP_BRANCH_PLACEHOLDER|{{DEEPEP_BRANCH}}|g" \
+          -e "s|DECODE_ENABLE_PROFILING_PLACEHOLDER|\"${DECODE_ENABLE_PROFILING}\"|g" \
+          -e "s|DECODE_PROFILER_TYPE_PLACEHOLDER|\"${DECODE_PROFILER_TYPE}\"|g" \
+          -e "s|DECODE_PROFILER_DELAY_SECS_PLACEHOLDER|\"${DECODE_PROFILER_DELAY_SECS}\"|g" \
+          -e "s|DECODE_PROFILER_DURATION_SECS_PLACEHOLDER|\"${DECODE_PROFILER_DURATION_SECS}\"|g" \
+          -e "s|DECODE_PROFILER_DELAY_ITERS_PLACEHOLDER|\"${DECODE_PROFILER_DELAY_ITERS}\"|g" \
+          -e "s|DECODE_PROFILER_MAX_ITERS_PLACEHOLDER|\"${DECODE_PROFILER_MAX_ITERS}\"|g" \
+          -e "s|PREFILL_ENABLE_PROFILING_PLACEHOLDER|\"${PREFILL_ENABLE_PROFILING}\"|g" \
+          -e "s|PREFILL_PROFILER_TYPE_PLACEHOLDER|\"${PREFILL_PROFILER_TYPE}\"|g" \
+          -e "s|PREFILL_PROFILER_DELAY_SECS_PLACEHOLDER|\"${PREFILL_PROFILER_DELAY_SECS}\"|g" \
+          -e "s|PREFILL_PROFILER_DURATION_SECS_PLACEHOLDER|\"${PREFILL_PROFILER_DURATION_SECS}\"|g" \
+          -e "s|PREFILL_PROFILER_DELAY_ITERS_PLACEHOLDER|\"${PREFILL_PROFILER_DELAY_ITERS}\"|g" \
+          -e "s|PREFILL_PROFILER_MAX_ITERS_PLACEHOLDER|\"${PREFILL_PROFILER_MAX_ITERS}\"|g" \
     | {{KN}} apply -f -
   rm -f {{GB200_DIR}}/kustomization.yaml
+  echo "Rendered and applied (ts=$DEPLOY_TS)"
 
+start MODE='pd' ROUTING='load-aware' DEV='false':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  DEV_VENV=""
+  if [ "{{DEV}}" = "true" ]; then
+    DEV_VENV="{{VLLM_DEV_VENV}}"
+    echo "Dev mode: VLLM_DEV_VENV=$DEV_VENV"
+  fi
+  just _render-manifests {{MODE}} "$DEV_VENV"
+
+  export DEPLOY_NAME="{{DEPLOY_NAME}}"
   envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/gateway.yaml | {{KN}} apply -f -
   if [ "{{MODE}}" = "pd" ]; then
     just deploy_inferencepool pd
@@ -261,7 +325,7 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
     just deploy_inferencepool {{ROUTING}}
   fi
   envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/httproute.yaml | {{KN}} apply -f -
-  echo "Deployed $DEPLOY_TS"
+  echo "Deployed."
 
 stop NOW='false':
   #!/usr/bin/env bash
@@ -291,35 +355,7 @@ restart-lws MODE='pd' DEV='false':
   set -euo pipefail
   DEV_VENV=""
   if [ "{{DEV}}" = "true" ]; then DEV_VENV="{{VLLM_DEV_VENV}}"; fi
-  DEPLOY_TS=$(date +%Y%m%d-%H%M%S)
-  printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: {{NAME_PREFIX}}-\nresources:\n  - overlays/{{MODE}}\n' \
-    > {{GB200_DIR}}/kustomization.yaml
-  kubectl kustomize {{GB200_DIR}} \
-    | sed -e "s/DEPLOY_TS_PLACEHOLDER/$DEPLOY_TS/g" \
-          -e "s/OWNER_PLACEHOLDER/{{NAME_PREFIX}}/g" \
-          -e "s|MODEL_PLACEHOLDER|{{MODEL}}|g" \
-          -e "s|MODEL_LABEL_PLACEHOLDER|{{MODEL_LABEL}}|g" \
-          -e "s|VLLM_DEV_VENV_PLACEHOLDER|$DEV_VENV|g" \
-          -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/{{NAME_PREFIX}}|g" \
-          -e "s|VLLM_IMAGE_PLACEHOLDER|{{VLLM_IMAGE}}|g" \
-          -e "s|FORK_REPO_PLACEHOLDER|{{FORK_REPO}}|g" \
-          -e "s|FORK_BRANCH_PLACEHOLDER|{{FORK_BRANCH}}|g" \
-          -e "s|DECODE_LWS_SIZE_PLACEHOLDER|{{DECODE_LWS_SIZE}}|g" \
-          -e 's|DECODE_EPLB_ENABLED_PLACEHOLDER|"{{DECODE_EPLB_ENABLED}}"|g' \
-          -e 's|PREFILL_EPLB_ENABLED_PLACEHOLDER|"{{PREFILL_EPLB_ENABLED}}"|g' \
-          -e 's|EPLB_USE_ASYNC_PLACEHOLDER|"{{EPLB_USE_ASYNC}}"|g' \
-          -e 's|EPLB_STEP_INTERVAL_PLACEHOLDER|"{{EPLB_STEP_INTERVAL}}"|g' \
-          -e 's|EPLB_NUM_REDUNDANT_EXPERTS_PLACEHOLDER|"{{EPLB_NUM_REDUNDANT_EXPERTS}}"|g' \
-          -e 's|EPLB_WINDOW_SIZE_PLACEHOLDER|"{{EPLB_WINDOW_SIZE}}"|g' \
-          -e 's|EPLB_LOG_BALANCEDNESS_PLACEHOLDER|"{{EPLB_LOG_BALANCEDNESS}}"|g' \
-          -e 's|EPLB_LOG_BALANCEDNESS_INTERVAL_PLACEHOLDER|"{{EPLB_LOG_BALANCEDNESS_INTERVAL}}"|g' \
-          -e "s|EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER|{{EPLB_EXPERT_LOAD_DUMP_DIR}}/$DEPLOY_TS|g" \
-          -e 's|PREFIX_CACHING_PLACEHOLDER|"{{PREFIX_CACHING}}"|g' \
-          -e 's|BUILD_DEEPEP_WHEEL_PLACEHOLDER|{{BUILD_DEEPEP_WHEEL}}|g' \
-          -e "s|DEEPEP_REPO_PLACEHOLDER|{{DEEPEP_REPO}}|g" \
-          -e "s|DEEPEP_BRANCH_PLACEHOLDER|{{DEEPEP_BRANCH}}|g" \
-    | {{KN}} apply -f -
-  rm -f {{GB200_DIR}}/kustomization.yaml
+  just _render-manifests {{MODE}} "$DEV_VENV"
   echo "LWS reapplied (dev={{DEV}}). Rolling update in progress."
 
 restart MODE='pd' ROUTING='load-aware' DEV='false':
@@ -545,7 +581,9 @@ cache-model:
   #!/usr/bin/env bash
   set -euo pipefail
   {{KN}} delete daemonset model-cache --ignore-not-found=true
-  sed "s|MODEL_PLACEHOLDER|{{MODEL}}|g" {{GB200_DIR}}/model-cache-ds.yaml | {{KN}} apply -f -
+  sed -e "s|MODEL_PLACEHOLDER|{{MODEL}}|g" \
+      -e "s|VLLM_IMAGE_PLACEHOLDER|{{VLLM_IMAGE}}|g" \
+    {{GB200_DIR}}/model-cache-ds.yaml | {{KN}} apply -f -
   echo "Waiting for all nodes to finish downloading..."
   {{KN}} rollout status daemonset/model-cache --timeout=30m
   echo "All nodes cached. Cleaning up DaemonSet..."
@@ -556,14 +594,18 @@ flush-cache:
   {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/{{NAME_PREFIX}}/vllm_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/flashinfer_cache_extdp && echo "Compile caches flushed"'
 
 # Profile all decode pods, copy traces, combine, fix, and open in Finder
-profile:
+profile WARMUP_WAIT='120' PROFILE_WAIT='120':
   #!/usr/bin/env bash
   set -euo pipefail
 
-  # Get decode pod IPs
-  DECODE_IPS=$({{KN}} get pods -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | .status.podIP' | tr '\n' ' ')
+  just benchmark-profile
+
+  echo "Waiting {{WARMUP_WAIT}}s for warmup..."
+  sleep {{WARMUP_WAIT}}
+
+  DECODE_IPS=$({{KN}} get pods -l llm-d.ai/owner={{NAME_PREFIX}} -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | .status.podIP' | tr '\n' ' ')
   if [[ -z "$DECODE_IPS" ]]; then
-    echo "No decode pods found"
+    echo "No decode pods found for owner={{NAME_PREFIX}}"
     exit 1
   fi
   PORTS="8200 8201 8202 8203"
@@ -578,22 +620,17 @@ profile:
     wait
   "
 
-  echo "Waiting for profiles to complete..."
-  {{KN}} exec {{POKER_NAME}} -- bash -c "
-    for IP in $DECODE_IPS; do
-      for PORT in $PORTS; do
-        echo \"  Stopping \$IP:\$PORT...\"
-        curl -s -X POST http://\$IP:\$PORT/stop_profile
-      done
-    done
-  "
+  echo "Waiting {{PROFILE_WAIT}}s for max_iterations auto-stop..."
+  sleep {{PROFILE_WAIT}}
 
-  echo "Copying and processing traces..."
+  echo "Copying traces..."
   just get-decode-pods
   just copy-traces
   TRACE_DIR=$(ls -d ./traces/[0-9]* 2>/dev/null | sort -t/ -k3 -n | tail -1)
   N=$(basename "$TRACE_DIR")
-  just process-traces "$N"
+  if [ -f profiling/process_traces.py ]; then
+    just process-traces "$N"
+  fi
   echo "Opening $TRACE_DIR"
   open "$TRACE_DIR"
 
@@ -664,28 +701,74 @@ prep-datasets:
 
 NYANN_BENCH_DIR := env("NYANN_BENCH_DIR", "")
 NYANN_TAG := env("NYANN_TAG", "latest")
+NYANN_WORKERS := env("NYANN_WORKERS", "8")
+NYANN_ISL := env("NYANN_ISL", "500")
+NYANN_OSL := env("NYANN_OSL", "1500")
+
+# Save benchmark launch params to .tmp/ so eplb-collect can read them back accurately.
+_save-bench-config TYPE:
+    #!/usr/bin/env bash
+    mkdir -p .tmp
+    cat > ".tmp/bench-{{NAME_PREFIX}}.env" <<EOF
+    BENCH_TYPE={{TYPE}}
+    BENCH_DATASET={{BENCH_DATASET}}
+    SWEEP_MIN={{SWEEP_MIN}}
+    SWEEP_MAX={{SWEEP_MAX}}
+    SWEEP_STEPS={{SWEEP_STEPS}}
+    WARMUP_CONCURRENCY={{WARMUP_CONCURRENCY}}
+    N_WORKERS={{NYANN_WORKERS}}
+    ISL={{NYANN_ISL}}
+    OSL={{NYANN_OSL}}
+    BENCH_LAUNCHED_AT=$(date -Iseconds)
+    EOF
 
 # Wait for stack readiness, then launch nyann-bench load + eval jobs
-benchmark-stairs:
+benchmark-stairs EVAL='true':
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "{{NYANN_BENCH_DIR}}" ]; then
       echo "Error: NYANN_BENCH_DIR is not set. Add it to .env or export it." >&2
       exit 1
     fi
+    just _save-bench-config stairs
     LUSTRE="/mnt/lustre/{{NAME_PREFIX}}"
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_BENCH_DIR}}"
     just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
-      "{\"load\":{\"concurrency\":{{WARMUP_CONCURRENCY}}},\"warmup\":{\"duration\":\"300s\",\"stagger\":true},\"sweep\":{\"min\":{{SWEEP_MIN}},\"max\":{{SWEEP_MAX}},\"steps\":{{SWEEP_STEPS}},\"step_duration\":\"300s\"},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
-      8 {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
-    just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
-      "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
-      1 {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
+      "{\"load\":{\"concurrency\":{{WARMUP_CONCURRENCY}}},\"warmup\":{\"duration\":\"300s\",\"stagger\":true},\"sweep\":{\"min\":{{SWEEP_MIN}},\"max\":{{SWEEP_MAX}},\"steps\":{{SWEEP_STEPS}},\"step_duration\":\"300s\"},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":{{NYANN_ISL}},\"osl\":{{NYANN_OSL}},\"turns\":1}}" \
+      {{NYANN_WORKERS}} {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
+    if [ "{{EVAL}}" = "true" ]; then
+      just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
+        "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
+        1 {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
+    fi
     wait
-    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
+    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' to follow."
 
-benchmark-constant:
+benchmark-constant EVAL='true':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{NYANN_BENCH_DIR}}" ]; then
+      echo "Error: NYANN_BENCH_DIR is not set. Add it to .env or export it." >&2
+      exit 1
+    fi
+    just _save-bench-config constant
+    LUSTRE="/mnt/lustre/{{NAME_PREFIX}}"
+    BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
+    cd "{{NYANN_BENCH_DIR}}"
+    just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
+      "{\"load\":{\"concurrency\":1900,\"duration\":\"3600s\"},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":{{NYANN_ISL}},\"osl\":{{NYANN_OSL}},\"turns\":1}}" \
+      {{NYANN_WORKERS}} {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
+    if [ "{{EVAL}}" = "true" ]; then
+      just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
+        "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
+        1 {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
+    fi
+    wait
+    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' to follow."
+
+# Short benchmark for profiling (5 min, no eval)
+benchmark-profile:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "{{NYANN_BENCH_DIR}}" ]; then
@@ -696,13 +779,9 @@ benchmark-constant:
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_BENCH_DIR}}"
     just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
-      "{\"load\":{\"concurrency\":1900,\"duration\":\"3600s\"},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
-      8 {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
-    just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
-      "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
-      1 {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
-    wait
-    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
+      "{\"load\":{\"concurrency\":1900,\"duration\":\"300s\"},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":{{NYANN_ISL}},\"osl\":{{NYANN_OSL}},\"turns\":1}}" \
+      {{NYANN_WORKERS}} {{NAMESPACE}} arm64 lustre {{NYANN_TAG}}
+    echo "nyann-bench profiling job submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' to follow."
 
 # Stop nyann-bench benchmark jobs
 stop-nyann:
@@ -775,6 +854,16 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
   #!/usr/bin/env bash
   set -euo pipefail
   OUT_DIR="{{EPLB_RESULTS_DIR}}/{{RUN_NAME}}"
+  if [ -d "$OUT_DIR" ] && [ "$(ls -A "$OUT_DIR" 2>/dev/null)" ]; then
+    echo "WARNING: $OUT_DIR already exists and contains data:"
+    ls -1 "$OUT_DIR"
+    echo ""
+    read -rp "Overwrite existing results? [y/N] " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+      echo "Aborted."
+      exit 1
+    fi
+  fi
   mkdir -p "$OUT_DIR/eplb-logs"
   echo "=== eplb-collect: {{RUN_NAME}} ==="
 
@@ -787,17 +876,24 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
     echo "DEPLOY_NAME={{DEPLOY_NAME}}"
     echo "MODEL={{MODEL}}"
     echo "DATASET={{DATASET}}"
-    echo "DECODE_LWS_SIZE={{DECODE_LWS_SIZE}}"
     echo "VLLM_IMAGE={{VLLM_IMAGE}}"
     echo "FORK_REPO={{FORK_REPO}}"
     echo "FORK_BRANCH={{FORK_BRANCH}}"
     echo "EPLB_EXPERT_LOAD_DUMP_DIR={{EPLB_EXPERT_LOAD_DUMP_DIR}}"
-    echo "SWEEP_MIN={{SWEEP_MIN}}"
-    echo "SWEEP_MAX={{SWEEP_MAX}}"
-    echo "SWEEP_STEPS={{SWEEP_STEPS}}"
-    echo "WARMUP_CONCURRENCY={{WARMUP_CONCURRENCY}}"
+    BENCH_FILE=".tmp/bench-{{NAME_PREFIX}}.env"
+    if [ -f "$BENCH_FILE" ]; then
+      echo "# Bench params from $BENCH_FILE (saved at launch time)"
+      grep -E '^(BENCH_TYPE|BENCH_DATASET|SWEEP_MIN|SWEEP_MAX|SWEEP_STEPS|WARMUP_CONCURRENCY|N_WORKERS|ISL|OSL|BENCH_LAUNCHED_AT)=' "$BENCH_FILE" | sed 's/^[[:space:]]*//'
+    else
+      echo "# WARNING: $BENCH_FILE not found, using current Justfile defaults"
+      echo "SWEEP_MIN={{SWEEP_MIN}}"
+      echo "SWEEP_MAX={{SWEEP_MAX}}"
+      echo "SWEEP_STEPS={{SWEEP_STEPS}}"
+      echo "WARMUP_CONCURRENCY={{WARMUP_CONCURRENCY}}"
+    fi
     echo "COLLECT_TS=$(date -Iseconds)"
   } > "$OUT_DIR/config.env"
+  rm -f "$BENCH_FILE"
 
   # Read EPLB env vars and topology from the live decode pod
   DECODE_POD=$({{KN}} get pods -l llm-d.ai/role=decode,llm-d.ai/owner={{NAME_PREFIX}} -o json 2>/dev/null | jq -r '.items[0].metadata.name // empty' || true)
@@ -805,7 +901,7 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
     POD_JSON=$({{KN}} get pod "$DECODE_POD" -o json 2>/dev/null || echo "{}")
     MODE=$(echo "$POD_JSON" | jq -r '.metadata.labels["llm-d.ai/deployment"] // "unknown"')
     echo "MODE=$MODE" >> "$OUT_DIR/config.env"
-    for VAR in A2A_BACKEND EPLB_ENABLED EPLB_USE_ASYNC EPLB_STEP_INTERVAL EPLB_NUM_REDUNDANT_EXPERTS EPLB_WINDOW_SIZE EPLB_LOG_BALANCEDNESS EPLB_LOG_BALANCEDNESS_INTERVAL EPLB_COMMUNICATOR EPLB_EXPERT_LOAD_DUMP_DIR PREFIX_CACHING VLLM_USE_V2_MODEL_RUNNER; do
+    for VAR in A2A_BACKEND EPLB_ENABLED EPLB_USE_ASYNC EPLB_STEP_INTERVAL EPLB_NUM_REDUNDANT_EXPERTS EPLB_WINDOW_SIZE EPLB_LOG_BALANCEDNESS EPLB_LOG_BALANCEDNESS_INTERVAL EPLB_COMMUNICATOR EPLB_EXPERT_LOAD_DUMP_DIR PREFIX_CACHING VLLM_USE_V2_MODEL_RUNNER VLLM_MOE_ROUTING_SIMULATION_STRATEGY; do
       VAL=$(echo "$POD_JSON" | jq -r --arg var "$VAR" '.spec.containers[] | select(.name=="vllm") | .env[] | select(.name==$var) | .value // empty')
       echo "DECODE_$VAR=$VAL" >> "$OUT_DIR/config.env"
     done
@@ -830,7 +926,7 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
   PREFILL_POD=$({{KN}} get pods -l llm-d.ai/role=prefill,llm-d.ai/owner={{NAME_PREFIX}} -o json 2>/dev/null | jq -r '.items[0].metadata.name // empty' || true)
   if [ -n "$PREFILL_POD" ]; then
     PREFILL_POD_JSON=$({{KN}} get pod "$PREFILL_POD" -o json 2>/dev/null || echo "{}")
-    for VAR in A2A_BACKEND EPLB_ENABLED EPLB_LOG_BALANCEDNESS EPLB_COMMUNICATOR VLLM_USE_V2_MODEL_RUNNER; do
+    for VAR in A2A_BACKEND EPLB_ENABLED EPLB_NUM_REDUNDANT_EXPERTS EPLB_LOG_BALANCEDNESS EPLB_COMMUNICATOR VLLM_USE_V2_MODEL_RUNNER VLLM_MOE_ROUTING_SIMULATION_STRATEGY; do
       VAL=$(echo "$PREFILL_POD_JSON" | jq -r --arg var "$VAR" '.spec.containers[] | select(.name=="vllm") | .env[] | select(.name==$var) | .value // empty')
       echo "PREFILL_$VAR=$VAL" >> "$OUT_DIR/config.env"
     done
@@ -893,28 +989,7 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
     done
 
     echo "[4/4] Copying expert load dumps from Lustre..."
-    DUMP_BASE=$(echo "$POD_JSON" | jq -r '.spec.containers[] | select(.name=="vllm") | .env[] | select(.name=="EPLB_EXPERT_LOAD_DUMP_DIR") | .value // empty')
-    if [ -n "$DUMP_BASE" ]; then
-      DUMP_PARENT=$(dirname "$DUMP_BASE")
-      DUMP_LEAF=$(basename "$DUMP_BASE")
-      for ROLE in decode prefill; do
-        DUMP_SUB="${DUMP_LEAF}/${ROLE}"
-        if {{KN}} exec "$LUSTRE_POD" $LUSTRE_CTR_FLAG -- test -d "${DUMP_PARENT}/${DUMP_SUB}" 2>/dev/null; then
-          mkdir -p "$OUT_DIR/expert-load/$ROLE"
-          {{KN}} exec "$LUSTRE_POD" $LUSTRE_CTR_FLAG -- tar cf - -C "$DUMP_PARENT" "$DUMP_SUB" 2>/dev/null \
-            | tar xf - -C "$OUT_DIR/expert-load/$ROLE" --strip-components=2 2>/dev/null \
-            || echo "Failed to copy $DUMP_SUB"
-          FILE_COUNT=$(find "$OUT_DIR/expert-load/$ROLE" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
-          echo "Copied $FILE_COUNT $ROLE expert load dump(s)"
-        fi
-      done
-      TOTAL=$(find "$OUT_DIR/expert-load" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
-      if [ "$TOTAL" -eq 0 ]; then
-        echo "No expert load dumps found under $DUMP_BASE/{decode,prefill}"
-      fi
-    else
-      echo "No EPLB_EXPERT_LOAD_DUMP_DIR set on pod -- skipping expert load dumps"
-    fi
+    bash scripts/download-dumps.sh "$OUT_DIR" "$LUSTRE_POD" || echo "WARNING: Expert load dump download failed — re-run with: just eplb-collect-dumps {{RUN_NAME}}"
   else
     echo "WARNING: No decode/prefill pod running -- skipping Lustre file copy (eplb-logs, expert-load)."
     echo "  Collect while pods are still running, or use 'just dev' to copy manually."
@@ -929,6 +1004,9 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
 # Re-collect Prometheus metrics for an existing run (reads timestamps from config.env)
 eplb-collect-prom RUN_NAME:
   python3 scripts/collect-prometheus.py "{{EPLB_RESULTS_DIR}}/{{RUN_NAME}}"
+
+eplb-collect-dumps RUN_NAME:
+  bash scripts/download-dumps.sh "{{EPLB_RESULTS_DIR}}/{{RUN_NAME}}"
 
 # === Monitoring ===
 

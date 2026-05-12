@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wide-ep-dcgm-metrics
+data:
+  custom-counters.csv: |
+    # NVLink / MNNVL bandwidth
+    DCGM_FI_PROF_NVLINK_TX_BYTES,  gauge, NVLink transmit bytes per second
+    DCGM_FI_PROF_NVLINK_RX_BYTES,  gauge, NVLink receive bytes per second
+
+    # GPU utilization
+    DCGM_FI_DEV_GPU_UTIL,          gauge, GPU utilization (percent)
+    DCGM_FI_DEV_MEM_COPY_UTIL,     gauge, Memory copy engine utilization (percent)
+    DCGM_FI_PROF_SM_ACTIVE,        gauge, Ratio of cycles with at least one active warp
+    DCGM_FI_PROF_SM_OCCUPANCY,     gauge, Ratio of active warps to max warps
+    DCGM_FI_PROF_DRAM_ACTIVE,      gauge, Ratio of cycles with active DRAM reads or writes
+
+    # Thermal and power
+    DCGM_FI_DEV_GPU_TEMP,          gauge, GPU temperature (C)
+    DCGM_FI_DEV_POWER_USAGE,       gauge, GPU power draw (W)
+
+    # Framebuffer memory
+    DCGM_FI_DEV_FB_USED,           gauge, Framebuffer memory used (MiB)
+    DCGM_FI_DEV_FB_FREE,           gauge, Framebuffer memory free (MiB)

@@ -4,7 +4,7 @@ metadata:
   name: wide-ep-decode
   labels:
     llm-d.ai/inferenceServing: "true"
-    llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+    llm-d.ai/model: DeepSeek-V4-Pro
     llm-d.ai/role: decode
 spec:
   replicas: 1
@@ -19,7 +19,7 @@ spec:
         labels:
           llm-d.ai/deploy-ts: DEPLOY_TS_PLACEHOLDER
           llm-d.ai/inferenceServing: "true"
-          llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+          llm-d.ai/model: DeepSeek-V4-Pro
           llm-d.ai/owner: OWNER_PLACEHOLDER
           llm-d.ai/role: decode
       spec:
@@ -37,6 +37,13 @@ spec:
             hostPath:
               path: /mnt/numa0
               type: Directory
+          - name: sys
+            hostPath:
+              path: /sys
+              type: Directory
+          - name: dcgm-metrics
+            configMap:
+              name: wide-ep-dcgm-metrics
         resourceClaims:
           - name: compute-domain-channel
             resourceClaimTemplateName: llm-d-dev-claim
@@ -133,7 +140,7 @@ spec:
 
                 FORK_REPO="FORK_REPO_PLACEHOLDER"
                 FORK_BRANCH="FORK_BRANCH_PLACEHOLDER"
-                if [ -n "$FORK_BRANCH" ]; then
+                if [ -n "$FORK_BRANCH" ] && [ -d /opt/vllm-source ]; then
                   cd /opt/vllm-source
                   git remote add fork "$FORK_REPO" 2>/dev/null || git remote set-url fork "$FORK_REPO"
                   git fetch fork "$FORK_BRANCH"
@@ -142,20 +149,19 @@ spec:
                   cd -
                 fi
 
-                # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
+                # DEV mode: use persistent Lustre venv; image venv if present; else system python
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
                   echo "Using dev venv at ${VLLM_DEV_VENV}"
                   source "${VLLM_DEV_VENV}/bin/activate"
-                else
+                  export LD_LIBRARY_PATH="${VLLM_DEV_VENV}/lib/python3.12/site-packages/nvidia/nccl/lib:${LD_LIBRARY_PATH:-}"
+                elif [ -f /opt/vllm/bin/activate ]; then
                   source /opt/vllm/bin/activate
                 fi
-
-                uv pip install --upgrade mistral_common
 
                 # Derive batch-size-dependent env vars from MAX_TOKENS
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
                 # NVSHMEM_QP_DEPTH only needed for DeepEP
-                export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2))
+                export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2 + 2))
 
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
@@ -164,14 +170,13 @@ spec:
                 NSYS_PREFIX=""
                 NVTX_TRACING_ARG=""
                 if [ "${ENABLE_PROFILING:-0}" = "1" ]; then
-                  echo "Profiling enabled, installing profiling tools..."
-                  uv pip install nvtx
+                  echo "Profiling enabled (type=${PROFILER_TYPE:-nsys})..."
                   mkdir -p /trace
-                  apt-get update && apt-get install -y --no-install-recommends nsight-systems-cli 2>/dev/null || \
-                  uv pip install nvidia-nsight-systems 2>/dev/null || \
-                  (echo "ERROR: Could not install nsys. Add nsight-systems to your container image." && exit 1)
-
                   if [ "${PROFILER_TYPE:-nsys}" = "nsys" ]; then
+                    uv pip install nvtx
+                    apt-get update && apt-get install -y --no-install-recommends nsight-systems-cli 2>/dev/null || \
+                    uv pip install nvidia-nsight-systems 2>/dev/null || \
+                    (echo "ERROR: Could not install nsys. Add nsight-systems to your container image." && exit 1)
                     NSYS_PREFIX="nsys profile --cuda-graph-trace=graph --trace=cuda,nvtx --delay=${PROFILER_DELAY_SECS:-120} --duration=${PROFILER_DURATION_SECS:-10} -o /trace/decode_rank_${START_RANK}"
                     NVTX_TRACING_ARG="--enable-layerwise-nvtx-tracing"
                   else
@@ -186,7 +191,7 @@ spec:
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
                   CUDA_VISIBLE_DEVICES=$GPUS $NSYS_PREFIX vllm serve $PROFILER_ARGS \
-                    nvidia/DeepSeek-R1-0528-NVFP4-v2 \
+                    deepseek-ai/DeepSeek-V4-Pro \
                     --disable-uvicorn-access-log \
                     --port $((8200 + R)) \
                     --tensor-parallel-size $TP_SIZE \
@@ -197,26 +202,29 @@ spec:
                     --data-parallel-address ${LWS_LEADER_ADDRESS} \
                     --data-parallel-rpc-port 5555 \
                     --trust-remote-code \
-                    --kv_transfer_config "$KV_TRANSFER_CONFIG" \
-                    --gpu-memory-utilization 0.75 \
+                    ${KV_TRANSFER_CONFIG:+--kv_transfer_config "$KV_TRANSFER_CONFIG"} \
+                    --gpu-memory-utilization 0.85 \
                     --max-num-batched-tokens $MAX_TOKENS \
                     --max-num-seqs $MAX_TOKENS \
                     --disable_cascade_attn \
                     --max-cudagraph-capture-size $MAX_TOKENS \
-                    --all2all-backend "flashinfer_nvlink_one_sided" \
                     --async-scheduling \
                     --api-server-count 4 \
-                    --enable-eplb \
-                    --eplb-config '{"window_size":"100",
-                                    "step_interval":"3000",
-                                    "num_redundant_experts":"32",
-                                    "log_balancedness":"False",
-                                    "log_balancedness_interval":"1000"}' \
                     --kv-cache-dtype fp8 \
-                    --enable-force-include-usage &
+                    --block-size 256 \
+                    --no-disable-hybrid-kv-cache-manager \
+                    --attention_config.use_fp4_indexer_cache=True \
+                    --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}' \
+                    --enable-force-include-usage \
+                    --all2all-backend "deepep_v2" \
+                    --profiler-config '{"profiler":"torch","torch_profiler_dir":"/traces","ignore_frontend":"true","max_iterations":3}' &
                 done
+                    #--all2all-backend "deepep_v2" \
+                    #--moe-backend flashinfer_trtllm \
 
-                    #--all2all-backend "deepep_low_latency" \
+                    
+                    #--compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}' \
+                    #--all2all-backend "flashinfer_nvlink_one_sided" \
                     ########
                     # TODO: try
                     #--speculative-config '{"method":"mtp","num_speculative_tokens":1}' \
@@ -238,13 +246,18 @@ spec:
                 exit 1
 
             env:
-              - name: VLLM_USE_V2_MODEL_RUNNER
-                value: "1"
+              #- name: VLLM_USE_V2_MODEL_RUNNER
+              #  value: "1"
 
+              - name: FLASHINFER_DISABLE_VERSION_CHECK
+                value: "1"
+              - name: ACTIVATION_V2_GRID_Y
+                value: "512"
               - name: VLLM_NO_USAGE_STATS
                 value: "1"
               - name: TQDM_DISABLE
                 value: "1"
+
 
               # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)
               - name: VLLM_DEV_VENV
@@ -258,6 +271,13 @@ spec:
 
               - name: MAX_TOKENS
                 value: "1024"
+
+              #- name: ENABLE_PROFILING
+              #  value: "1"
+              #- name: PROFILER_TYPE
+              #  value: "torch"
+              #- name: PROFILER_MAX_ITERS
+              #  value: "3"
 
               # Enable on-demand profiling via /start_profile and /stop_profile
               - name: VLLM_TORCH_PROFILER_DIR
@@ -279,6 +299,12 @@ spec:
               - name: FLASHINFER_CACHE_DIR
                 value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_extdp
 
+              # Flash Attention cute DSL JIT - persist compiled kernels to Lustre
+              - name: FLASH_ATTENTION_CUTE_DSL_CACHE_ENABLED
+                value: "1"
+              - name: FLASH_ATTENTION_CUTE_DSL_CACHE_DIR
+                value: LUSTRE_PREFIX_PLACEHOLDER/fa_cute_dsl_cache
+
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
                 value: "1"
@@ -295,6 +321,16 @@ spec:
                 value: "1"
               - name: NVIDIA_GDRCOPY
                 value: enabled
+
+              # NCCL symmetric memory (required for DeepSeek-V4)
+              - name: VLLM_USE_NCCL_SYMM_MEM
+                value: "1"
+              - name: NCCL_CUMEM_ENABLE
+                value: "1"
+              - name: NCCL_MNNVL_ENABLE
+                value: "1"
+              - name: NCCL_NVLS_ENABLE
+                value: "1"
 
               # NVSHMEM config (DeepEP only, not needed for flashinfer_moe_a2a)
               - name: NVSHMEM_CUMEM_HANDLE_TYPE
@@ -365,3 +401,55 @@ spec:
               - mountPath: /mnt/local
                 name: local-nvme
             workingDir: /code
+          - name: dcgm-exporter
+            image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04
+            imagePullPolicy: IfNotPresent
+            args: ["-f", "/etc/dcgm-exporter/custom-counters.csv"]
+            ports:
+              - containerPort: 9400
+                name: dcgm
+                protocol: TCP
+            env:
+              - name: NVIDIA_VISIBLE_DEVICES
+                value: "all"
+              - name: NVIDIA_DRIVER_CAPABILITIES
+                value: "utility"
+              - name: DCGM_EXPORTER_KUBERNETES_GPU_ID_TYPE
+                value: "uid"
+            volumeMounts:
+              - name: dcgm-metrics
+                mountPath: /etc/dcgm-exporter/custom-counters.csv
+                subPath: custom-counters.csv
+                readOnly: true
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                memory: 256Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+          - name: node-exporter
+            image: quay.io/prometheus/node-exporter:v1.9.0
+            imagePullPolicy: IfNotPresent
+            args:
+              - --collector.disable-defaults
+              - --collector.infiniband
+              - --path.sysfs=/host/sys
+            ports:
+              - containerPort: 9100
+                name: node-metrics
+                protocol: TCP
+            volumeMounts:
+              - name: sys
+                mountPath: /host/sys
+                readOnly: true
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                memory: 64Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true

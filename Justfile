@@ -68,7 +68,7 @@ get-decode-pods:
   set -euo pipefail
   mkdir -p ./.tmp
   echo "Fetching decode pod information..."
-  {{KN}} get pods -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | "\(.metadata.name) \(.status.podIP)"' > .tmp/decode_pods.txt
+  {{KN}} get pods -l llm-d.ai/owner={{NAME_PREFIX}},llm-d.ai/role=decode -o json | jq -r '.items[] | "\(.metadata.name) \(.status.podIP)"' > .tmp/decode_pods.txt
   echo "Decode pods:"
   cat .tmp/decode_pods.txt
 
@@ -136,7 +136,7 @@ deploy_inferencepool ROUTING='load-aware':
   envsubst '${DEPLOY_NAME} ${OWNER}' < {{GB200_DIR}}/inferencepool-{{ROUTING}}.values.yaml > .tmp/inferencepool-values.yaml
   helm upgrade --install {{DEPLOY_NAME}}-infpool \
     oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
-    --version v1.3.0 \
+    --version v1.5.0 \
     -f .tmp/inferencepool-values.yaml \
     -n {{NAMESPACE}}
   # Restart EPP pod to pick up config changes (it reads config at startup)
@@ -147,7 +147,6 @@ deploy_inferencepool ROUTING='load-aware':
   INFPOOL_IP_SVC=""
   for i in $(seq 1 30); do
     INFPOOL_IP_SVC=$({{KN}} get svc -l istio.io/inferencepool-name={{DEPLOY_NAME}}-infpool -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) && [ -n "$INFPOOL_IP_SVC" ] && break
-    echo "Waiting for infpool-ip service... ($i/30)"
     sleep 2
   done
   if [ -z "$INFPOOL_IP_SVC" ]; then
@@ -177,7 +176,7 @@ VLLM_DEV_REMOTE := "https://github.com/vllm-project/vllm.git"
 VLLM_DEV_BRANCH := "main"
 VLLM_BUILD_JOBS := "16"
 
-VLLM_IMAGE := env("VLLM_IMAGE", "ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091")
+VLLM_IMAGE := env("VLLM_IMAGE", "quay.io/tms/vllm-deepseekv4-custom-deepep:latest")
 FORK_REPO := env("FORK_REPO", "")
 FORK_BRANCH := env("FORK_BRANCH", "")
 
@@ -370,6 +369,51 @@ dev-build-log:
 dev-stop:
   envsubst < {{DEV_DIR}}/dev-pod.yaml | {{KN}} delete -f - --ignore-not-found=true
 
+# Show the root cause of the most recent pod crash from Lustre logs
+# Usage: just crashlog          (checks both decode and prefill)
+#        just crashlog decode   (checks decode only)
+#        just crashlog prefill  (checks prefill only)
+crashlog ROLE='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  ROLES="${1:-decode prefill}"
+  {{KN}} exec {{DEV_POD_NAME}} -- bash -c '
+  for role in '"$ROLES"'; do
+    LUSTRE="/mnt/lustre/{{NAME_PREFIX}}/logs/$role"
+    [ -d "$LUSTRE" ] || continue
+    LOGS=($(ls -t "$LUSTRE"/{{DEPLOY_NAME}}-${role}-0_*.log 2>/dev/null))
+    [ ${#LOGS[@]} -lt 2 ] && continue
+
+    # Log churn = crashloop indicator
+    RECENT=$(ls -t "$LUSTRE"/{{DEPLOY_NAME}}-${role}-0_*.log | head -5 | wc -l)
+    LATEST_SIZE=$(wc -c < "${LOGS[0]}")
+    echo "=== $role: ${RECENT} recent logs, latest ${LATEST_SIZE} bytes ==="
+
+    # Find the crash log (2nd+ most recent with content)
+    for i in 1 2 3 4; do
+      F="${LOGS[$i]:-}"
+      [ -z "$F" ] && break
+      SIZE=$(wc -c < "$F" 2>/dev/null || echo 0)
+      if [ "$SIZE" -gt 5000 ]; then
+        echo "Crash log: $(basename $F) ($SIZE bytes)"
+        ERRORS=$(grep "Worker failed\|RuntimeError:\|CUDA error:\|AssertionError\|ValueError:\|TypeError:\|illegal\|not implemented" "$F" \
+          | grep -v "Traceback\|File\|^^^^\|resource_tracker\|DeprecationWarning\|Failed core proc" \
+          | sort -u)
+        if [ -n "$ERRORS" ]; then
+          echo "$ERRORS" | head -5
+        else
+          echo "  (no obvious errors found)"
+          echo "  tail:"
+          tail -5 "$F"
+        fi
+        echo ""
+        break
+      fi
+    done
+  done
+  '
+
+
 # Download model weights to local NVMe on all GPU nodes (apply, wait, cleanup)
 cache-model:
   #!/usr/bin/env bash
@@ -383,7 +427,7 @@ cache-model:
 
 # Flush vLLM/FlashInfer compile caches on Lustre (run after image or config changes)
 flush-cache:
-  {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/{{NAME_PREFIX}}/vllm_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/flashinfer_cache_extdp && echo "Compile caches flushed"'
+  {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/{{NAME_PREFIX}}/vllm_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/flashinfer_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/fa_cute_dsl_cache && echo "Compile caches flushed"'
 
 # Profile all decode pods, copy traces, combine, fix, and open in Finder
 profile:
@@ -432,10 +476,8 @@ copy-traces:
   #!/usr/bin/env bash
   set -euo pipefail
 
-  # Ensure we have fresh pod info
-  if [ ! -f .tmp/decode_pods.txt ]; then
-    just get-decode-pods
-  fi
+  # Always refresh pod info
+  just get-decode-pods
 
   # Find next available serial number
   N=0
@@ -452,7 +494,7 @@ copy-traces:
     echo "Copying traces from $POD_NAME..."
     POD_DIR="$TRACE_DIR/$POD_NAME"
     mkdir -p "$POD_DIR"
-    {{KN}} cp "$POD_NAME:/traces" "$POD_DIR" 2>/dev/null || echo "  No traces found in $POD_NAME or copy failed"
+    {{KN}} cp "$POD_NAME:/traces/" "$POD_DIR/" -c vllm 2>/dev/null || echo "  No traces found in $POD_NAME or copy failed"
   done < .tmp/decode_pods.txt
 
   # Remove empty pod directories (pods that had no traces)
@@ -481,7 +523,7 @@ process-traces N='':
 
 NYANN_BENCH_DIR := env("NYANN_BENCH_DIR", "")
 
-# Wait for stack readiness, then launch nyann-bench load + eval jobs
+# Launch staircase load sweep + background eval
 benchmark-stairs:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -489,18 +531,20 @@ benchmark-stairs:
       echo "Error: NYANN_BENCH_DIR is not set. Add it to .env or export it." >&2
       exit 1
     fi
-    LUSTRE="/mnt/lustre/{{NAME_PREFIX}}"
-    BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_BENCH_DIR}}"
-    just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
-      "{\"load\":{\"concurrency\":128},\"warmup\":{\"duration\":\"300s\",\"stagger\":true},\"sweep\":{\"min\":128,\"max\":1920,\"steps\":10,\"step_duration\":\"300s\"},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
-      8 {{NAMESPACE}} arm64 lustre pr-28 &
-    just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
-      "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
-      1 {{NAMESPACE}} arm64 lustre pr-28 &
+    go run ./cmd/nyann-bench/ generate \
+      --target "{{EVAL_BASE_URL}}" \
+      --config '{"load":{"concurrency":128},"warmup":{"duration":"120s","stagger":true},"sweep":{"min":128,"max":1600,"steps":10,"step_duration":"300s"},"workload":{"type":"corpus","corpus_path":"{{LUSTRE_DATA}}/corpus/sharegpt.txt","isl":500,"osl":1500,"turns":1}}' \
+      --num-workers 8 \
+      --kube --kube.name {{NAME_PREFIX}}-sharegpt-load --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
+    go run ./cmd/nyann-bench/ generate \
+      --target "{{EVAL_BASE_URL}}" \
+      --config '{"load":{"concurrency":64,"duration":"3600s"},"workload":{"type":"gsm8k","gsm8k_path":"{{LUSTRE_DATA}}/gsm8k_test.jsonl","gsm8k_train_path":"{{LUSTRE_DATA}}/gsm8k_train.jsonl"}}' \
+      --kube --kube.name {{NAME_PREFIX}}-nyann-eval --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
     wait
-    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
+    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-nyann-eval' to follow."
 
+# Launch constant-concurrency load + background eval
 benchmark-constant:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -508,22 +552,59 @@ benchmark-constant:
       echo "Error: NYANN_BENCH_DIR is not set. Add it to .env or export it." >&2
       exit 1
     fi
-    LUSTRE="/mnt/lustre/{{NAME_PREFIX}}"
-    BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_BENCH_DIR}}"
-    just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
-      "{\"load\":{\"concurrency\":1900,\"duration\":\"3600s\"},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":500,\"osl\":1500,\"turns\":1}}" \
-      8 {{NAMESPACE}} arm64 lustre pr-28 &
-    just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
-      "{\"load\":{\"concurrency\":64,\"duration\":\"3600s\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"$LUSTRE/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"$LUSTRE/gsm8k_train.jsonl\"}}" \
-      1 {{NAMESPACE}} arm64 lustre pr-28 &
+    go run ./cmd/nyann-bench/ generate \
+      --target "{{EVAL_BASE_URL}}" \
+      --config '{"load":{"concurrency":1900,"duration":"180s"},"warmup":{"duration":"60s","stagger":true},"workload":{"type":"corpus","corpus_path":"{{LUSTRE_DATA}}/corpus/sharegpt.txt","isl":500,"osl":1500,"turns":1}}' \
+      --num-workers 8 \
+      --kube --kube.name {{NAME_PREFIX}}-sharegpt-load --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
+    go run ./cmd/nyann-bench/ generate \
+      --target "{{EVAL_BASE_URL}}" \
+      --config '{"load":{"concurrency":64,"duration":"180s"},"workload":{"type":"gsm8k","gsm8k_path":"{{LUSTRE_DATA}}/gsm8k_test.jsonl","gsm8k_train_path":"{{LUSTRE_DATA}}/gsm8k_train.jsonl"}}' \
+      --kube --kube.name {{NAME_PREFIX}}-nyann-eval --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
     wait
-    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-poker-eval' to follow."
+    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-nyann-eval' to follow."
+
+LUSTRE_DATA := "/mnt/lustre/" + NAME_PREFIX
+EVAL_BASE_URL := "http://" + DEPLOY_NAME + "-inference-gateway-istio." + NAMESPACE + ".svc.cluster.local/v1"
+
+NYANN_IMAGE_TAG := env("NYANN_IMAGE_TAG", "latest")
+
+# Run GSM8K eval (1319 math problems, ~30 min)
+eval-gsm8k CONCURRENCY='64':
+    cd {{NYANN_BENCH_DIR}} && NYANN_NAME_PREFIX={{NAME_PREFIX}} go run ./cmd/nyann-bench/ eval gsm8k \
+      --target "{{EVAL_BASE_URL}}" \
+      --gsm8k-path {{LUSTRE_DATA}}/gsm8k_test.jsonl \
+      --gsm8k-train-path {{LUSTRE_DATA}}/gsm8k_train.jsonl \
+      --concurrency {{CONCURRENCY}} \
+      --timeout 2h \
+      --kube --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}}
+
+# Run GPQA Diamond eval (198 grad-level science questions)
+eval-gpqa CONCURRENCY='64':
+    cd {{NYANN_BENCH_DIR}} && NYANN_NAME_PREFIX={{NAME_PREFIX}} go run ./cmd/nyann-bench/ eval gpqa \
+      --target "{{EVAL_BASE_URL}}" \
+      --gpqa-path {{LUSTRE_DATA}}/gpqa_diamond.jsonl \
+      --concurrency {{CONCURRENCY}} \
+      --timeout 2h \
+      --kube --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}}
+
+# Run both evals in parallel
+eval: (eval-gsm8k) (eval-gpqa)
+
+# Prep GPQA dataset on Lustre (if missing or empty)
+prep-gpqa:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{NYANN_BENCH_DIR}}"
+    just prep-gpqa "{{LUSTRE_DATA}}" {{NAMESPACE}}
 
 # Stop nyann-bench benchmark jobs
 stop-nyann:
-  {{KN}} delete job -l app={{NAME_PREFIX}}-sharegpt-load --ignore-not-found=true &
-  {{KN}} delete job -l app={{NAME_PREFIX}}-poker-eval --ignore-not-found=true &
+  {{KN}} delete jobset -l app={{NAME_PREFIX}}-sharegpt-load --ignore-not-found=true &
+  {{KN}} delete jobset -l app={{NAME_PREFIX}}-nyann-eval --ignore-not-found=true &
+  {{KN}} delete jobset -l app={{NAME_PREFIX}}-eval-gsm8k --ignore-not-found=true &
+  {{KN}} delete jobset -l app={{NAME_PREFIX}}-eval-gpqa --ignore-not-found=true &
   wait
 
 # Tail nyann-bench job logs
@@ -531,7 +612,7 @@ nyann-logs NAME:
   {{KN}} logs -l app={{NAME}} -c nyann-bench --tail=50 -f --max-log-requests=20
 
 # Query Prometheus for per-stage benchmark metrics (requires port-forward: just prometheus)
-query-prometheus CLIENT_JOB=(NAME_PREFIX + "-sharegpt-load") DEPLOYMENT=DEPLOY_NAME EVAL_JOB=(NAME_PREFIX + "-poker-eval") *ARGS='':
+query-prometheus CLIENT_JOB=(NAME_PREFIX + "-sharegpt-load") DEPLOYMENT=DEPLOY_NAME EVAL_JOB=(NAME_PREFIX + "-nyann-eval") *ARGS='':
   #!/usr/bin/env bash
   set -euo pipefail
   if [ -z "{{NYANN_BENCH_DIR}}" ]; then
@@ -576,7 +657,7 @@ load-dashboards:
 # === KV Cache Sweep ===
 
 KV_SWEEP_IMAGE := "quay.io/tms/llm-d-cuda-dev:ef2c4f7"
-KV_SWEEP_MODEL := "nvidia/DeepSeek-R1-0528-NVFP4-v2"
+KV_SWEEP_MODEL := "deepseek-ai/DeepSeek-V4-Pro"
 KV_SWEEP_PRIORITY := "low-priority"
 KV_SWEEP_GPU_MEM_UTIL := "0.75"
 KV_SWEEP_MAX_TOKENS := "1024"

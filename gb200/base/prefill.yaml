@@ -4,22 +4,22 @@ metadata:
   name: wide-ep-prefill
   labels:
     llm-d.ai/inferenceServing: "true"
-    llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+    llm-d.ai/model: DeepSeek-V4-Pro
     llm-d.ai/role: prefill
 spec:
-  replicas: 2
+  replicas: 1
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 1
+    size: 2
     workerTemplate:
       metadata:
         labels:
           llm-d.ai/deploy-ts: DEPLOY_TS_PLACEHOLDER
           llm-d.ai/inferenceServing: "true"
-          llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+          llm-d.ai/model: DeepSeek-V4-Pro
           llm-d.ai/owner: OWNER_PLACEHOLDER
           llm-d.ai/role: prefill
       spec:
@@ -37,6 +37,13 @@ spec:
             hostPath:
               path: /mnt/numa0
               type: Directory
+          - name: sys
+            hostPath:
+              path: /sys
+              type: Directory
+          - name: dcgm-metrics
+            configMap:
+              name: wide-ep-dcgm-metrics
         resourceClaims:
           - name: compute-domain-channel
             resourceClaimTemplateName: llm-d-dev-claim
@@ -66,7 +73,7 @@ spec:
 
                 FORK_REPO="FORK_REPO_PLACEHOLDER"
                 FORK_BRANCH="FORK_BRANCH_PLACEHOLDER"
-                if [ -n "$FORK_BRANCH" ]; then
+                if [ -n "$FORK_BRANCH" ] && [ -d /opt/vllm-source ]; then
                   cd /opt/vllm-source
                   git remote add fork "$FORK_REPO" 2>/dev/null || git remote set-url fork "$FORK_REPO"
                   git fetch fork "$FORK_BRANCH"
@@ -75,15 +82,14 @@ spec:
                   cd -
                 fi
 
-                # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
+                # DEV mode: use persistent Lustre venv; image venv if present; else system python
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
                   echo "Using dev venv at ${VLLM_DEV_VENV}"
                   source "${VLLM_DEV_VENV}/bin/activate"
-                else
+                  export LD_LIBRARY_PATH="${VLLM_DEV_VENV}/lib/python3.12/site-packages/nvidia/nccl/lib:${LD_LIBRARY_PATH:-}"
+                elif [ -f /opt/vllm/bin/activate ]; then
                   source /opt/vllm/bin/activate
                 fi
-
-                uv pip install --upgrade mistral_common
 
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))
@@ -110,24 +116,31 @@ spec:
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
                   CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
-                    nvidia/DeepSeek-R1-0528-NVFP4-v2 \
+                    deepseek-ai/DeepSeek-V4-Pro \
                     --disable-uvicorn-access-log \
                     --port $((8000 + R)) \
                     --tensor-parallel-size $TP_SIZE \
                     --enable-expert-parallel \
                     $DP_FLAGS $RANK_FLAGS \
                     --trust-remote-code \
-                    --kv_transfer_config "$KV_TRANSFER_CONFIG" \
+                    ${KV_TRANSFER_CONFIG:+--kv_transfer_config "$KV_TRANSFER_CONFIG"} \
+                    --all2all-backend "deepep_v2" \
                     --gpu-memory-utilization 0.85 \
-                    --all2all-backend "flashinfer_nvlink_one_sided" \
                     --disable_cascade_attn \
                     --api-server-count 4 \
                     --async-scheduling \
                     --kv-cache-dtype fp8 \
+                    --block-size 256 \
+                    --no-disable-hybrid-kv-cache-manager \
+                    --attention_config.use_fp4_indexer_cache=True \
+                    --enforce-eager \
                     --enable-force-include-usage &
                 done
 
                     #--all2all-backend "deepep_high_throughput" \
+                    
+                    #--compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}' \
+                    #--all2all-backend "flashinfer_nvlink_one_sided" \
                     # --attention_backend "CUTLASS_MLA" \
                     #--profiler-config '{"profiler": "torch",
                     #                    "torch_profiler_dir": "/traces",
@@ -141,13 +154,15 @@ spec:
                 exit 1
 
             env:
-              - name: VLLM_USE_V2_MODEL_RUNNER
-                value: "1"
+              #- name: VLLM_USE_V2_MODEL_RUNNER
+              #  value: "1"
               #- name: VLLM_NAN_DETECT
               #  value: "1"
               #- name: VLLM_ATTENTION_NAN_DETECT
               #  value: "1"
 
+              - name: FLASHINFER_DISABLE_VERSION_CHECK
+                value: "1"
               - name: VLLM_NO_USAGE_STATS
                 value: "1"
               - name: TQDM_DISABLE
@@ -177,6 +192,12 @@ spec:
               - name: FLASHINFER_CACHE_DIR
                 value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_extdp
 
+              # Flash Attention cute DSL JIT - persist compiled kernels to Lustre
+              - name: FLASH_ATTENTION_CUTE_DSL_CACHE_ENABLED
+                value: "1"
+              - name: FLASH_ATTENTION_CUTE_DSL_CACHE_DIR
+                value: LUSTRE_PREFIX_PLACEHOLDER/fa_cute_dsl_cache
+
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
                 value: "1"
@@ -191,6 +212,16 @@ spec:
                 value: "1"
               - name: NVIDIA_GDRCOPY
                 value: enabled
+
+              # NCCL symmetric memory (required for DeepSeek-V4)
+              - name: VLLM_USE_NCCL_SYMM_MEM
+                value: "1"
+              - name: NCCL_CUMEM_ENABLE
+                value: "1"
+              - name: NCCL_MNNVL_ENABLE
+                value: "1"
+              - name: NCCL_NVLS_ENABLE
+                value: "1"
 
               # Override container default that disables VMM
               - name: NVSHMEM_DISABLE_CUDA_VMM
@@ -259,3 +290,55 @@ spec:
               - mountPath: /mnt/local
                 name: local-nvme
             workingDir: /code
+          - name: dcgm-exporter
+            image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04
+            imagePullPolicy: IfNotPresent
+            args: ["-f", "/etc/dcgm-exporter/custom-counters.csv"]
+            ports:
+              - containerPort: 9400
+                name: dcgm
+                protocol: TCP
+            env:
+              - name: NVIDIA_VISIBLE_DEVICES
+                value: "all"
+              - name: NVIDIA_DRIVER_CAPABILITIES
+                value: "utility"
+              - name: DCGM_EXPORTER_KUBERNETES_GPU_ID_TYPE
+                value: "uid"
+            volumeMounts:
+              - name: dcgm-metrics
+                mountPath: /etc/dcgm-exporter/custom-counters.csv
+                subPath: custom-counters.csv
+                readOnly: true
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                memory: 256Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+          - name: node-exporter
+            image: quay.io/prometheus/node-exporter:v1.9.0
+            imagePullPolicy: IfNotPresent
+            args:
+              - --collector.disable-defaults
+              - --collector.infiniband
+              - --path.sysfs=/host/sys
+            ports:
+              - containerPort: 9100
+                name: node-metrics
+                protocol: TCP
+            volumeMounts:
+              - name: sys
+                mountPath: /host/sys
+                readOnly: true
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                memory: 64Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true

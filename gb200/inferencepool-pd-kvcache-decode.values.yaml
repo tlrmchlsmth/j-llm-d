@@ -1,15 +1,14 @@
-# InferencePool for GB200 P/D (Prefill/Decode disaggregated)
-# Aligned with upstream llm-d guides/recipes/scheduler/pd.values.yaml (v0.8.0)
-# Uses active-request-scorer for decode routing, always-disagg for P/D decision
+# InferencePool for GB200 P/D
+# Prefix-cache-aware prefill routing + KV-cache-utilization-aware decode routing
+# Decode scorer routes away from pods with high KV cache usage,
+# preventing large requests from piling onto the same decode pod.
 
 inferenceExtension:
   replicas: 1
   image:
-    hub: ghcr.io/llm-d
     name: llm-d-inference-scheduler
-    registry: ghcr.io
-    repository: llm-d/llm-d-inference-scheduler
-    tag: v0.8.0
+    hub: ghcr.io/llm-d
+    tag: v0.6.0
   extProcPort: 9002
   monitoring:
     interval: "10s"
@@ -23,31 +22,29 @@ inferenceExtension:
           - key: kubernetes.io/arch
             operator: In
             values: ["amd64"]
-  flags:
-    v: 0
   resources:
     requests:
       cpu: "8"
       memory: 16Gi
     limits:
+      cpu: "8"
       memory: 16Gi
-  pluginsConfigFile: "pd-config.yaml"
+  pluginsConfigFile: "custom-plugins.yaml"
   pluginsCustomConfig:
-    pd-config.yaml: |
+    custom-plugins.yaml: |
       apiVersion: inference.networking.x-k8s.io/v1alpha1
       kind: EndpointPickerConfig
       plugins:
-      - type: disagg-headers-handler
+      - type: prefill-header-handler
       - type: prefill-filter
       - type: decode-filter
       - type: prefix-cache-scorer
-      - type: active-request-scorer
-      - type: queue-scorer
+      - type: kv-cache-utilization-scorer
       - type: always-disagg-pd-decider
-      - type: disagg-profile-handler
+      - type: pd-profile-handler
         parameters:
-          deciders:
-            prefill: always-disagg-pd-decider
+          threshold: 0
+          hashBlockSize: 5
       - type: weighted-random-picker
         name: prefill-picker
         parameters:
@@ -62,17 +59,13 @@ inferenceExtension:
         plugins:
         - pluginRef: prefill-filter
         - pluginRef: prefix-cache-scorer
-          weight: 3
-        - pluginRef: active-request-scorer
-          weight: 2
-        - pluginRef: queue-scorer
-          weight: 2
+          weight: 1
         - pluginRef: prefill-picker
       - name: decode
         plugins:
         - pluginRef: decode-filter
-        - pluginRef: active-request-scorer
-          weight: 2
+        - pluginRef: kv-cache-utilization-scorer
+          weight: 1
         - pluginRef: decode-picker
 
 inferencePool:
@@ -85,7 +78,7 @@ inferencePool:
   modelServers:
     matchLabels:
       llm-d.ai/inferenceServing: "true"
-      llm-d.ai/model: DeepSeek-V4-Pro
+      llm-d.ai/model: GLM-5.1-FP8
       llm-d.ai/deployment: pd
       llm-d.ai/owner: ${OWNER}
 

@@ -4,5 +4,6 @@ resources:
   - decode.yaml
   - prefill.yaml
   - serviceAccount.yaml
+  - dcgm-custom-metrics.yaml
 configurations:
   - kustomize-config.yaml

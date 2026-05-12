@@ -37,6 +37,13 @@ spec:
             hostPath:
               path: /mnt/numa0
               type: Directory
+          - name: sys
+            hostPath:
+              path: /sys
+              type: Directory
+          - name: dcgm-metrics
+            configMap:
+              name: wide-ep-dcgm-metrics
         resourceClaims:
           - name: compute-domain-channel
             resourceClaimTemplateName: llm-d-dev-claim
@@ -376,3 +383,55 @@ spec:
               - mountPath: /mnt/local
                 name: local-nvme
             workingDir: /code
+          - name: dcgm-exporter
+            image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04
+            imagePullPolicy: IfNotPresent
+            args: ["-f", "/etc/dcgm-exporter/custom-counters.csv"]
+            ports:
+              - containerPort: 9400
+                name: dcgm
+                protocol: TCP
+            env:
+              - name: NVIDIA_VISIBLE_DEVICES
+                value: "all"
+              - name: NVIDIA_DRIVER_CAPABILITIES
+                value: "utility"
+              - name: DCGM_EXPORTER_KUBERNETES_GPU_ID_TYPE
+                value: "uid"
+            volumeMounts:
+              - name: dcgm-metrics
+                mountPath: /etc/dcgm-exporter/custom-counters.csv
+                subPath: custom-counters.csv
+                readOnly: true
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                memory: 256Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+          - name: node-exporter
+            image: quay.io/prometheus/node-exporter:v1.9.0
+            imagePullPolicy: IfNotPresent
+            args:
+              - --collector.disable-defaults
+              - --collector.infiniband
+              - --path.sysfs=/host/sys
+            ports:
+              - containerPort: 9100
+                name: node-metrics
+                protocol: TCP
+            volumeMounts:
+              - name: sys
+                mountPath: /host/sys
+                readOnly: true
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                memory: 64Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true

@@ -115,6 +115,52 @@ extraScrapeConfigs: |
     scrape_interval: 1s
     metrics_path: /metrics
 
+  - job_name: 'dcgm-exporter'
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+            - vllm
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_container_name]
+        regex: dcgm-exporter
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: '9400'
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        target_label: node
+      - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
+        target_label: role
+      - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_model]
+        target_label: model
+    scrape_interval: 15s
+    metrics_path: /metrics
+
+  - job_name: 'node-exporter-ib'
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+            - vllm
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_container_name]
+        regex: node-exporter
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: '9100'
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        target_label: node
+      - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
+        target_label: role
+    scrape_interval: 15s
+    metrics_path: /metrics
+
 alertmanager:
   enabled: false
 kube-state-metrics:

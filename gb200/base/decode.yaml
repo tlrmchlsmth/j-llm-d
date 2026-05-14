@@ -224,7 +224,7 @@ spec:
                     --enable-force-include-usage &
                 done
                 
-                #                     --all2all-backend "flashinfer_nvlink_one_sided" \
+                    # --all2all-backend "flashinfer_nvlink_one_sided" \
 
                     #--all2all-backend "deepep_low_latency" \
                     ########

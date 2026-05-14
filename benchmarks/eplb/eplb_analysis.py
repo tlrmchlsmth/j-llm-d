@@ -239,8 +239,9 @@ class RunConfig:
         base = f"{self.mode}/{self.eplb_mode}"
         if self.eplb_enabled or self.prefill_eplb_enabled:
             base += f" {self.redundant_str}"
-        if self.communicator and self.communicator != "nixl":
-            base += f" [{self.communicator}]"
+        cs = self.communicator_str
+        if cs:
+            base += f" {cs}"
         rs = self.routing_simulation_str
         if rs:
             base += f" {rs}"
@@ -269,7 +270,34 @@ class RunConfig:
 
     @property
     def communicator(self) -> str:
+        """Backward-compatible alias for decode_communicator."""
+        return self.decode_communicator
+
+    @property
+    def decode_communicator(self) -> str:
         return self.raw.get("DECODE_EPLB_COMMUNICATOR", "nixl")
+
+    @property
+    def prefill_communicator(self) -> str:
+        return self.raw.get("PREFILL_EPLB_COMMUNICATOR", "nixl")
+
+    @property
+    def communicator_str(self) -> str:
+        """Short string for communicator — only shown if non-default (nixl)."""
+        d = self.decode_communicator
+        p = self.prefill_communicator
+        d_non = d != "nixl"
+        p_non = p != "nixl"
+        if not d_non and not p_non:
+            return ""
+        if d == p:
+            return f"[{d}]"
+        parts = []
+        if p_non:
+            parts.append(f"P:{p}")
+        if d_non:
+            parts.append(f"D:{d}")
+        return f"[{'/'.join(parts)}]"
 
     @property
     def decode_log_balancedness(self) -> bool:
@@ -295,9 +323,8 @@ class RunConfig:
         eplb_part = f"eplb={self.eplb_mode}"
         if self.eplb_enabled or self.prefill_eplb_enabled:
             eplb_part += f"({self.eplb_scope}) {self.redundant_str}"
-        comm_part = ""
-        if self.communicator and self.communicator != "nixl":
-            comm_part = f" | comm={self.communicator}"
+        cs = self.communicator_str
+        comm_part = f" | {cs}" if cs else ""
         rs_part = ""
         rs = self.routing_simulation_str
         if rs:
@@ -378,6 +405,42 @@ class PrometheusData:
     def stage_instant(self, stage: int, key: str) -> float | None:
         """Extract scalar value for a per-stage instant query."""
         return self.instant(f"stage_{stage}_{key}")
+
+    def stage_range_stats(
+        self, range_key: str,
+    ) -> list[dict[str, float]] | None:
+        """Compute mean/min/max of a range metric within each stage window.
+
+        Returns a list of dicts (one per stage) with keys:
+        ``mean``, ``min``, ``max``, ``median``, ``count``.
+        Returns *None* if the range series or stages are unavailable.
+        """
+        df = self.range_series(range_key)
+        if df is None:
+            return None
+        stage_list = self.get_stages()
+        if not stage_list:
+            return None
+        out = []
+        for s in stage_list:
+            mask = (df["timestamp"] >= s["start_time"]) & (
+                df["timestamp"] <= s["end_time"]
+            )
+            window = df.loc[mask, "value"].dropna()
+            if window.empty:
+                out.append({
+                    "mean": np.nan, "min": np.nan, "max": np.nan,
+                    "median": np.nan, "count": 0,
+                })
+            else:
+                out.append({
+                    "mean": float(window.mean()),
+                    "min": float(window.min()),
+                    "max": float(window.max()),
+                    "median": float(window.median()),
+                    "count": len(window),
+                })
+        return out
 
     def summary_dict(self) -> dict[str, float | None]:
         """Return all global instant metrics as a flat dict."""
@@ -722,8 +785,9 @@ class RunData:
             base += f" {self.config.redundant_str}"
         if self._effective_scope:
             base += f" SI={self.config.step_interval}"
-        if self.config.communicator and self.config.communicator != "nixl":
-            base += f" [{self.config.communicator}]"
+        cs = self.config.communicator_str
+        if cs:
+            base += f" {cs}"
         rs = self.config.routing_simulation_str
         if rs:
             base += f" {rs}"
@@ -739,9 +803,8 @@ class RunData:
             eplb_part += f"({scope}) {c.redundant_str}"
         elif c.eplb_enabled or c.prefill_eplb_enabled:
             eplb_part += f" {c.redundant_str}"
-        comm_part = ""
-        if c.communicator and c.communicator != "nixl":
-            comm_part = f" | [{c.communicator}]"
+        cs = c.communicator_str
+        comm_part = f" | {cs}" if cs else ""
         rs_part = ""
         rs = c.routing_simulation_str
         if rs:
@@ -1135,6 +1198,19 @@ def filter_runs(
     return out
 
 
+def _runs_subtitle(runs: dict[str, RunData]) -> str:
+    """Extract a common subtitle (model, dataset) from a dict of runs."""
+    models: set[str] = set()
+    datasets: set[str] = set()
+    for run in runs.values():
+        models.add(run.config.model_short)
+        datasets.add(run.config.dataset)
+    parts = list(models)
+    if datasets:
+        parts.append("dataset: " + "/".join(sorted(datasets)))
+    return "  |  ".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Comparison tables
 # ---------------------------------------------------------------------------
@@ -1148,14 +1224,16 @@ def metrics_comparison_table(
     Latencies are converted to milliseconds for readability.
     """
     rows = []
-    latency_keys = {
+    latency_keys_seconds = {
         "ttft_p50", "ttft_p95", "ttft_p99",
         "itl_p50", "itl_p95", "itl_p99",
         "e2e_p50", "e2e_p95", "e2e_p99",
         "queue_p50", "queue_p95", "queue_p99",
         "prefill_time_p50", "prefill_time_p95", "prefill_time_p99",
-        "decode_time_p50", "decode_time_p95", "decode_time_p99",
         "nixl_xfer_p99",
+    }
+    latency_keys_ms = {
+        "decode_time_p50", "decode_time_p95", "decode_time_p99",
     }
     for name, run in runs.items():
         row: dict = {
@@ -1173,8 +1251,10 @@ def metrics_comparison_table(
         }
         if run.prometheus:
             for k, v in run.prometheus.summary_dict().items():
-                if v is not None and k in latency_keys:
+                if v is not None and k in latency_keys_seconds:
                     row[f"{k}_ms"] = v * 1000
+                elif v is not None and k in latency_keys_ms:
+                    row[f"{k}_ms"] = v
                 elif v is not None:
                     row[k] = v
         rows.append(row)
@@ -1192,14 +1272,20 @@ def stage_metrics_table(
     if run.prometheus is None or run.prometheus.n_stages == 0:
         return None
 
-    latency_keys = {
+    latency_keys_seconds = {
         "ttft_p50", "ttft_p95", "ttft_p99",
         "itl_p50", "itl_p95", "itl_p99",
         "e2e_p50", "e2e_p95", "e2e_p99",
         "queue_p50", "queue_p95", "queue_p99",
         "prefill_time_p50", "prefill_time_p95", "prefill_time_p99",
+        "nixl_xfer_p50", "nixl_xfer_p99",
+        "nixl_post_time_p50", "nixl_post_time_p99",
+    }
+    latency_keys_ms = {
         "decode_time_p50", "decode_time_p95", "decode_time_p99",
     }
+    gen_range = run.prometheus.stage_range_stats("gen_tokens_per_sec_range")
+
     rows = []
     for stage_meta in run.prometheus.get_stages():
         idx = stage_meta["stage"]
@@ -1208,10 +1294,17 @@ def stage_metrics_table(
             "concurrency": stage_meta["concurrency"],
         }
         for k, v in run.prometheus.stage_summary_dict(idx).items():
-            if v is not None and k in latency_keys:
+            if v is not None and k in latency_keys_seconds:
                 row[f"{k}_ms"] = v * 1000
+            elif v is not None and k in latency_keys_ms:
+                row[f"{k}_ms"] = v
             elif v is not None:
                 row[k] = v
+        if gen_range and idx < len(gen_range) and gen_range[idx]["count"] > 0:
+            s = gen_range[idx]
+            row["gen_tokens_per_sec_mean"] = s["mean"]
+            row["gen_tokens_per_sec_min"] = s["min"]
+            row["gen_tokens_per_sec_max"] = s["max"]
         rows.append(row)
     return pd.DataFrame(rows).set_index("stage")
 
@@ -1495,7 +1588,8 @@ def plot_latency_comparison(
 
     ax.set_ylabel("Latency (ms)")
     ax.set_xlabel("Concurrency")
-    ax.set_title(title)
+    subtitle = _runs_subtitle(runs)
+    ax.set_title(f"{title}\n{subtitle}" if subtitle else title, fontsize=11)
     ax.set_xticks(x + width * (n_runs - 1) / 2)
     ax.set_xticklabels(concurrencies, rotation=45, ha="right")
     ax.legend()
@@ -1555,7 +1649,8 @@ def plot_throughput_comparison(
 
     ax.set_xlabel("Concurrency")
     ax.set_ylabel("Tokens / sec")
-    ax.set_title(title)
+    subtitle = _runs_subtitle(runs)
+    ax.set_title(f"{title}\n{subtitle}" if subtitle else title, fontsize=11)
     ax.set_xticks(x)
     ax.set_xticklabels([str(c) for c in sorted_conc], rotation=30, ha="right")
     ax.legend(fontsize=8)
@@ -1579,7 +1674,8 @@ def plot_throughput_timeseries(
 
     ax.set_xlabel("Time (min)")
     ax.set_ylabel("Tokens / sec")
-    ax.set_title(title)
+    subtitle = _runs_subtitle(runs)
+    ax.set_title(f"{title}\n{subtitle}" if subtitle else title, fontsize=11)
     ax.legend()
     ax.grid(alpha=0.3)
     plt.tight_layout()
@@ -1600,7 +1696,8 @@ def plot_kv_cache_usage(
 
     ax.set_xlabel("Time (min)")
     ax.set_ylabel("KV Cache Usage (%)")
-    ax.set_title(title)
+    subtitle = _runs_subtitle(runs)
+    ax.set_title(f"{title}\n{subtitle}" if subtitle else title, fontsize=11)
     ax.set_ylim(0, 105)
     ax.legend()
     ax.grid(alpha=0.3)
@@ -1736,7 +1833,7 @@ def plot_rank_balance_at_steps(
         squeeze=False,
     )
     fig.suptitle(
-        f"{run.label} — {role}  |  {expert.model}  |  EP={expert.world_size}",
+        f"{run.label} — {role}  |  {expert.model}  |  EP={expert.world_size} | dataset: {run.config.dataset}",
         fontsize=11,
     )
 
@@ -1874,7 +1971,7 @@ def plot_load_vs_latency(
     if title is None:
         align = f"ts={at_ts:.0f}" if at_ts else "last value"
         title = (f"{run.label} — {role} load vs latency\n"
-                 f"step={step}  |  {align}  |  {run.config.model_short}  |  EP={expert.world_size}")
+                 f"step={step}  |  {align}  |  {run.config.model_short}  |  dataset: {run.config.dataset}  |  EP={expert.world_size}")
     ax.set_title(title, fontsize=10)
     ax.grid(alpha=0.3)
 
@@ -1905,7 +2002,8 @@ def plot_latency_timeseries(
 
     ax.set_xlabel("Time (min)")
     ax.set_ylabel("Latency (ms)")
-    ax.set_title(title)
+    subtitle = _runs_subtitle(runs)
+    ax.set_title(f"{title}\n{subtitle}" if subtitle else title, fontsize=11)
     ax.legend()
     ax.grid(alpha=0.3)
     plt.tight_layout()
@@ -1950,7 +2048,8 @@ def plot_phase_time_comparison(
     ax.bar(x + width, queue_ms, width, label="Queue", color="gray", alpha=0.7)
 
     ax.set_ylabel("Latency (ms)")
-    ax.set_title(title)
+    subtitle = _runs_subtitle(runs)
+    ax.set_title(f"{title}\n{subtitle}" if subtitle else title, fontsize=11)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=30, ha="right")
     ax.legend()
@@ -1964,7 +2063,8 @@ def plot_phase_time_timeseries(
 ):
     """Overlay decode and prefill phase time P99 series across runs."""
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    fig.suptitle(title, fontsize=11)
+    subtitle = _runs_subtitle(runs)
+    fig.suptitle(f"{title}\n{subtitle}" if subtitle else title, fontsize=11)
 
     for name, run in runs.items():
         if run.prometheus is None:
@@ -2089,8 +2189,13 @@ def plot_per_rank_latency_heatmap(
     """
     key = f"per_rank_{metric}_range"
     metric_label = metric.replace("_", " ").upper()
-    is_tps = "tokens_per_sec" in metric
-    scale = 1.0 if is_tps else 1000.0
+    _no_scale = ("tokens_per_sec", "requests_running", "requests_waiting",
+                 "kv_cache_usage", "iteration_tokens")
+    is_tps = any(s in metric for s in _no_scale)
+    if is_tps or metric.startswith("decode_time"):
+        scale = 1.0
+    else:
+        scale = 1000.0
 
     valid = [(n, r) for n, r in runs.items()
              if r.prometheus is not None and r.prometheus.n_stages > 0]
@@ -2138,11 +2243,18 @@ def plot_per_rank_latency_heatmap(
         if col == 0:
             ax.set_ylabel("EP Rank")
         ax.set_title(f"{run.label}")
+        _unit = ("tok/s" if "tokens_per_sec" in metric
+                 else "reqs" if "requests_" in metric
+                 else "%" if "cache_usage" in metric
+                 else "tokens" if "iteration_tokens" in metric
+                 else "ms")
         plt.colorbar(im, ax=ax, shrink=0.6,
-                     label=f"{metric_label} ({'tok/s' if is_tps else 'ms'})")
+                     label=f"{metric_label} ({_unit})")
 
-    fig.suptitle(title or f"Per-Rank {metric_label} by Stage ({role})",
-                 fontsize=12, y=1.02)
+    default_title = f"Per-Rank {metric_label} by Stage ({role})"
+    subtitle = _runs_subtitle(runs)
+    full = f"{title or default_title}\n{subtitle}" if subtitle else (title or default_title)
+    fig.suptitle(full, fontsize=12, y=1.02)
     plt.tight_layout()
 
 
@@ -2159,11 +2271,23 @@ def plot_per_rank_latency_spread(
     """
     key = f"per_rank_{metric}_range"
     metric_label = metric.replace("_", " ").upper()
-    is_tps = "tokens_per_sec" in metric
-    scale = 1.0 if is_tps else 1000.0
+    _no_scale = ("tokens_per_sec", "requests_running", "requests_waiting",
+                 "kv_cache_usage", "iteration_tokens")
+    is_tps = any(s in metric for s in _no_scale)
+    if is_tps or metric.startswith("decode_time"):
+        scale = 1.0
+    else:
+        scale = 1000.0
     colors = plt.cm.tab10.colors
 
     fig, ax = plt.subplots(figsize=(12, 5))
+
+    # Build shared x-axis from all concurrency values across runs
+    all_concs: list[int] = []
+    for run in runs.values():
+        if run.prometheus and run.prometheus.n_stages > 0:
+            all_concs = [s["concurrency"] for s in run.prometheus.get_stages()]
+            break
 
     for i, (name, run) in enumerate(runs.items()):
         if run.prometheus is None or run.prometheus.n_stages == 0:
@@ -2173,35 +2297,47 @@ def plot_per_rank_latency_spread(
             continue
 
         stages = run.prometheus.get_stages()
-        concs, meds, los, his = [], [], [], []
+        run_data: dict[int, tuple] = {}
         for si, sm in enumerate(stages):
             rm = _rank_medians_for_stage(df, run.prometheus, si)
             if not rm:
                 continue
             vals = np.array(list(rm.values())) * scale
-            concs.append(sm["concurrency"])
-            meds.append(np.median(vals))
-            los.append(np.min(vals))
-            his.append(np.max(vals))
+            run_data[sm["concurrency"]] = (np.median(vals), np.min(vals), np.max(vals))
 
-        if not concs:
+        if not run_data:
             continue
-        meds_a, los_a, his_a = np.array(meds), np.array(los), np.array(his)
         color = colors[i % len(colors)]
-        x = np.arange(len(concs))
-        offset = (i - len(runs) / 2) * 0.15
 
-        ax.errorbar(x + offset, meds_a,
+        x_pos, meds_a, los_a, his_a = [], [], [], []
+        for xi, c in enumerate(all_concs):
+            if c in run_data:
+                med, lo, hi = run_data[c]
+                x_pos.append(xi)
+                meds_a.append(med)
+                los_a.append(lo)
+                his_a.append(hi)
+
+        meds_a = np.array(meds_a)
+        los_a = np.array(los_a)
+        his_a = np.array(his_a)
+        ax.errorbar(x_pos, meds_a,
                     yerr=[meds_a - los_a, his_a - meds_a],
                     fmt="o-", capsize=4, color=color, linewidth=1.5,
                     label=run.label, alpha=0.85)
 
-    ax.set_xticks(range(len(concs)))
-    ax.set_xticklabels([str(c) for c in concs], fontsize=9)
+    ax.set_xticks(range(len(all_concs)))
+    ax.set_xticklabels([str(c) for c in all_concs], fontsize=9)
     ax.set_xlabel("Concurrency")
-    unit = "tok/s" if is_tps else "ms"
-    ax.set_ylabel(f"{metric_label} ({unit})")
-    ax.set_title(title or f"Per-Rank {metric_label} Spread by Stage ({role})")
+    _unit = ("tok/s" if "tokens_per_sec" in metric
+             else "reqs" if "requests_" in metric
+             else "%" if "cache_usage" in metric
+             else "tokens" if "iteration_tokens" in metric
+             else "ms")
+    ax.set_ylabel(f"{metric_label} ({_unit})")
+    default_title = title or f"Per-Rank {metric_label} Spread by Stage ({role})"
+    subtitle = _runs_subtitle(runs)
+    ax.set_title(f"{default_title}\n{subtitle}" if subtitle else default_title, fontsize=11)
     ax.legend()
     ax.grid(alpha=0.3)
     plt.tight_layout()
@@ -2221,8 +2357,13 @@ def plot_per_rank_comparison(
     """
     key = f"per_rank_{metric}_range"
     metric_label = metric.replace("_", " ").upper()
-    is_tps = "tokens_per_sec" in metric
-    scale = 1.0 if is_tps else 1000.0
+    _no_scale = ("tokens_per_sec", "requests_running", "requests_waiting",
+                 "kv_cache_usage", "iteration_tokens")
+    is_tps = any(s in metric for s in _no_scale)
+    if is_tps or metric.startswith("decode_time"):
+        scale = 1.0
+    else:
+        scale = 1000.0
 
     ref_stages = None
     for run in runs.values():
@@ -2276,13 +2417,19 @@ def plot_per_rank_comparison(
         ax.set_title(f"Concurrency = {conc}")
         ax.grid(axis="y", alpha=0.3)
         if col == 0:
-            unit = "tok/s" if is_tps else "ms"
-            ax.set_ylabel(f"{metric_label} ({unit})")
+            _unit = ("tok/s" if "tokens_per_sec" in metric
+                     else "reqs" if "requests_" in metric
+                     else "%" if "cache_usage" in metric
+                     else "tokens" if "iteration_tokens" in metric
+                     else "ms")
+            ax.set_ylabel(f"{metric_label} ({_unit})")
 
-    axes[0, 0].legend(fontsize=8)
-    fig.suptitle(title or f"Per-Rank {metric_label} by Stage ({role})",
-                 fontsize=12, y=1.02)
-    plt.tight_layout()
+    axes[0, 0].legend(fontsize=8, bbox_to_anchor=(0, -0.25), loc="upper left", ncol=min(len(runs), 4))
+    default_title = f"Per-Rank {metric_label} by Stage ({role})"
+    subtitle = _runs_subtitle(runs)
+    full = f"{title or default_title}\n{subtitle}" if subtitle else (title or default_title)
+    fig.suptitle(full, fontsize=12, y=1.02)
+    plt.tight_layout(rect=[0, 0.08, 1, 1])
 
 
 def per_rank_stats_table(
@@ -2325,8 +2472,10 @@ def per_rank_stats_table(
                     continue
 
                 vals = np.array(list(rank_medians.values()))
-                is_tps = "tokens_per_sec" in metric
-                sc = 1.0 if is_tps else 1000.0
+                if "tokens_per_sec" in metric or metric.startswith("decode_time"):
+                    sc = 1.0
+                else:
+                    sc = 1000.0
 
                 rows.append({
                     "run": run.label,
@@ -2359,6 +2508,7 @@ def plot_pareto_frontier(
     fig, ax = plt.subplots(figsize=(12, 7))
     markers = ["o", "s", "D", "^", "v", "P", "X", "*"]
     models: set[str] = set()
+    datasets: set[str] = set()
 
     for i, (name, run) in enumerate(runs.items()):
         if run.prometheus is None or run.prometheus.n_stages == 0:
@@ -2383,11 +2533,11 @@ def plot_pareto_frontier(
         ax.plot(x_vals, y_vals, marker=markers[i % len(markers)],
                 markersize=7, linewidth=1.5, label=run.label_long, alpha=0.85)
         models.add(run.config.model_short)
+        datasets.add(run.config.dataset)
+    assert len(models) == 1, "Comparing runs with different models"
+    assert len(datasets) == 1, "Comparing runs with different datasets"
 
-    if len(models) > 1:
-        print(f"WARNING: comparing runs with different models: {models}")
-
-    subtitle = "  |  ".join([*models, f"1 node = {gpus_per_pod}xGB200"])
+    subtitle = "  |  ".join([*models, f"1 node = {gpus_per_pod}xGB200", "dataset: " + datasets.pop()])
     main_title = title or "Throughput vs Interactivity (Pareto Frontier)"
     ax.set_title(f"{main_title}\n{subtitle}", fontsize=11)
     ax.set_xlabel("Tokens/s/user")
@@ -2404,13 +2554,17 @@ def plot_throughput_vs_concurrency(
 ):
     """Plot output tokens/s per decode GPU vs total concurrency per GPU.
 
+    Uses the mean gen_tokens_per_sec over each stage window (from the range
+    query) with min/max shown as error bars.  Falls back to the instant
+    (end-of-stage) value when range data is unavailable.
+
     Total concurrency = per-worker concurrency * n_workers.
     X-axis is normalized by decode GPUs to make different topologies comparable.
     """
     fig, ax = plt.subplots(figsize=(12, 7))
     markers = ["o", "s", "D", "^", "v", "P", "X", "*"]
     models: set[str] = set()
-
+    datasets: set[str] = set()
     for i, (name, run) in enumerate(runs.items()):
         if run.prometheus is None or run.prometheus.n_stages == 0:
             continue
@@ -2419,31 +2573,51 @@ def plot_throughput_vs_concurrency(
         decode_gpus = dp * gpus_per_pod or 1
         n_workers = run.config.n_workers
 
-        x_vals, y_vals = [], []
-        for stage in run.prometheus.get_stages():
-            gen_tps = run.prometheus.stage_instant(stage["stage"], "gen_tokens_per_sec")
+        range_stats = run.prometheus.stage_range_stats("gen_tokens_per_sec_range")
+
+        x_vals, y_means, y_lo, y_hi = [], [], [], []
+        for j, stage in enumerate(run.prometheus.get_stages()):
             conc = stage["concurrency"]
-            if not gen_tps or gen_tps <= 0 or conc <= 0:
+            if conc <= 0:
                 continue
             total_conc = conc * n_workers
+
+            if range_stats and j < len(range_stats) and range_stats[j]["count"] > 0:
+                s = range_stats[j]
+                mean_v = s["mean"] / decode_gpus
+                min_v = s["min"] / decode_gpus
+                max_v = s["max"] / decode_gpus
+            else:
+                gen_tps = run.prometheus.stage_instant(stage["stage"], "gen_tokens_per_sec")
+                if not gen_tps or gen_tps <= 0:
+                    continue
+                mean_v = gen_tps / decode_gpus
+                min_v = mean_v
+                max_v = mean_v
+
             x_vals.append(total_conc / decode_gpus)
-            y_vals.append(gen_tps / decode_gpus)
+            y_means.append(mean_v)
+            y_lo.append(mean_v - min_v)
+            y_hi.append(max_v - mean_v)
 
         if not x_vals:
             continue
 
-        ax.plot(x_vals, y_vals, marker=markers[i % len(markers)],
-                markersize=7, linewidth=1.5, label=run.label_long, alpha=0.85)
+        color = f"C{i}"
+        ax.errorbar(x_vals, y_means, yerr=[y_lo, y_hi],
+                     marker=markers[i % len(markers)], markersize=7,
+                     linewidth=1.5, capsize=4, capthick=1.2,
+                     label=run.label_long, alpha=0.85, color=color)
         models.add(run.config.model_short)
+        datasets.add(run.config.dataset)
+    assert len(models) == 1, "Comparing runs with different models"
+    assert len(datasets) == 1, "Comparing runs with different datasets"
 
-    if len(models) > 1:
-        print(f"WARNING: comparing runs with different models: {models}")
-
-    subtitle = "  |  ".join([*models, f"1 node = {gpus_per_pod}xGB200"])
+    subtitle = "  |  ".join([*models, f"1 node = {gpus_per_pod}xGB200", "dataset: " + datasets.pop()])
     main_title = title or "Decode Throughput vs Concurrency (per GPU)"
     ax.set_title(f"{main_title}\n{subtitle}", fontsize=11)
     ax.set_xlabel("Total concurrency / decode GPU")
-    ax.set_ylabel("Output tokens/s / decode GPU")
+    ax.set_ylabel("Output tokens/s / decode GPU (mean, min/max)")
     ax.legend(loc="best", fontsize=9)
     ax.grid(alpha=0.3)
     plt.tight_layout()

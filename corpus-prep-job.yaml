@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  labels:
+    app: corpus-prep
+    owner: ${OWNER}
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.present
+                    operator: Exists
+      containers:
+        - name: prep
+          image: python:3.12-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              pip install --quiet datasets
+              python /scripts/prep-corpus.py \
+                --dataset "${DATASET}" \
+                --output "${OUTPUT_PATH}" \
+                --max-size-mb ${MAX_SIZE_MB} \
+                ${EXTRA_ARGS}
+          env:
+            - name: HF_TOKEN
+              value: "${HF_TOKEN}"
+          resources:
+            requests:
+              memory: 4Gi
+              cpu: "2"
+            limits:
+              memory: 8Gi
+              cpu: "4"
+          volumeMounts:
+            - mountPath: /mnt/lustre
+              name: lustre
+            - mountPath: /scripts
+              name: scripts
+      volumes:
+        - name: lustre
+          persistentVolumeClaim:
+            claimName: lustre-pvc-vllm
+        - name: scripts
+          configMap:
+            name: ${CONFIGMAP_NAME}

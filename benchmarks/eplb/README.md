@@ -9,6 +9,7 @@ Benchmarking sync vs async Expert Parallel Load Balancing (EPLB) on DeepSeek-R1 
 | `DECODE_EPLB_ENABLED` | `true` | Enable/disable EPLB on decode pods |
 | `EPLB_USE_ASYNC` | `false` | Use async EPLB (background thread + CUDA stream overlap) |
 | `EPLB_STEP_INTERVAL` | `3000` | Forward steps between rebalances |
+| `EPLB_INITIAL_DELAY` | *(empty = step_interval)* | Steps to delay the first EPLB rearrangement (skips warmup traffic).|
 | `EPLB_NUM_REDUNDANT_EXPERTS` | `32` | Extra expert slots for replication (trades KV cache memory) |
 | `EPLB_WINDOW_SIZE` | `100` | Steps of load history for rebalance algorithm |
 | `EPLB_LOG_BALANCEDNESS` | `true` | Enable balancedness logging + expert load dumps (Phase 3E tests overhead of this) |
@@ -48,7 +49,8 @@ ls benchmarks/eplb/smoke-test/
 
 ```bash
 # nyann-bench (benchmark-stairs / benchmark-constant)
-just nyann-logs <NAME_PREFIX>-sharegpt-load   # staircase load
+just nyann-logs <NAME_PREFIX>-sharegpt-load   # staircase load (default dataset)
+just nyann-logs <NAME_PREFIX>-starcoderdata-load  # coding dataset ablation
 just nyann-logs <NAME_PREFIX>-poker-eval      # gsm8k eval
 
 # parallel-guidellm
@@ -170,27 +172,49 @@ just stop-nyann
 ### 3B. Dataset ablation
 
 Different task types activate different expert subsets. Run on the optimal config from Phase 2.
+Uses nyann-bench with `BENCH_DATASET` to get per-stage Prometheus metrics (unlike `parallel-guidellm` which has no stage awareness).
+
+**One-time setup:** prepare all corpora on Lustre:
+
+```bash
+just prep-all-corpora      # submits K8s Jobs to download + convert
+just prep-corpora-wait     # blocks until all jobs finish
+```
+
+**Runs:**
 
 ```bash
 # Coding (code-specialized expert clusters)
-just parallel-guidellm 4000 4000 500 1500 4 --data bigcode/starcoderdata
-# Wait for job completion, then collect
+BENCH_DATASET=starcoderdata just benchmark-stairs
 just eplb-collect dataset-coding
+just stop-nyann
 
 # Math / reasoning (deep CoT, specific expert patterns)
-just parallel-guidellm 4000 4000 500 1500 4 --data AI-MO/aimo-validation-aime
+BENCH_DATASET=aimo-validation-aime just benchmark-stairs
 just eplb-collect dataset-math
+just stop-nyann
 
 # Multi-turn chat (diverse conversations)
-just parallel-guidellm 4000 4000 500 1500 4 --data lmsys/lmsys-chat-1m
+BENCH_DATASET=lmsys-chat-1m just benchmark-stairs
 just eplb-collect dataset-chat
+just stop-nyann
 
 # Long-context (prefill-heavy, different EPLB dynamics)
-just parallel-guidellm 4000 4000 4000 2000 4
+NYANN_ISL=4000 NYANN_OSL=2000 just benchmark-stairs
 just eplb-collect dataset-long-ctx
+just stop-nyann
 ```
 
-Note: `parallel-guidellm` deletes the previous guidellm job before launching, so no manual cleanup is needed between runs.
+Individual corpora can also be prepared separately:
+
+```bash
+just prep-corpus lmsys/lmsys-chat-1m
+just prep-corpus bigcode/starcoderdata
+just prep-corpus AI-MO/aimo-validation-aime
+
+# Custom dataset with explicit fields:
+just prep-corpus my-org/my-dataset -- --fields text,summary
+```
 
 ### 3C. Prefill EPLB (TTFT impact)
 

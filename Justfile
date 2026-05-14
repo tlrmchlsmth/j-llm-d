@@ -16,7 +16,7 @@ MODEL := env("MODEL", "nvidia/DeepSeek-R1-0528-NVFP4-v2")
 MODEL_LABEL := file_name(MODEL)
 # Config knobs — NOT exported so that profile loading in _render-manifests can override defaults.
 # Defaults are applied in _render-manifests after profile loading.
-EPLB_EXPERT_LOAD_DUMP_DIR := env("EPLB_EXPERT_LOAD_DUMP_DIR", "/mnt/lustre/" + NAME_PREFIX + "/eplb-dumps/" + DEPLOY_NAME)
+EPLB_EXPERT_LOAD_DUMP_DIR := env("EPLB_EXPERT_LOAD_DUMP_DIR", "")
 
 # Load a named config profile: PROFILE=eplb-study just start pd
 # Profile files live in profiles/<name>.env. Inline env vars override profile values.
@@ -224,19 +224,36 @@ _render-manifests MODE DEV_VENV='':
     done < "$PROFILE_FILE"
   fi
 
-  # Apply defaults for config knobs (inline env > profile > .env > these defaults)
+  # Load model-specific topology (inline env > profile > model config > defaults)
+  MODEL_CONFIG="models/{{MODEL_LABEL}}.env"
+  if [ -f "$MODEL_CONFIG" ]; then
+    echo "Loading model config: $MODEL_CONFIG"
+    while IFS='=' read -r key val || [ -n "$key" ]; do
+      [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+      key="${key#"${key%%[! ]*}"}"; key="${key%"${key##*[! ]}"}"
+      [ -z "${!key+x}" ] && export "$key=$val"
+    done < "$MODEL_CONFIG"
+  fi
+
+  # Apply defaults for config knobs (inline env > profile > model config > .env > these defaults)
   : "${DECODE_LWS_SIZE:=4}"
+  : "${PREFILL_REPLICAS:=2}"
+  : "${PREFILL_LWS_SIZE:=1}"
+  : "${PREFILL_TP_SIZE:=1}"
   : "${DECODE_EPLB_ENABLED:=true}"
   : "${EPLB_USE_ASYNC:=false}"
   : "${EPLB_STEP_INTERVAL:=3000}"
+  : "${EPLB_INITIAL_DELAY:=}"
   : "${EPLB_NUM_REDUNDANT_EXPERTS:=32}"
   : "${EPLB_WINDOW_SIZE:=100}"
   : "${EPLB_LOG_BALANCEDNESS:=true}"
   : "${EPLB_LOG_BALANCEDNESS_INTERVAL:=}"
-  : "${EPLB_EXPERT_LOAD_DUMP_DIR:={{EPLB_EXPERT_LOAD_DUMP_DIR}}}"
+  : "${EPLB_EXPERT_LOAD_DUMP_DIR=/mnt/lustre/{{NAME_PREFIX}}/eplb-dumps/{{DEPLOY_NAME}}}"
   : "${PREFIX_CACHING:=true}"
   : "${PREFILL_EPLB_ENABLED:=false}"
   : "${PREFILL_EPLB_NUM_REDUNDANT_EXPERTS:=${EPLB_NUM_REDUNDANT_EXPERTS}}"
+  : "${DECODE_EPLB_COMMUNICATOR:=nixl}"
+  : "${PREFILL_EPLB_COMMUNICATOR:=nixl}"
   : "${DECODE_VLLM_MOE_ROUTING_SIMULATION_STRATEGY:=}"
   : "${PREFILL_VLLM_MOE_ROUTING_SIMULATION_STRATEGY:=}"
   : "${BUILD_DEEPEP_WHEEL:=false}"
@@ -269,6 +286,9 @@ _render-manifests MODE DEV_VENV='':
           -e "s|FORK_REPO_PLACEHOLDER|{{FORK_REPO}}|g" \
           -e "s|FORK_BRANCH_PLACEHOLDER|{{FORK_BRANCH}}|g" \
           -e "s|DECODE_LWS_SIZE_PLACEHOLDER|${DECODE_LWS_SIZE}|g" \
+          -e "s|PREFILL_REPLICAS_PLACEHOLDER|${PREFILL_REPLICAS}|g" \
+          -e "s|PREFILL_LWS_SIZE_PLACEHOLDER|${PREFILL_LWS_SIZE}|g" \
+          -e "s|PREFILL_TP_SIZE_PLACEHOLDER|\"${PREFILL_TP_SIZE}\"|g" \
           -e "s|DECODE_EPLB_ENABLED_PLACEHOLDER|\"${DECODE_EPLB_ENABLED}\"|g" \
           -e "s|PREFILL_EPLB_ENABLED_PLACEHOLDER|\"${PREFILL_EPLB_ENABLED}\"|g" \
           -e "s|EPLB_USE_ASYNC_PLACEHOLDER|\"${EPLB_USE_ASYNC}\"|g" \
@@ -278,7 +298,10 @@ _render-manifests MODE DEV_VENV='':
           -e "s|EPLB_WINDOW_SIZE_PLACEHOLDER|\"${EPLB_WINDOW_SIZE}\"|g" \
           -e "s|EPLB_LOG_BALANCEDNESS_PLACEHOLDER|\"${EPLB_LOG_BALANCEDNESS}\"|g" \
           -e "s|EPLB_LOG_BALANCEDNESS_INTERVAL_PLACEHOLDER|\"${EPLB_LOG_BALANCEDNESS_INTERVAL}\"|g" \
-          -e "s|EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER|${EPLB_EXPERT_LOAD_DUMP_DIR}/$DEPLOY_TS|g" \
+          -e "s|DECODE_EPLB_COMMUNICATOR_PLACEHOLDER|${DECODE_EPLB_COMMUNICATOR}|g" \
+          -e "s|PREFILL_EPLB_COMMUNICATOR_PLACEHOLDER|${PREFILL_EPLB_COMMUNICATOR}|g" \
+          -e "s|EPLB_INITIAL_DELAY_PLACEHOLDER|\"${EPLB_INITIAL_DELAY}\"|g" \
+          -e "s|EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER|${EPLB_EXPERT_LOAD_DUMP_DIR:+${EPLB_EXPERT_LOAD_DUMP_DIR}/$DEPLOY_TS}|g" \
           -e "s|PREFIX_CACHING_PLACEHOLDER|\"${PREFIX_CACHING}\"|g" \
           -e "s|DECODE_VLLM_MOE_ROUTING_SIMULATION_STRATEGY_PLACEHOLDER|\"${DECODE_VLLM_MOE_ROUTING_SIMULATION_STRATEGY}\"|g" \
           -e "s|PREFILL_VLLM_MOE_ROUTING_SIMULATION_STRATEGY_PLACEHOLDER|\"${PREFILL_VLLM_MOE_ROUTING_SIMULATION_STRATEGY}\"|g" \
@@ -687,7 +710,9 @@ process-traces N='':
   python3 profiling/process_traces.py "traces/$N"
 
 LUSTRE_PREFIX := "/mnt/lustre/" + NAME_PREFIX
+CORPUS_MAX_SIZE_MB := env("CORPUS_MAX_SIZE_MB", "2000")
 
+# Prepare the ShareGPT corpus and GSM8K eval data on Lustre (via nyann-bench)
 prep-datasets:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -698,6 +723,66 @@ prep-datasets:
   cd "{{NYANN_BENCH_DIR}}"
   just prep-corpus sharegpt "{{LUSTRE_PREFIX}}/corpus" "{{NAMESPACE}}"
   just prep-gsm8k "{{LUSTRE_PREFIX}}" "{{NAMESPACE}}"
+
+# Download a HuggingFace dataset and convert to flat corpus text on Lustre
+# Usage: just prep-corpus lmsys-chat-1m
+#        just prep-corpus bigcode/starcoderdata
+#        just prep-corpus my-org/my-data --fields text,summary
+prep-corpus DATASET *EXTRA_ARGS='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  CORPUS_DIR="{{LUSTRE_PREFIX}}/corpus"
+  # Derive a filesystem-safe name from the dataset (org/name -> name)
+  SAFE_NAME=$(echo "{{DATASET}}" | sed 's|.*/||')
+
+  # Create ConfigMap with the prep script
+  CM_NAME="corpus-prep-script-${SAFE_NAME}"
+  {{KN}} delete configmap "$CM_NAME" --ignore-not-found=true
+  {{KN}} create configmap "$CM_NAME" --from-file=prep-corpus.py=scripts/prep-corpus.py
+
+  JOB_NAME="corpus-prep-${SAFE_NAME}"
+  {{KN}} delete job "$JOB_NAME" --ignore-not-found=true
+
+  env \
+    JOB_NAME="$JOB_NAME" \
+    OWNER="{{NAME_PREFIX}}" \
+    DATASET="{{DATASET}}" \
+    OUTPUT_PATH="$CORPUS_DIR/${SAFE_NAME}.txt" \
+    MAX_SIZE_MB="{{CORPUS_MAX_SIZE_MB}}" \
+    CONFIGMAP_NAME="$CM_NAME" \
+    EXTRA_ARGS="{{EXTRA_ARGS}}" \
+    HF_TOKEN="{{HF_TOKEN}}" \
+    envsubst '${JOB_NAME} ${OWNER} ${DATASET} ${OUTPUT_PATH} ${MAX_SIZE_MB} ${CONFIGMAP_NAME} ${EXTRA_ARGS} ${HF_TOKEN}' \
+      < corpus-prep-job.yaml | {{KN}} apply -f -
+
+  echo "Corpus prep job '$JOB_NAME' submitted."
+  echo "  Dataset:  {{DATASET}}"
+  echo "  Output:   $CORPUS_DIR/${SAFE_NAME}.txt"
+  echo "  Max size: {{CORPUS_MAX_SIZE_MB}} MB"
+  echo "Follow with: {{KN}} logs -f job/$JOB_NAME"
+
+# Prepare all dataset corpora for the EPLB dataset ablation (Phase 3B)
+prep-all-corpora:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "Preparing all corpora for dataset ablation..."
+  just prep-corpus lmsys/lmsys-chat-1m &
+  just prep-corpus bigcode/starcoderdata &
+  just prep-corpus AI-MO/aimo-validation-aime &
+  wait
+  echo "All corpus prep jobs submitted. Check status with:"
+  echo "  {{KN}} get jobs -l app=corpus-prep"
+
+# Wait for all corpus prep jobs to complete
+prep-corpora-wait:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  for job in $({{KN}} get jobs -l app=corpus-prep -o jsonpath='{.items[*].metadata.name}'); do
+    echo "Waiting for $job..."
+    {{KN}} wait --for=condition=complete --timeout=1800s "job/$job"
+    echo "$job: done"
+  done
+  echo "All corpus prep jobs complete."
 
 NYANN_BENCH_DIR := env("NYANN_BENCH_DIR", "")
 NYANN_TAG := env("NYANN_TAG", "latest")
@@ -722,7 +807,12 @@ _save-bench-config TYPE:
     BENCH_LAUNCHED_AT=$(date -Iseconds)
     EOF
 
+# Derive the nyann-bench job name from the dataset (used for job labeling and log tailing)
+BENCH_JOB_NAME := NAME_PREFIX + "-" + BENCH_DATASET + "-load"
+
 # Wait for stack readiness, then launch nyann-bench load + eval jobs
+# Use BENCH_DATASET to select the corpus (default: sharegpt).
+# Example: BENCH_DATASET=starcoderdata just benchmark-stairs
 benchmark-stairs EVAL='true':
     #!/usr/bin/env bash
     set -euo pipefail
@@ -734,8 +824,8 @@ benchmark-stairs EVAL='true':
     LUSTRE="/mnt/lustre/{{NAME_PREFIX}}"
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_BENCH_DIR}}"
-    just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
-      "{\"load\":{\"concurrency\":{{WARMUP_CONCURRENCY}}},\"warmup\":{\"duration\":\"300s\",\"stagger\":true},\"sweep\":{\"min\":{{SWEEP_MIN}},\"max\":{{SWEEP_MAX}},\"steps\":{{SWEEP_STEPS}},\"step_duration\":\"300s\"},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":{{NYANN_ISL}},\"osl\":{{NYANN_OSL}},\"turns\":1}}" \
+    just deploy {{BENCH_JOB_NAME}} "$BASE_URL" \
+      "{\"load\":{\"concurrency\":{{WARMUP_CONCURRENCY}}},\"warmup\":{\"duration\":\"300s\",\"stagger\":true},\"sweep\":{\"min\":{{SWEEP_MIN}},\"max\":{{SWEEP_MAX}},\"steps\":{{SWEEP_STEPS}},\"step_duration\":\"300s\"},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/{{BENCH_DATASET}}.txt\",\"isl\":{{NYANN_ISL}},\"osl\":{{NYANN_OSL}},\"turns\":1}}" \
       {{NYANN_WORKERS}} {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
     if [ "{{EVAL}}" = "true" ]; then
       just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
@@ -743,7 +833,7 @@ benchmark-stairs EVAL='true':
         1 {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
     fi
     wait
-    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' to follow."
+    echo "nyann-bench jobs submitted (dataset={{BENCH_DATASET}}). Use 'just nyann-logs {{BENCH_JOB_NAME}}' to follow."
 
 benchmark-constant EVAL='true':
     #!/usr/bin/env bash
@@ -756,8 +846,8 @@ benchmark-constant EVAL='true':
     LUSTRE="/mnt/lustre/{{NAME_PREFIX}}"
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_BENCH_DIR}}"
-    just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
-      "{\"load\":{\"concurrency\":1900,\"duration\":\"3600s\"},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":{{NYANN_ISL}},\"osl\":{{NYANN_OSL}},\"turns\":1}}" \
+    just deploy {{BENCH_JOB_NAME}} "$BASE_URL" \
+      "{\"load\":{\"concurrency\":{{SWEEP_MAX}},\"duration\":\"1800s\"},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/{{BENCH_DATASET}}.txt\",\"isl\":{{NYANN_ISL}},\"osl\":{{NYANN_OSL}},\"turns\":1}}" \
       {{NYANN_WORKERS}} {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
     if [ "{{EVAL}}" = "true" ]; then
       just deploy {{NAME_PREFIX}}-poker-eval "$BASE_URL" \
@@ -765,7 +855,7 @@ benchmark-constant EVAL='true':
         1 {{NAMESPACE}} arm64 lustre {{NYANN_TAG}} &
     fi
     wait
-    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' to follow."
+    echo "nyann-bench jobs submitted (dataset={{BENCH_DATASET}}). Use 'just nyann-logs {{BENCH_JOB_NAME}}' to follow."
 
 # Short benchmark for profiling (5 min, no eval)
 benchmark-profile:
@@ -778,16 +868,16 @@ benchmark-profile:
     LUSTRE="/mnt/lustre/{{NAME_PREFIX}}"
     BASE_URL="http://{{DEPLOY_NAME}}-inference-gateway-istio.{{NAMESPACE}}.svc.cluster.local/v1"
     cd "{{NYANN_BENCH_DIR}}"
-    just deploy {{NAME_PREFIX}}-sharegpt-load "$BASE_URL" \
-      "{\"load\":{\"concurrency\":1900,\"duration\":\"300s\"},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/sharegpt.txt\",\"isl\":{{NYANN_ISL}},\"osl\":{{NYANN_OSL}},\"turns\":1}}" \
+    just deploy {{BENCH_JOB_NAME}} "$BASE_URL" \
+      "{\"load\":{\"concurrency\":1900,\"duration\":\"300s\"},\"warmup\":{\"duration\":\"120s\",\"stagger\":true},\"workload\":{\"type\":\"corpus\",\"corpus_path\":\"$LUSTRE/corpus/{{BENCH_DATASET}}.txt\",\"isl\":{{NYANN_ISL}},\"osl\":{{NYANN_OSL}},\"turns\":1}}" \
       {{NYANN_WORKERS}} {{NAMESPACE}} arm64 lustre {{NYANN_TAG}}
-    echo "nyann-bench profiling job submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' to follow."
+    echo "nyann-bench profiling job submitted (dataset={{BENCH_DATASET}}). Use 'just nyann-logs {{BENCH_JOB_NAME}}' to follow."
 
 # Stop nyann-bench benchmark jobs
 stop-nyann:
   #!/usr/bin/env bash
   set -euo pipefail
-  {{KN}} delete job -l app={{NAME_PREFIX}}-sharegpt-load --ignore-not-found=true &
+  {{KN}} delete job -l app={{BENCH_JOB_NAME}} --ignore-not-found=true &
   {{KN}} delete job -l app={{NAME_PREFIX}}-poker-eval --ignore-not-found=true &
   wait
 
@@ -800,7 +890,7 @@ guidellm-logs:
   {{KN}} logs -l job-name={{DEPLOY_NAME}}-guidellm -c poker --tail=50 -f --max-log-requests=20
 
 # Query Prometheus for per-stage benchmark metrics (requires port-forward: just prometheus)
-query-prometheus CLIENT_JOB=(NAME_PREFIX + "-sharegpt-load") DEPLOYMENT=DEPLOY_NAME EVAL_JOB=(NAME_PREFIX + "-poker-eval") *ARGS='':
+query-prometheus CLIENT_JOB=BENCH_JOB_NAME DEPLOYMENT=DEPLOY_NAME EVAL_JOB=(NAME_PREFIX + "-poker-eval") *ARGS='':
   #!/usr/bin/env bash
   set -euo pipefail
   if [ -z "{{NYANN_BENCH_DIR}}" ]; then
@@ -869,18 +959,26 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
 
   # 1. Snapshot config
   echo "[1/4] Snapshotting config..."
+  BENCH_FILE=".tmp/bench-{{NAME_PREFIX}}.env"
+  # Resolve dataset: explicit DATASET arg > saved bench config > Justfile default
+  DATASET="{{DATASET}}"
+  if [ "$DATASET" = "sharegpt" ] && [ -f "$BENCH_FILE" ]; then
+    SAVED_DS=$(grep -m1 '^[[:space:]]*BENCH_DATASET=' "$BENCH_FILE" | sed 's/^[[:space:]]*BENCH_DATASET=//' || true)
+    if [ -n "$SAVED_DS" ]; then
+      DATASET="$SAVED_DS"
+    fi
+  fi
   {
     echo "# EPLB Benchmark Config -- {{RUN_NAME}}"
     echo "# Collected at $(date -Iseconds)"
     echo "DEPLOY_USER={{NAME_PREFIX}}"
     echo "DEPLOY_NAME={{DEPLOY_NAME}}"
     echo "MODEL={{MODEL}}"
-    echo "DATASET={{DATASET}}"
+    echo "DATASET=$DATASET"
     echo "VLLM_IMAGE={{VLLM_IMAGE}}"
     echo "FORK_REPO={{FORK_REPO}}"
     echo "FORK_BRANCH={{FORK_BRANCH}}"
     echo "EPLB_EXPERT_LOAD_DUMP_DIR={{EPLB_EXPERT_LOAD_DUMP_DIR}}"
-    BENCH_FILE=".tmp/bench-{{NAME_PREFIX}}.env"
     if [ -f "$BENCH_FILE" ]; then
       echo "# Bench params from $BENCH_FILE (saved at launch time)"
       grep -E '^(BENCH_TYPE|BENCH_DATASET|SWEEP_MIN|SWEEP_MAX|SWEEP_STEPS|WARMUP_CONCURRENCY|N_WORKERS|ISL|OSL|BENCH_LAUNCHED_AT)=' "$BENCH_FILE" | sed 's/^[[:space:]]*//'
@@ -901,7 +999,7 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
     POD_JSON=$({{KN}} get pod "$DECODE_POD" -o json 2>/dev/null || echo "{}")
     MODE=$(echo "$POD_JSON" | jq -r '.metadata.labels["llm-d.ai/deployment"] // "unknown"')
     echo "MODE=$MODE" >> "$OUT_DIR/config.env"
-    for VAR in A2A_BACKEND EPLB_ENABLED EPLB_USE_ASYNC EPLB_STEP_INTERVAL EPLB_NUM_REDUNDANT_EXPERTS EPLB_WINDOW_SIZE EPLB_LOG_BALANCEDNESS EPLB_LOG_BALANCEDNESS_INTERVAL EPLB_COMMUNICATOR EPLB_EXPERT_LOAD_DUMP_DIR PREFIX_CACHING VLLM_USE_V2_MODEL_RUNNER VLLM_MOE_ROUTING_SIMULATION_STRATEGY; do
+    for VAR in A2A_BACKEND EPLB_ENABLED EPLB_USE_ASYNC EPLB_STEP_INTERVAL EPLB_INITIAL_DELAY EPLB_NUM_REDUNDANT_EXPERTS EPLB_WINDOW_SIZE EPLB_LOG_BALANCEDNESS EPLB_LOG_BALANCEDNESS_INTERVAL EPLB_COMMUNICATOR EPLB_EXPERT_LOAD_DUMP_DIR PREFIX_CACHING VLLM_USE_V2_MODEL_RUNNER VLLM_MOE_ROUTING_SIMULATION_STRATEGY; do
       VAL=$(echo "$POD_JSON" | jq -r --arg var "$VAR" '.spec.containers[] | select(.name=="vllm") | .env[] | select(.name==$var) | .value // empty')
       echo "DECODE_$VAR=$VAL" >> "$OUT_DIR/config.env"
     done

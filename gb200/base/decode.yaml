@@ -24,6 +24,8 @@ spec:
           llm-d.ai/role: decode
       spec:
         serviceAccountName: wide-ep
+        hostIPC: true
+        hostPID: true
         terminationGracePeriodSeconds: 0
         volumes:
           - name: dshm
@@ -234,14 +236,22 @@ spec:
                     mkdir -p "$EPLB_DUMP_DIR"
                     DUMP_DIR_JSON=",\"expert_load_dump_dir\":\"${EPLB_DUMP_DIR}\""
                   fi
-                  EPLB_JSON="{\"window_size\":${EPLB_WINDOW_SIZE:-100},\"step_interval\":${EPLB_STEP_INTERVAL:-3000},\"num_redundant_experts\":${EPLB_NUM_REDUNDANT_EXPERTS:-32},\"communicator\":\"${EPLB_COMMUNICATOR}\",\"use_async\":${EPLB_ASYNC_BOOL},\"log_balancedness\":${EPLB_LOG_BOOL},\"log_balancedness_interval\":${EPLB_LOG_INTERVAL}${DUMP_DIR_JSON}}"
+                  INITIAL_DELAY_JSON=""
+                  if [ -n "${EPLB_INITIAL_DELAY:-}" ]; then
+                    INITIAL_DELAY_JSON=",\"initial_delay\":${EPLB_INITIAL_DELAY}"
+                  fi
+                  EPLB_JSON="{\"window_size\":${EPLB_WINDOW_SIZE:-100},\"step_interval\":${EPLB_STEP_INTERVAL:-3000},\"num_redundant_experts\":${EPLB_NUM_REDUNDANT_EXPERTS:-32},\"communicator\":\"${EPLB_COMMUNICATOR}\",\"use_async\":${EPLB_ASYNC_BOOL},\"log_balancedness\":${EPLB_LOG_BOOL},\"log_balancedness_interval\":${EPLB_LOG_INTERVAL}${DUMP_DIR_JSON}${INITIAL_DELAY_JSON}}"
                   EPLB_ARGS="--enable-eplb --eplb-config"
                 fi
 
                 PREFIX_CACHE_ARG="--enable-prefix-caching"
                 if [ "${PREFIX_CACHING:-true}" = "false" ]; then
-                  PREFIX_CACHE_ARG="--no-prefix-caching"
+                  PREFIX_CACHE_ARG="--no-enable-prefix-caching"
                 fi
+
+                echo "=== DECODE ENV ($(hostname)) ==="
+                env | sort
+                echo "=== END DECODE ENV ==="
 
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
                   GPU_START=$((R * TP_SIZE))
@@ -275,6 +285,7 @@ spec:
                     $EPLB_ARGS ${EPLB_JSON:-} \
                     $PREFIX_CACHE_ARG \
                     --kv-cache-dtype fp8 \
+                    --enable-sleep-mode \
                     --enable-force-include-usage &
                 done
                 
@@ -296,7 +307,7 @@ spec:
 
             env:
               - name: VLLM_USE_V2_MODEL_RUNNER
-                value: "0"
+                value: "1"
 
               - name: VLLM_NO_USAGE_STATS
                 value: "1"
@@ -317,7 +328,7 @@ spec:
                 value: "0"
 
               - name: MAX_TOKENS
-                value: "1024"
+                value: "1560"
 
               # Startup profiling (set DECODE_ENABLE_PROFILING=1 to activate)
               - name: ENABLE_PROFILING
@@ -370,7 +381,7 @@ spec:
               - name: A2A_BACKEND
                 value: deepep_low_latency
               - name: EPLB_COMMUNICATOR
-                value: nixl
+                value: DECODE_EPLB_COMMUNICATOR_PLACEHOLDER
               - name: EPLB_ENABLED
                 value: "DECODE_EPLB_ENABLED_PLACEHOLDER"
               - name: EPLB_USE_ASYNC
@@ -385,14 +396,16 @@ spec:
                 value: "EPLB_LOG_BALANCEDNESS_PLACEHOLDER"
               - name: EPLB_LOG_BALANCEDNESS_INTERVAL
                 value: "EPLB_LOG_BALANCEDNESS_INTERVAL_PLACEHOLDER"
+              - name: EPLB_INITIAL_DELAY
+                value: "EPLB_INITIAL_DELAY_PLACEHOLDER"
               - name: EPLB_EXPERT_LOAD_DUMP_DIR
                 value: "EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER"
               - name: PREFIX_CACHING
                 value: "PREFIX_CACHING_PLACEHOLDER"
               # - name: VLLM_USE_FLASHINFER_MOE_FP8
               #   value: "1"
-              - name: VLLM_COMPUTE_NANS_IN_LOGITS
-                value: "1"
+              # - name: VLLM_COMPUTE_NANS_IN_LOGITS
+              #   value: "1"
               - name: VLLM_USE_DEEP_GEMM
                 value: "1"
               - name: NVIDIA_GDRCOPY
@@ -409,8 +422,19 @@ spec:
               # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
               - name: UCX_NET_DEVICES
                 value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+              # MNNVL for NIXL: requires --enable-sleep-mode to activate the cumem
+              # allocator which allocates with CU_MEM_HANDLE_TYPE_FABRIC (vllm#33540).
+              # Also requires hostIPC + hostPID + privileged for cross-pod cuda_ipc.
+              - name: UCX_CUDA_IPC_ENABLE_MNNVL
+                value: "y"
               - name: UCX_TLS
-                value: "^cuda_ipc"
+                value: "cuda_ipc,rc,cuda_copy"
+              # - name: UCX_PROTO_INFO
+              #   value: "y"
+              # - name: UCX_LOG_LEVEL
+              #   value: "debug"
+              # - name: UCX_LOG_FILE
+              #   value: "LUSTRE_PREFIX_PLACEHOLDER/logs/decode/ucx_%h_%p.log"
 
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S

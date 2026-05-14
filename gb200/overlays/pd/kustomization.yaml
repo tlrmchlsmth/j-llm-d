@@ -16,7 +16,7 @@ patches:
         path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/-
         value:
           name: KV_TRANSFER_CONFIG
-          value: '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_buffer_device":"cuda","kv_load_failure_policy":"fail"}'
+          value: '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_buffer_device":"cuda","kv_load_failure_policy":"fail","kv_connector_extra_config":{"kv_recompute_threshold":0}}'
       - op: add
         path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/-
         value:

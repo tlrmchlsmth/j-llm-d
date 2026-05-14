@@ -7,13 +7,13 @@ metadata:
     llm-d.ai/model: MODEL_LABEL_PLACEHOLDER
     llm-d.ai/role: prefill
 spec:
-  replicas: 2
+  replicas: PREFILL_REPLICAS_PLACEHOLDER
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 1
+    size: PREFILL_LWS_SIZE_PLACEHOLDER
     workerTemplate:
       metadata:
         labels:
@@ -24,6 +24,8 @@ spec:
           llm-d.ai/role: prefill
       spec:
         serviceAccountName: wide-ep
+        hostIPC: true
+        hostPID: true
         terminationGracePeriodSeconds: 0
         volumes:
           - name: dshm
@@ -148,7 +150,11 @@ spec:
                     mkdir -p "$EPLB_DUMP_DIR"
                     DUMP_DIR_JSON=",\"expert_load_dump_dir\":\"${EPLB_DUMP_DIR}\""
                   fi
-                  EPLB_JSON="{\"window_size\":${EPLB_WINDOW_SIZE:-100},\"step_interval\":${EPLB_STEP_INTERVAL:-3000},\"num_redundant_experts\":${EPLB_NUM_REDUNDANT_EXPERTS:-32},\"communicator\":\"${EPLB_COMMUNICATOR:-nixl}\",\"use_async\":${EPLB_ASYNC_BOOL},\"log_balancedness\":${EPLB_LOG_BOOL},\"log_balancedness_interval\":${EPLB_LOG_INTERVAL}${DUMP_DIR_JSON}}"
+                  INITIAL_DELAY_JSON=""
+                  if [ -n "${EPLB_INITIAL_DELAY:-}" ]; then
+                    INITIAL_DELAY_JSON=",\"initial_delay\":${EPLB_INITIAL_DELAY}"
+                  fi
+                  EPLB_JSON="{\"window_size\":${EPLB_WINDOW_SIZE:-100},\"step_interval\":${EPLB_STEP_INTERVAL:-3000},\"num_redundant_experts\":${EPLB_NUM_REDUNDANT_EXPERTS:-32},\"communicator\":\"${EPLB_COMMUNICATOR:-nixl}\",\"use_async\":${EPLB_ASYNC_BOOL},\"log_balancedness\":${EPLB_LOG_BOOL},\"log_balancedness_interval\":${EPLB_LOG_INTERVAL}${DUMP_DIR_JSON}${INITIAL_DELAY_JSON}}"
                   EPLB_ARGS="--enable-eplb --eplb-config"
                 fi
 
@@ -156,6 +162,10 @@ spec:
                 if [ "${PREFIX_CACHING:-true}" = "false" ]; then
                   PREFIX_CACHE_ARG="--no-prefix-caching"
                 fi
+
+                echo "=== PREFILL ENV ($(hostname)) ==="
+                env | sort
+                echo "=== END PREFILL ENV ==="
 
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
                   GPU_START=$((R * TP_SIZE))
@@ -178,14 +188,18 @@ spec:
                     --trust-remote-code \
                     ${KV_TRANSFER_CONFIG:+--kv_transfer_config "$KV_TRANSFER_CONFIG"} \
                     --gpu-memory-utilization 0.85 \
+                    --max-num-batched-tokens 4096 \
+                    --max-num-seqs 1024 \
+                    --max-cudagraph-capture-size 4096 \
                     --moe-backend ${MOE_BACKEND} \
                     --all2all-backend "${A2A_BACKEND}" \
                     --disable_cascade_attn \
-                    --api-server-count 4 \
+                    --api-server-count 16 \
                     --async-scheduling \
                     $EPLB_ARGS ${EPLB_JSON:-} \
                     $PREFIX_CACHE_ARG \
                     --kv-cache-dtype fp8 \
+                    --enable-sleep-mode \
                     --enable-force-include-usage &
                 done
 
@@ -199,9 +213,9 @@ spec:
 
             env:
               - name: VLLM_USE_V2_MODEL_RUNNER
-                value: "0"
-              - name: VLLM_COMPUTE_NANS_IN_LOGITS
                 value: "1"
+              # - name: VLLM_COMPUTE_NANS_IN_LOGITS
+              #   value: "1"
 
               - name: VLLM_NO_USAGE_STATS
                 value: "1"
@@ -244,7 +258,7 @@ spec:
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
-                value: "1"
+                value: "PREFILL_TP_SIZE_PLACEHOLDER"
 
               - name: VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE
                 value: "1"
@@ -279,10 +293,12 @@ spec:
                 value: "EPLB_LOG_BALANCEDNESS_PLACEHOLDER"
               - name: EPLB_LOG_BALANCEDNESS_INTERVAL
                 value: "EPLB_LOG_BALANCEDNESS_INTERVAL_PLACEHOLDER"
+              - name: EPLB_INITIAL_DELAY
+                value: "EPLB_INITIAL_DELAY_PLACEHOLDER"
               - name: EPLB_EXPERT_LOAD_DUMP_DIR
                 value: "EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER"
               - name: EPLB_COMMUNICATOR
-                value: nixl
+                value: PREFILL_EPLB_COMMUNICATOR_PLACEHOLDER
               - name: PREFIX_CACHING
                 value: "PREFIX_CACHING_PLACEHOLDER"
 
@@ -294,6 +310,17 @@ spec:
               # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
               - name: UCX_NET_DEVICES
                 value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+              # MNNVL for NIXL: requires --enable-sleep-mode to activate the cumem
+              # allocator which allocates with CU_MEM_HANDLE_TYPE_FABRIC (vllm#33540).
+              # Also requires hostIPC + hostPID + privileged for cross-pod cuda_ipc.
+              - name: UCX_CUDA_IPC_ENABLE_MNNVL
+                value: "y"
+              - name: UCX_TLS
+                value: "cuda_ipc,rc,cuda_copy"
+              # - name: UCX_PROTO_INFO
+              #   value: "y"
+              # - name: UCX_LOG_LEVEL
+              #   value: "debug"
 
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S
@@ -328,8 +355,9 @@ spec:
                   - /bin/bash
                   - -c
                   - |
-                    for port in 8000 8001 8002 8003; do
-                      curl -sf http://localhost:$port/v1/models | grep -q '"id"' || exit 1
+                    DP_SIZE_LOCAL=$((4 / TP_SIZE))
+                    for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
+                      curl -sf http://localhost:$((8000 + R))/v1/models | grep -q '"id"' || exit 1
                     done
               periodSeconds: 5
               failureThreshold: 60

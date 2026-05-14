@@ -14,12 +14,21 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(it, **_kw):  # type: ignore[misc]
+        return it
+
 PROM_URL = os.environ.get("PROM_URL", "http://localhost:9090/api/v1")
+MAX_WORKERS = int(os.environ.get("PROM_WORKERS", "16"))
 RATE_WIN = "5m"
 RANGE_RATE_WIN = "10s"
 RANGE_STEP = "15s"
@@ -75,6 +84,29 @@ def check_prometheus() -> bool:
     except (URLError, OSError) as e:
         print(f"  Probe failed: {url} → {e}", file=sys.stderr)
         return False
+
+
+def run_parallel(
+    tasks: list[tuple[str, Callable[[], dict]]],
+    workers: int = MAX_WORKERS,
+) -> dict[str, dict]:
+    """Execute query tasks in parallel with a tqdm progress bar.
+
+    Each task is a (key, zero-arg-callable) tuple. The callable should return
+    a Prometheus response dict. Exceptions are caught per-future so one bad
+    task doesn't kill the batch.
+    """
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(fn): key for key, fn in tasks}
+        for fut in tqdm(as_completed(futures), total=len(futures),
+                        desc="Querying", unit="q"):
+            key = futures[fut]
+            try:
+                results[key] = fut.result()
+            except Exception:
+                results[key] = {"status": "error", "error": "query task raised exception"}
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -500,15 +532,6 @@ def main():
     nyann_load_p = '{pod=~"' + deploy_user + '-' + bench_dataset + '-load-.*"}'
 
     combined: dict = {}
-    ok = fail = 0
-
-    def record(key: str, result: dict):
-        nonlocal ok, fail
-        combined[key] = result
-        if result.get("status") == "success":
-            ok += 1
-        else:
-            fail += 1
 
     # 1. Fetch nyann signals (wide window) for stage detection
     nyann_defs = [
@@ -517,7 +540,7 @@ def main():
     ]
     print(f"Querying nyann signals for stage detection (window={duration}s)...")
     for key, query in nyann_defs:
-        record(key, prom_query_range(query, start_ts, end_ts))
+        combined[key] = prom_query_range(query, start_ts, end_ts)
 
     # 2. Detect stages
     print("Detecting benchmark stages from nyann_stage + nyann_concurrency...")
@@ -547,40 +570,51 @@ def main():
         bench_win = RATE_WIN
         print("No benchmark stages detected (nyann_concurrency not found or empty)")
 
-    # 3. All range queries (re-fetched with narrow window, overwrites wide nyann data)
+    # 3. Build all remaining queries into one parallel batch
+    tasks: list[tuple[str, Callable[[], dict]]] = []
+
+    # Range queries
     range_defs = build_range_defs(p, nyann_load_p)
-    print(f"Querying {len(range_defs)} range metrics "
-          f"(window={range_end - range_start}s)...")
-    for key, query in range_defs:
-        record(key, prom_query_range(query, range_start, range_end))
+    tasks.extend([
+        (k, lambda q=v: prom_query_range(q, range_start, range_end))
+        for k, v in range_defs
+    ])
 
-    # 4. Global instant queries covering the entire benchmark (post-warmup)
+    # Global instant queries
     global_defs = build_instant_defs(p, rate_win=bench_win, p_decode=p_decode, p_prefill=p_prefill)
-    print(f"Querying {len(global_defs)} global instant metrics at time={bench_end} "
-          f"(rate_win={bench_win})...")
-    for key, query in global_defs:
-        record(key, prom_query(query, ts=bench_end))
+    tasks.extend([
+        (k, lambda q=v: prom_query(q, ts=bench_end))
+        for k, v in global_defs
+    ])
 
-    # 5. Per-stage instant queries (rate window = stage duration)
-    if stages:
-        n_metrics = len(build_instant_defs(p, p_decode=p_decode, p_prefill=p_prefill))
-        print(f"Querying per-stage instant metrics ({len(stages)} x {n_metrics} queries)...")
-        for s in stages:
-            stage_end = int(s["end_time"])
-            stage_dur = max(int(s["end_time"] - s["start_time"]), 60)
-            stage_win = f"{stage_dur}s"
-            stage_defs = build_instant_defs(p, rate_win=stage_win, p_decode=p_decode, p_prefill=p_prefill)
-            print(f"  Stage {s['stage']} (concurrency={s['concurrency']}, "
-                  f"end={stage_end}, rate_win={stage_win})")
-            for key, query in stage_defs:
-                record(f"stage_{s['stage']}_{key}", prom_query(query, ts=stage_end))
+    # Per-stage instant queries
+    for s in stages:
+        stage_end = int(s["end_time"])
+        stage_dur = max(int(s["end_time"] - s["start_time"]), 60)
+        stage_defs = build_instant_defs(
+            p, rate_win=f"{stage_dur}s", p_decode=p_decode, p_prefill=p_prefill)
+        tasks.extend([
+            (f"stage_{s['stage']}_{k}", lambda q=v, t=stage_end: prom_query(q, ts=t))
+            for k, v in stage_defs
+        ])
 
-    # 6. Per-rank range queries (scoped to benchmark window)
+    # Per-rank range queries
     per_rank_defs = build_per_rank_range_defs(p, p_prefill=p_prefill)
-    print(f"Querying {len(per_rank_defs)} per-rank range metrics "
-          f"(window={range_end - range_start}s)...")
-    for key, query in per_rank_defs:
-        record(key, prom_query_range(query, range_start, range_end))
+    tasks.extend([
+        (k, lambda q=v: prom_query_range(q, range_start, range_end))
+        for k, v in per_rank_defs
+    ])
+
+    # Execute all queries in parallel
+    print(f"Querying {len(tasks)} metrics in parallel (workers={MAX_WORKERS})...")
+    t0 = time.time()
+    batch = run_parallel(tasks)
+    elapsed = time.time() - t0
+    combined.update(batch)
+
+    ok = sum(1 for r in batch.values() if r.get("status") == "success")
+    fail = len(batch) - ok
+    print(f"Done in {elapsed:.1f}s ({ok} success, {fail} failed)")
 
     # Write output
     out_path = run_dir / "prometheus.json"
@@ -589,7 +623,6 @@ def main():
 
     size = out_path.stat().st_size
     print(f"Written to {out_path} ({size} bytes)")
-    print(f"Results: {ok} success, {fail} failed")
     if stages:
         print(f"Stages: {len(stages)} (per-stage metrics stored as stage_<N>_<metric>)")
 

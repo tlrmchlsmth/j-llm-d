@@ -41,6 +41,10 @@ spec:
             hostPath:
               path: /sys
               type: Directory
+          - name: proc
+            hostPath:
+              path: /proc
+              type: Directory
           - name: dcgm-metrics
             configMap:
               name: wide-ep-dcgm-metrics
@@ -48,70 +52,36 @@ spec:
           - name: compute-domain-channel
             resourceClaimTemplateName: llm-d-dev-claim
         initContainers:
-          # Sidecar image from https://github.com/llm-d/llm-d-inference-scheduler/pull/746
-          # (hot-path perf optimizations: connection pooling, LRU cache, alloc reduction)
-          - name: routing-proxy-rank0
-            image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
+          - name: routing-proxy
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.8.0
             imagePullPolicy: Always
             args:
               - --port=8000
               - --vllm-port=8200
+              - --data-parallel-size=4
               - --secure-proxy=false
               - --connector=nixlv2
             ports:
               - containerPort: 8000
-                name: proxy-rank0
+                name: rank0
                 protocol: TCP
-            restartPolicy: Always
-            resources: {}
-            securityContext:
-              allowPrivilegeEscalation: false
-          - name: routing-proxy-rank1
-            image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
-            imagePullPolicy: Always
-            args:
-              - --port=8001
-              - --vllm-port=8201
-              - --secure-proxy=false
-              - --connector=nixlv2
-            ports:
               - containerPort: 8001
-                name: proxy-rank1
+                name: rank1
                 protocol: TCP
-            restartPolicy: Always
-            resources: {}
-            securityContext:
-              allowPrivilegeEscalation: false
-          - name: routing-proxy-rank2
-            image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
-            imagePullPolicy: Always
-            args:
-              - --port=8002
-              - --vllm-port=8202
-              - --secure-proxy=false
-              - --connector=nixlv2
-            ports:
               - containerPort: 8002
-                name: proxy-rank2
+                name: rank2
                 protocol: TCP
-            restartPolicy: Always
-            resources: {}
-            securityContext:
-              allowPrivilegeEscalation: false
-          - name: routing-proxy-rank3
-            image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
-            imagePullPolicy: Always
-            args:
-              - --port=8003
-              - --vllm-port=8203
-              - --secure-proxy=false
-              - --connector=nixlv2
-            ports:
               - containerPort: 8003
-                name: proxy-rank3
+                name: rank3
                 protocol: TCP
             restartPolicy: Always
-            resources: {}
+            resources: 
+              limits:
+                cpu: 8
+                memory: 16Gi
+              requests:
+                cpu: 8
+                memory: 16Gi
             securityContext:
               allowPrivilegeEscalation: false
         containers:
@@ -167,17 +137,21 @@ spec:
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
 
                 PROFILER_ARGS=""
-                NSYS_PREFIX=""
+                NSYS_BASE_ARGS=""
                 NVTX_TRACING_ARG=""
                 if [ "${ENABLE_PROFILING:-0}" = "1" ]; then
                   echo "Profiling enabled (type=${PROFILER_TYPE:-nsys})..."
-                  mkdir -p /trace
+                  TRACE_DIR="${NSYS_TRACE_DIR:-LUSTRE_PREFIX_PLACEHOLDER/traces/nsys}"
+                  mkdir -p "$TRACE_DIR"
                   if [ "${PROFILER_TYPE:-nsys}" = "nsys" ]; then
                     uv pip install nvtx
-                    apt-get update && apt-get install -y --no-install-recommends nsight-systems-cli 2>/dev/null || \
-                    uv pip install nvidia-nsight-systems 2>/dev/null || \
-                    (echo "ERROR: Could not install nsys. Add nsight-systems to your container image." && exit 1)
-                    NSYS_PREFIX="nsys profile --cuda-graph-trace=graph --trace=cuda,nvtx --delay=${PROFILER_DELAY_SECS:-120} --duration=${PROFILER_DURATION_SECS:-10} -o /trace/decode_rank_${START_RANK}"
+                    if ! command -v nsys &>/dev/null; then
+                      CUDA_MAJ=$(nvcc --version 2>/dev/null | grep -oP 'V\K[0-9]+' | head -1)
+                      apt-get update -qq && apt-get install -y --no-install-recommends "cuda-nsight-systems-${CUDA_MAJ:-13}-0" || \
+                      (echo "ERROR: Could not install nsys. Add nsight-systems to your container image." && exit 1)
+                    fi
+                    NSYS_BASE_ARGS="--capture-range=cudaProfilerApi --capture-range-end=stop --cuda-graph-trace=node --trace=cuda,nvtx"
+                    PROFILER_ARGS="--profiler-config {\"profiler\":\"cuda\",\"delay_iterations\":${PROFILER_DELAY_ITERS:-5},\"max_iterations\":${PROFILER_MAX_ITERS:-3}}"
                     NVTX_TRACING_ARG="--enable-layerwise-nvtx-tracing"
                   else
                     PROFILER_ARGS="--profiler-config {\"profiler\":\"torch\",\"max_iterations\":${PROFILER_MAX_ITERS:-32},\"torch_profiler_dir\":\"/trace\"}"
@@ -187,10 +161,16 @@ spec:
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
                   GPU_START=$((R * TP_SIZE))
                   GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
+                  RANK=$((START_RANK + R))
 
-                  VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
-                  FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
-                  CUDA_VISIBLE_DEVICES=$GPUS $NSYS_PREFIX vllm serve $PROFILER_ARGS \
+                  NSYS_PREFIX=""
+                  if [ -n "$NSYS_BASE_ARGS" ]; then
+                    NSYS_PREFIX="nsys profile --session-new=rank_${RANK} $NSYS_BASE_ARGS -o $TRACE_DIR/decode_rank_${RANK}"
+                  fi
+
+                  VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank${RANK} \
+                  FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank${RANK} \
+                  CUDA_VISIBLE_DEVICES=$GPUS $NSYS_PREFIX vllm serve $PROFILER_ARGS $NVTX_TRACING_ARG \
                     deepseek-ai/DeepSeek-V4-Pro \
                     --disable-uvicorn-access-log \
                     --port $((8200 + R)) \
@@ -206,18 +186,17 @@ spec:
                     --gpu-memory-utilization 0.85 \
                     --max-num-batched-tokens $MAX_TOKENS \
                     --max-num-seqs $MAX_TOKENS \
-                    --disable_cascade_attn \
                     --max-cudagraph-capture-size $MAX_TOKENS \
-                    --async-scheduling \
                     --api-server-count 4 \
                     --kv-cache-dtype fp8 \
                     --block-size 256 \
                     --no-disable-hybrid-kv-cache-manager \
                     --attention_config.use_fp4_indexer_cache=True \
-                    --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}' \
+                    --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY","custom_ops":["all"]}' \
+                    --enable-sleep-mode \
                     --enable-force-include-usage \
-                    --all2all-backend "deepep_v2" \
-                    --profiler-config '{"profiler":"torch","torch_profiler_dir":"/traces","ignore_frontend":"true","max_iterations":3}' &
+                    --all2all-backend "deepep_v2" &
+                    #--profiler-config '{"profiler":"torch","torch_profiler_dir":"/traces","ignore_frontend":"true","max_iterations":3}'
                 done
                     #--all2all-backend "deepep_v2" \
                     #--moe-backend flashinfer_trtllm \
@@ -249,8 +228,6 @@ spec:
               #- name: VLLM_USE_V2_MODEL_RUNNER
               #  value: "1"
 
-              - name: FLASHINFER_DISABLE_VERSION_CHECK
-                value: "1"
               - name: ACTIVATION_V2_GRID_Y
                 value: "512"
               - name: VLLM_NO_USAGE_STATS
@@ -272,16 +249,17 @@ spec:
               - name: MAX_TOKENS
                 value: "1024"
 
-              #- name: ENABLE_PROFILING
-              #  value: "1"
-              #- name: PROFILER_TYPE
-              #  value: "torch"
-              #- name: PROFILER_MAX_ITERS
-              #  value: "3"
+              - name: ENABLE_PROFILING
+                value: "1"
+              - name: PROFILER_TYPE
+                value: "nsys"
+              - name: PROFILER_DELAY_ITERS
+                value: "5"
+              - name: PROFILER_MAX_ITERS
+                value: "3"
 
-              # Enable on-demand profiling via /start_profile and /stop_profile
-              - name: VLLM_TORCH_PROFILER_DIR
-                value: "/traces"
+              #- name: VLLM_TORCH_PROFILER_DIR
+              #  value: "/traces"
 
               # HuggingFace token and cache location
               - name: HF_TOKEN
@@ -435,7 +413,13 @@ spec:
             args:
               - --collector.disable-defaults
               - --collector.infiniband
+              - --collector.netstat
+              - --collector.netstat.fields=(.*Retrans.*|.*Timeout.*|.*LossProbe.*|.*FastRetrans.*|.*SackRecovery.*|.*Estab.*|.*Segs.*|.*Drops.*|.*Overflow.*|.*MemoryPressure.*)
+              - --collector.pressure
+              - --collector.schedstat
+              - --collector.cpu
               - --path.sysfs=/host/sys
+              - --path.procfs=/host/proc
             ports:
               - containerPort: 9100
                 name: node-metrics
@@ -443,6 +427,9 @@ spec:
             volumeMounts:
               - name: sys
                 mountPath: /host/sys
+                readOnly: true
+              - name: proc
+                mountPath: /host/proc
                 readOnly: true
             resources:
               requests:

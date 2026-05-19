@@ -41,6 +41,10 @@ spec:
             hostPath:
               path: /sys
               type: Directory
+          - name: proc
+            hostPath:
+              path: /proc
+              type: Directory
           - name: dcgm-metrics
             configMap:
               name: wide-ep-dcgm-metrics
@@ -113,8 +117,8 @@ spec:
                     RANK_FLAGS="--data-parallel-rank $((START_RANK + R))"
                   fi
 
-                  VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
-                  FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
+                  VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$((START_RANK + R)) \
+                  FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$((START_RANK + R)) \
                   CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
                     deepseek-ai/DeepSeek-V4-Pro \
                     --disable-uvicorn-access-log \
@@ -124,16 +128,14 @@ spec:
                     $DP_FLAGS $RANK_FLAGS \
                     --trust-remote-code \
                     ${KV_TRANSFER_CONFIG:+--kv_transfer_config "$KV_TRANSFER_CONFIG"} \
-                    --all2all-backend "deepep_v2" \
+                    --moe-backend deep_gemm_mega_moe \
                     --gpu-memory-utilization 0.85 \
-                    --disable_cascade_attn \
                     --api-server-count 4 \
-                    --async-scheduling \
                     --kv-cache-dtype fp8 \
                     --block-size 256 \
                     --no-disable-hybrid-kv-cache-manager \
                     --attention_config.use_fp4_indexer_cache=True \
-                    --enforce-eager \
+                    --enable-sleep-mode \
                     --enable-force-include-usage &
                 done
 
@@ -161,8 +163,6 @@ spec:
               #- name: VLLM_ATTENTION_NAN_DETECT
               #  value: "1"
 
-              - name: FLASHINFER_DISABLE_VERSION_CHECK
-                value: "1"
               - name: VLLM_NO_USAGE_STATS
                 value: "1"
               - name: TQDM_DISABLE
@@ -324,7 +324,13 @@ spec:
             args:
               - --collector.disable-defaults
               - --collector.infiniband
+              - --collector.netstat
+              - --collector.netstat.fields=(.*Retrans.*|.*Timeout.*|.*LossProbe.*|.*FastRetrans.*|.*SackRecovery.*|.*Estab.*|.*Segs.*|.*Drops.*|.*Overflow.*|.*MemoryPressure.*)
+              - --collector.pressure
+              - --collector.schedstat
+              - --collector.cpu
               - --path.sysfs=/host/sys
+              - --path.procfs=/host/proc
             ports:
               - containerPort: 9100
                 name: node-metrics
@@ -332,6 +338,9 @@ spec:
             volumeMounts:
               - name: sys
                 mountPath: /host/sys
+                readOnly: true
+              - name: proc
+                mountPath: /host/proc
                 readOnly: true
             resources:
               requests:

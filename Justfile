@@ -482,27 +482,29 @@ process-traces N='':
 NYANN_BENCH_DIR := env("NYANN_BENCH_DIR", "")
 
 # Wait for stack readiness, then launch nyann-bench load + eval jobs
-benchmark-stairs:
+benchmark-stairs SWEEP_MIN='1600' SWEEP_MAX='14400' STEPS='10' STEP_DURATION='300s' ISL='500' OSL='1500' EVAL_CONCURRENCY='16':
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "{{NYANN_BENCH_DIR}}" ]; then
       echo "Error: NYANN_BENCH_DIR is not set. Add it to .env or export it." >&2
       exit 1
     fi
+    STEP_SECS="${{STEP_DURATION}%s}"
+    EVAL_DURATION="$(( {{STEPS}} * STEP_SECS ))s"
     cd "{{NYANN_BENCH_DIR}}"
     go run ./cmd/nyann-bench/ generate \
       --target "{{EVAL_BASE_URL}}" \
-      --config '{"load":{"concurrency":128},"warmup":{"duration":"60s","stagger":true},"sweep":{"min":1600,"max":14400,"steps":10,"step_duration":"300s"},"workload":{"type":"corpus","corpus_path":"{{LUSTRE_DATA}}/corpus/sharegpt.txt","isl":500,"osl":1500,"turns":1}}' \
-      --workers 8 \
+      --config '{"load":{"concurrency":128},"warmup":{"duration":"60s","stagger":true},"sweep":{"min":{{SWEEP_MIN}},"max":{{SWEEP_MAX}},"steps":{{STEPS}},"step_duration":"{{STEP_DURATION}}"},"workload":{"type":"corpus","corpus_path":"{{LUSTRE_DATA}}/corpus/sharegpt.txt","isl":{{ISL}},"osl":{{OSL}},"turns":1}}' \
+      --workers auto \
       --kube --kube.name {{NAME_PREFIX}}-sharegpt-load --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
     go run ./cmd/nyann-bench/ generate \
       --target "{{EVAL_BASE_URL}}" \
-      --config '{"load":{"concurrency":64,"duration":"3600s"},"workload":{"type":"gsm8k","gsm8k_path":"{{LUSTRE_DATA}}/gsm8k_test.jsonl","gsm8k_train_path":"{{LUSTRE_DATA}}/gsm8k_train.jsonl"}}' \
+      --config "{\"load\":{\"concurrency\":{{EVAL_CONCURRENCY}},\"duration\":\"${EVAL_DURATION}\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"{{LUSTRE_DATA}}/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"{{LUSTRE_DATA}}/gsm8k_train.jsonl\"}}" \
       --kube --kube.name {{NAME_PREFIX}}-nyann-eval --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
     wait
     echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-nyann-eval' to follow."
 
-benchmark-constant:
+benchmark-constant CONCURRENCY='14400' DURATION='600s' ISL='500' OSL='1500' EVAL_CONCURRENCY='16':
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "{{NYANN_BENCH_DIR}}" ]; then
@@ -512,12 +514,12 @@ benchmark-constant:
     cd "{{NYANN_BENCH_DIR}}"
     go run ./cmd/nyann-bench/ generate \
       --target "{{EVAL_BASE_URL}}" \
-      --config '{"load":{"concurrency":14400,"duration":"600s","rampup":"30s"},"warmup":{"duration":"60s","stagger":true},"workload":{"type":"corpus","corpus_path":"{{LUSTRE_DATA}}/corpus/sharegpt.txt","isl":500,"osl":1500,"turns":1}}' \
-      --workers 8 \
+      --config '{"load":{"concurrency":{{CONCURRENCY}},"duration":"{{DURATION}}","rampup":"30s"},"warmup":{"duration":"60s","stagger":true},"workload":{"type":"corpus","corpus_path":"{{LUSTRE_DATA}}/corpus/sharegpt.txt","isl":{{ISL}},"osl":{{OSL}},"turns":1}}' \
+      --workers auto \
       --kube --kube.name {{NAME_PREFIX}}-sharegpt-load --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
     go run ./cmd/nyann-bench/ generate \
       --target "{{EVAL_BASE_URL}}" \
-      --config '{"load":{"concurrency":64,"duration":"180s"},"workload":{"type":"gsm8k","gsm8k_path":"{{LUSTRE_DATA}}/gsm8k_test.jsonl","gsm8k_train_path":"{{LUSTRE_DATA}}/gsm8k_train.jsonl"}}' \
+      --config '{"load":{"concurrency":{{EVAL_CONCURRENCY}},"duration":"{{DURATION}}"},"workload":{"type":"gsm8k","gsm8k_path":"{{LUSTRE_DATA}}/gsm8k_test.jsonl","gsm8k_train_path":"{{LUSTRE_DATA}}/gsm8k_train.jsonl"}}' \
       --kube --kube.name {{NAME_PREFIX}}-nyann-eval --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
     wait
     echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-nyann-eval' to follow."

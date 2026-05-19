@@ -240,6 +240,10 @@ stop NOW='false':
   {{KN}} delete job parallel-guidellm --ignore-not-found=true $FORCE &
   {{KN}} delete job inference-perf --ignore-not-found=true $FORCE &
   {{KN}} delete configmap inference-perf-config --ignore-not-found=true &
+  {{KN}} delete jobset -l app={{NAME_PREFIX}}-sharegpt-load --ignore-not-found=true $FORCE &
+  {{KN}} delete jobset -l app={{NAME_PREFIX}}-nyann-eval --ignore-not-found=true $FORCE &
+  {{KN}} delete jobset -l app={{NAME_PREFIX}}-eval-gsm8k --ignore-not-found=true $FORCE &
+  {{KN}} delete jobset -l app={{NAME_PREFIX}}-eval-gpqa --ignore-not-found=true $FORCE &
   wait
   {{KN}} delete sa {{DEPLOY_NAME}} --ignore-not-found=true
 
@@ -354,8 +358,22 @@ dev-build REMOTE=VLLM_DEV_REMOTE BRANCH=VLLM_DEV_BRANCH JOBS=VLLM_BUILD_JOBS:
   git checkout {{BRANCH}}
   git reset --hard origin/{{BRANCH}}
 
+  # Flush stale JIT/compile caches (AOT graphs, flashinfer kernels, FA cute DSL)
+  for d in vllm_cache_extdp flashinfer_cache_extdp fa_cute_dsl_cache; do
+    [ -d "/mnt/lustre/{{NAME_PREFIX}}/$d" ] && mv "/mnt/lustre/{{NAME_PREFIX}}/$d" "/mnt/lustre/{{NAME_PREFIX}}/${d}.old.$(date +%s)" && echo "Flushed $d"
+  done
+
+  # Find the merge-base with upstream main for precompiled C++ extensions
+  git remote add upstream https://github.com/vllm-project/vllm.git 2>/dev/null || true
+  git fetch upstream main --no-tags 2>/dev/null
+  PRECOMPILED_COMMIT=$(git merge-base HEAD upstream/main 2>/dev/null || git rev-parse HEAD)
+  echo "Precompiled wheel commit: ${PRECOMPILED_COMMIT:0:12}"
+
   # build in background
-  MAX_JOBS={{JOBS}} nohup uv pip install --no-deps --no-build-isolation -e . \
+  VLLM_USE_PRECOMPILED=1 \
+  VLLM_PRECOMPILED_WHEEL_COMMIT=$PRECOMPILED_COMMIT \
+  MAX_JOBS={{JOBS}} \
+  nohup uv pip install --no-build-isolation -e . \
     > /mnt/lustre/{{NAME_PREFIX}}/build.log 2>&1 &
 
   echo "Build started ({{REMOTE}} {{BRANCH}}, jobs={{JOBS}}), follow with: just dev-build-log"
@@ -429,82 +447,59 @@ cache-model:
 flush-cache:
   {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/{{NAME_PREFIX}}/vllm_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/flashinfer_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/fa_cute_dsl_cache && echo "Compile caches flushed"'
 
-# Profile all decode pods, copy traces, combine, fix, and open in Finder
+# Nsys profile: trigger cuda profiler on leader pod, flush sessions, copy from Lustre
 profile:
   #!/usr/bin/env bash
   set -euo pipefail
 
-  # Get decode pod IPs
-  DECODE_IPS=$({{KN}} get pods -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | .status.podIP' | tr '\n' ' ')
-  if [[ -z "$DECODE_IPS" ]]; then
-    echo "No decode pods found"
-    exit 1
-  fi
+  LEADER="{{DEPLOY_NAME}}-decode-0"
+  LEADER_IP=$({{KN}} get pod "$LEADER" -o jsonpath='{.status.podIP}')
+  LUSTRE_TRACE_DIR="/mnt/lustre/{{NAME_PREFIX}}/traces/nsys"
+  DP_SIZE_LOCAL=4
   PORTS="8200 8201 8202 8203"
 
-  echo "Starting profile on all decode ranks..."
-  {{KN}} exec {{POKER_NAME}} -- bash -c "
-    for IP in $DECODE_IPS; do
-      for PORT in $PORTS; do
-        curl -s -X POST http://\$IP:\$PORT/start_profile &
-      done
+  echo "Starting nsys profile on $LEADER ($LEADER_IP)..."
+  {{KN}} exec {{DEV_POD_NAME}} -- bash -c "
+    for PORT in $PORTS; do
+      curl -s -X POST http://$LEADER_IP:\$PORT/start_profile &
     done
     wait
   "
+  echo "Profiling triggered (delay_iters + max_iters iterations)..."
 
-  echo "Waiting for profiles to complete..."
-  {{KN}} exec {{POKER_NAME}} -- bash -c "
-    for IP in $DECODE_IPS; do
-      for PORT in $PORTS; do
-        echo \"  Stopping \$IP:\$PORT...\"
-        curl -s -X POST http://\$IP:\$PORT/stop_profile
-      done
+  # Wait for iterations to complete (decode iters are ~ms each)
+  sleep 5
+
+  # Clear old traces, then flush all nsys sessions in parallel (pods will restart)
+  {{KN}} exec {{DEV_POD_NAME}} -- rm -f "$LUSTRE_TRACE_DIR"/*.nsys-rep 2>/dev/null || true
+  echo "Flushing nsys traces (pods will restart)..."
+  {{KN}} exec "$LEADER" -c vllm -- bash -c "
+    for R in \$(seq 0 $((DP_SIZE_LOCAL - 1))); do
+      nsys shutdown --session=rank_\$R &
     done
-  "
+    wait
+  " || true
 
-  echo "Copying and processing traces..."
-  just get-decode-pods
+  echo "Copying traces from Lustre..."
   just copy-traces
-  TRACE_DIR=$(ls -d ./traces/[0-9]* 2>/dev/null | sort -t/ -k3 -n | tail -1)
-  N=$(basename "$TRACE_DIR")
-  just process-traces "$N"
-  echo "Opening $TRACE_DIR"
-  open "$TRACE_DIR"
 
-# Copy PyTorch traces from all decode pods to local ./traces/N directory
+# Copy nsys traces from Lustre to local ./traces/nsys/ directory
 copy-traces:
   #!/usr/bin/env bash
   set -euo pipefail
 
-  # Always refresh pod info
-  just get-decode-pods
+  LUSTRE_TRACE_DIR="/mnt/lustre/{{NAME_PREFIX}}/traces/nsys"
+  LOCAL_DIR="./traces/nsys"
+  mkdir -p "$LOCAL_DIR"
 
-  # Find next available serial number
-  N=0
-  while [ -d "./traces/$N" ]; do
-    N=$((N + 1))
-  done
+  echo "Listing traces on Lustre..."
+  {{KN}} exec {{DEV_POD_NAME}} -- ls -lh "$LUSTRE_TRACE_DIR" 2>/dev/null || { echo "No traces found on Lustre at $LUSTRE_TRACE_DIR"; exit 1; }
 
-  TRACE_DIR="./traces/$N"
-  mkdir -p "$TRACE_DIR"
-  echo "Copying traces to $TRACE_DIR"
+  echo "Copying to $LOCAL_DIR..."
+  {{KN}} cp "{{DEV_POD_NAME}}:$LUSTRE_TRACE_DIR/" "$LOCAL_DIR/" 2>/dev/null || true
 
-  # Copy traces from each pod
-  while read -r POD_NAME POD_IP; do
-    echo "Copying traces from $POD_NAME..."
-    POD_DIR="$TRACE_DIR/$POD_NAME"
-    mkdir -p "$POD_DIR"
-    {{KN}} cp "$POD_NAME:/traces/" "$POD_DIR/" -c vllm 2>/dev/null || echo "  No traces found in $POD_NAME or copy failed"
-  done < .tmp/decode_pods.txt
-
-  # Remove empty pod directories (pods that had no traces)
-  find "$TRACE_DIR" -maxdepth 1 -type d -empty -delete 2>/dev/null || true
-
-  echo "Traces copied to $TRACE_DIR"
-  if [ -d "$TRACE_DIR" ]; then
-    echo "Total size: $(du -sh $TRACE_DIR | cut -f1)"
-  fi
-  echo "Run 'just process-traces $N' to combine and fix for Perfetto"
+  echo "Local traces:"
+  ls -lh "$LOCAL_DIR"/*.nsys-rep 2>/dev/null || echo "  No .nsys-rep files found"
 
 # Combine per-rank traces and fix Perfetto overlaps
 process-traces N='':
@@ -534,9 +529,9 @@ benchmark-stairs:
     cd "{{NYANN_BENCH_DIR}}"
     go run ./cmd/nyann-bench/ generate \
       --target "{{EVAL_BASE_URL}}" \
-      --config '{"load":{"concurrency":128},"warmup":{"duration":"120s","stagger":true},"sweep":{"min":128,"max":1600,"steps":10,"step_duration":"300s"},"workload":{"type":"corpus","corpus_path":"{{LUSTRE_DATA}}/corpus/sharegpt.txt","isl":500,"osl":1500,"turns":1}}' \
-      --num-workers 8 \
-      --kube --kube.name {{NAME_PREFIX}}-sharegpt-load --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
+      --config '{"load":{"concurrency":128},"warmup":{"duration":"60s","stagger":true},"sweep":{"min":1600,"max":14400,"steps":10,"step_duration":"300s"},"workload":{"type":"corpus","corpus_path":"{{LUSTRE_DATA}}/corpus/sharegpt.txt","isl":500,"osl":1500,"turns":1}}' \
+      --workers 8 \
+      --kube --kube.name {{NAME_PREFIX}}-sharegpt-load --kube.volume lustre --kube.image pr-53 --kube.namespace {{NAMESPACE}} &
     go run ./cmd/nyann-bench/ generate \
       --target "{{EVAL_BASE_URL}}" \
       --config '{"load":{"concurrency":64,"duration":"3600s"},"workload":{"type":"gsm8k","gsm8k_path":"{{LUSTRE_DATA}}/gsm8k_test.jsonl","gsm8k_train_path":"{{LUSTRE_DATA}}/gsm8k_train.jsonl"}}' \
@@ -555,9 +550,9 @@ benchmark-constant:
     cd "{{NYANN_BENCH_DIR}}"
     go run ./cmd/nyann-bench/ generate \
       --target "{{EVAL_BASE_URL}}" \
-      --config '{"load":{"concurrency":1900,"duration":"180s"},"warmup":{"duration":"60s","stagger":true},"workload":{"type":"corpus","corpus_path":"{{LUSTRE_DATA}}/corpus/sharegpt.txt","isl":500,"osl":1500,"turns":1}}' \
-      --num-workers 8 \
-      --kube --kube.name {{NAME_PREFIX}}-sharegpt-load --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
+      --config '{"load":{"concurrency":14400,"duration":"600s","rampup":"30s"},"warmup":{"duration":"60s","stagger":true},"workload":{"type":"corpus","corpus_path":"{{LUSTRE_DATA}}/corpus/sharegpt.txt","isl":500,"osl":1500,"turns":1}}' \
+      --workers 8 \
+      --kube --kube.name {{NAME_PREFIX}}-sharegpt-load --kube.volume lustre --kube.image pr-53 --kube.namespace {{NAMESPACE}} &
     go run ./cmd/nyann-bench/ generate \
       --target "{{EVAL_BASE_URL}}" \
       --config '{"load":{"concurrency":64,"duration":"180s"},"workload":{"type":"gsm8k","gsm8k_path":"{{LUSTRE_DATA}}/gsm8k_test.jsonl","gsm8k_train_path":"{{LUSTRE_DATA}}/gsm8k_train.jsonl"}}' \

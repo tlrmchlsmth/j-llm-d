@@ -228,6 +228,9 @@ spec:
               #- name: VLLM_USE_V2_MODEL_RUNNER
               #  value: "1"
 
+              - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+                value: "120"
+
               - name: ACTIVATION_V2_GRID_Y
                 value: "512"
               - name: VLLM_NO_USAGE_STATS
@@ -240,11 +243,14 @@ spec:
               - name: VLLM_DEV_VENV
                 value: VLLM_DEV_VENV_PLACEHOLDER
 
-              # DeepEP low-latency only: NVFP4 dispatch + masked_gemm
-              #- name: VLLM_DEEPEPLL_NVFP4_DISPATCH
-              #  value: "1"
-              #- name: VLLM_FLASHINFER_MOE_BACKEND
-              #  value: "masked_gemm"
+              - name: VLLM_DEEPEPLL_NVFP4_DISPATCH
+                value: "1"
+              - name: VLLM_FLASHINFER_MOE_BACKEND
+                value: "masked_gemm"
+              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
+                value: "1"
+              - name: VLLM_ENABLE_MOE_DP_CHUNK
+                value: "0"
 
               - name: MAX_TOKENS
                 value: "1024"
@@ -289,6 +295,11 @@ spec:
 
               - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"
+
+              # DeepEP LL sgl fork allocates two buffers, only one of which is required for MNNVL.
+              # Wasted 1Gb per rank by default, otherwise.
+              - name: VLLM_DEEPEP_BUFFER_SIZE_MB
+                value: "0"
 
               # Common vLLM settings
               - name: TRITON_LIBCUDA_PATH

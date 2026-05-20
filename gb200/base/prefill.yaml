@@ -163,6 +163,8 @@ spec:
               #- name: VLLM_ATTENTION_NAN_DETECT
               #  value: "1"
 
+              - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+                value: "120"
               - name: VLLM_NO_USAGE_STATS
                 value: "1"
               - name: TQDM_DISABLE
@@ -203,6 +205,9 @@ spec:
                 value: "1"
 
               - name: VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE
+                value: "1"
+
+              - name: VLLM_USE_DEEP_GEMM
                 value: "1"
 
               # Common vLLM settings

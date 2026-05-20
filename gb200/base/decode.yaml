@@ -251,6 +251,8 @@ spec:
               - name: VLLM_USE_V2_MODEL_RUNNER
                 value: "0"
 
+              - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+                value: "120"
               - name: VLLM_NO_USAGE_STATS
                 value: "1"
               - name: TQDM_DISABLE

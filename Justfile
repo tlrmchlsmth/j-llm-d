@@ -372,6 +372,7 @@ dev-build REMOTE=VLLM_DEV_REMOTE BRANCH=VLLM_DEV_BRANCH JOBS=VLLM_BUILD_JOBS:
   # build in background
   VLLM_USE_PRECOMPILED=1 \
   VLLM_PRECOMPILED_WHEEL_COMMIT=$PRECOMPILED_COMMIT \
+  VLLM_PRECOMPILED_WHEEL_VARIANT="" \
   MAX_JOBS={{JOBS}} \
   nohup uv pip install --no-build-isolation -e . \
     > /mnt/lustre/{{NAME_PREFIX}}/build.log 2>&1 &
@@ -445,7 +446,7 @@ cache-model:
 
 # Flush vLLM/FlashInfer compile caches on Lustre (run after image or config changes)
 flush-cache:
-  {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/{{NAME_PREFIX}}/vllm_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/flashinfer_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/fa_cute_dsl_cache && echo "Compile caches flushed"'
+  {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/{{NAME_PREFIX}}/vllm_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/flashinfer_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/fa_cute_dsl_cache /mnt/lustre/{{NAME_PREFIX}}/tilelang_cache /mnt/lustre/{{NAME_PREFIX}}/flashinfer_workspace && echo "Compile caches flushed"'
 
 # Nsys profile: trigger cuda profiler on leader pod, flush sessions, copy from Lustre
 profile:

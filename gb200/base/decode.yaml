@@ -119,17 +119,19 @@ spec:
                   cd -
                 fi
 
+                # Clear stale .pyc caches from Lustre (clock skew can cause Python to use outdated bytecode)
+                find /mnt/lustre/tms/vllm-dev/vllm -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
                 # DEV mode: use persistent Lustre venv; image venv if present; else system python
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
                   echo "Using dev venv at ${VLLM_DEV_VENV}"
                   source "${VLLM_DEV_VENV}/bin/activate"
-                  export LD_LIBRARY_PATH="${VLLM_DEV_VENV}/lib/python3.12/site-packages/nvidia/nccl/lib:${LD_LIBRARY_PATH:-}"
+                  export LD_LIBRARY_PATH="${VLLM_DEV_VENV}/lib/python3.12/site-packages/nvidia/nccl/lib:/mnt/lustre/tms/ucx-lib:${VLLM_DEV_VENV}/lib/python3.12/site-packages/nixl_cu13.libs:${LD_LIBRARY_PATH:-}"
                 elif [ -f /opt/vllm/bin/activate ]; then
                   source /opt/vllm/bin/activate
                 fi
 
                 # Derive batch-size-dependent env vars from MAX_TOKENS
-                export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
                 # NVSHMEM_QP_DEPTH only needed for DeepEP
                 export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2 + 2))
 
@@ -154,7 +156,7 @@ spec:
                     PROFILER_ARGS="--profiler-config {\"profiler\":\"cuda\",\"delay_iterations\":${PROFILER_DELAY_ITERS:-5},\"max_iterations\":${PROFILER_MAX_ITERS:-3}}"
                     NVTX_TRACING_ARG="--enable-layerwise-nvtx-tracing"
                   else
-                    PROFILER_ARGS="--profiler-config {\"profiler\":\"torch\",\"max_iterations\":${PROFILER_MAX_ITERS:-32},\"torch_profiler_dir\":\"/trace\"}"
+                    PROFILER_ARGS="--profiler-config {\"profiler\":\"torch\",\"ignore_frontend\":true,\"torch_profiler_with_stack\":true,\"delay_iterations\":${PROFILER_DELAY_ITERS:-200},\"max_iterations\":${PROFILER_MAX_ITERS:-50},\"torch_profiler_dir\":\"/traces\"}"
                   fi
                 fi
 
@@ -170,8 +172,11 @@ spec:
 
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank${RANK} \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank${RANK} \
+                  FLASH_ATTENTION_CUTE_DSL_CACHE_DIR=${FLASH_ATTENTION_CUTE_DSL_CACHE_DIR}/decode_rank${RANK} \
+                  TILELANG_CACHE_DIR=${TILELANG_CACHE_DIR}/decode_rank${RANK} \
                   CUDA_VISIBLE_DEVICES=$GPUS $NSYS_PREFIX vllm serve $PROFILER_ARGS $NVTX_TRACING_ARG \
                     deepseek-ai/DeepSeek-V4-Pro \
+                    --load-format auto \
                     --disable-uvicorn-access-log \
                     --port $((8200 + R)) \
                     --tensor-parallel-size $TP_SIZE \
@@ -193,13 +198,23 @@ spec:
                     --no-disable-hybrid-kv-cache-manager \
                     --attention_config.use_fp4_indexer_cache=True \
                     --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY","custom_ops":["all"]}' \
-                    --enable-sleep-mode \
                     --enable-force-include-usage \
+                    --enable-eplb \
+                    --eplb-config '{"window_size":"100",
+                                    "step_interval":"3000",
+                                    "num_redundant_experts":"32",
+                                    "log_balancedness":"False",
+                                    "use_async":"True",
+                                    "communicator":"nixl",
+                                    "log_balancedness_interval":"1000"}' \
+                    --kernel-config '{"enable_flashinfer_autotune":false}' \
                     --all2all-backend "deepep_v2" &
-                    #--profiler-config '{"profiler":"torch","torch_profiler_dir":"/traces","ignore_frontend":"true","max_iterations":3}'
                 done
-                    #--all2all-backend "deepep_v2" \
                     #--moe-backend flashinfer_trtllm \
+                   
+                    # For speeding up compilation -
+                    #--kernel-config '{"enable_flashinfer_autotune":false}' \
+                    
 
                     
                     #--compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}' \
@@ -225,15 +240,23 @@ spec:
                 exit 1
 
             env:
-              #- name: VLLM_USE_V2_MODEL_RUNNER
-              #  value: "1"
+              - name: VLLM_USE_V2_MODEL_RUNNER
+                value: "1"
+
+              - name: VLLM_USE_BREAKABLE_CUDAGRAPH
+                value: "1"
 
               - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
                 value: "120"
 
+              - name: VLLM_DP_SYNC_BACKEND
+                value: "ucx"
+
               - name: ACTIVATION_V2_GRID_Y
                 value: "512"
               - name: VLLM_NO_USAGE_STATS
+                value: "1"
+              - name: VLLM_COMPUTE_NANS_IN_LOGITS
                 value: "1"
               - name: TQDM_DISABLE
                 value: "1"
@@ -243,14 +266,15 @@ spec:
               - name: VLLM_DEV_VENV
                 value: VLLM_DEV_VENV_PLACEHOLDER
 
-              - name: VLLM_DEEPEPLL_NVFP4_DISPATCH
-                value: "1"
-              - name: VLLM_FLASHINFER_MOE_BACKEND
-                value: "masked_gemm"
+              #- name: VLLM_DEEPEPLL_NVFP4_DISPATCH
+              #  value: "1"
+              #- name: VLLM_FLASHINFER_MOE_BACKEND
+              #  value: "masked_gemm"
               - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"
-              - name: VLLM_ENABLE_MOE_DP_CHUNK
-                value: "0"
+
+              #- name: VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD
+              #  value: "0"
 
               - name: MAX_TOKENS
                 value: "1024"
@@ -258,14 +282,11 @@ spec:
               - name: ENABLE_PROFILING
                 value: "1"
               - name: PROFILER_TYPE
-                value: "nsys"
+                value: "torch"
               - name: PROFILER_DELAY_ITERS
-                value: "5"
+                value: "0"
               - name: PROFILER_MAX_ITERS
                 value: "3"
-
-              #- name: VLLM_TORCH_PROFILER_DIR
-              #  value: "/traces"
 
               # HuggingFace token and cache location
               - name: HF_TOKEN
@@ -282,6 +303,8 @@ spec:
                 value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_extdp
               - name: FLASHINFER_CACHE_DIR
                 value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_extdp
+              - name: FLASHINFER_WORKSPACE_BASE
+                value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_workspace
 
               # Flash Attention cute DSL JIT - persist compiled kernels to Lustre
               - name: FLASH_ATTENTION_CUTE_DSL_CACHE_ENABLED
@@ -289,11 +312,12 @@ spec:
               - name: FLASH_ATTENTION_CUTE_DSL_CACHE_DIR
                 value: LUSTRE_PREFIX_PLACEHOLDER/fa_cute_dsl_cache
 
+              # TileLang JIT cache - persist compiled kernels to Lustre
+              - name: TILELANG_CACHE_DIR
+                value: LUSTRE_PREFIX_PLACEHOLDER/tilelang_cache
+
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
-                value: "1"
-
-              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"
 
               # DeepEP LL sgl fork allocates two buffers, only one of which is required for MNNVL.
@@ -340,9 +364,13 @@ spec:
               - name: VLLM_LOGGING_LEVEL
                 value: INFO
               #- name: NCCL_DEBUG
-              #  value: "TRACE"
+              #  value: "INFO"
               #- name: NVSHMEM_DEBUG
               #  value: INFO
+
+              # DeepEP metrics instrumentation (native vLLM integration)
+              - name: DEEPEP_METRICS_ENABLED
+                value: "1"
 
               # KV_TRANSFER_CONFIG and VLLM_NIXL_SIDE_CHANNEL_HOST are
               # added by overlays (pd vs decode-bench use different connectors)
@@ -412,10 +440,10 @@ spec:
                 readOnly: true
             resources:
               requests:
-                cpu: 100m
-                memory: 256Mi
+                cpu: 250m
+                memory: 512Mi
               limits:
-                memory: 256Mi
+                memory: 512Mi
             securityContext:
               allowPrivilegeEscalation: false
           - name: node-exporter
@@ -425,7 +453,7 @@ spec:
               - --collector.disable-defaults
               - --collector.infiniband
               - --collector.netstat
-              - --collector.netstat.fields=(.*Retrans.*|.*Timeout.*|.*LossProbe.*|.*FastRetrans.*|.*SackRecovery.*|.*Estab.*|.*Segs.*|.*Drops.*|.*Overflow.*|.*MemoryPressure.*)
+              - --collector.netstat.fields=(.*Retrans.*|.*Timeout.*|.*LossProbe.*|.*FastRetrans.*|.*SackRecovery.*|.*Estab.*|.*Segs.*|.*Drops.*|.*Overflow.*|.*MemoryPressure.*|.*AutoCork.*|.*DSACK.*|.*Reorder.*|.*OFO.*|.*DelayedACK.*)
               - --collector.pressure
               - --collector.schedstat
               - --collector.cpu

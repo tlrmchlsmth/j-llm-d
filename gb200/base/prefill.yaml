@@ -86,6 +86,9 @@ spec:
                   cd -
                 fi
 
+                # Clear stale .pyc caches from Lustre (clock skew can cause Python to use outdated bytecode)
+                find /mnt/lustre/tms/vllm-dev/vllm -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
                 # DEV mode: use persistent Lustre venv; image venv if present; else system python
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
                   echo "Using dev venv at ${VLLM_DEV_VENV}"
@@ -119,8 +122,11 @@ spec:
 
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$((START_RANK + R)) \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$((START_RANK + R)) \
+                  FLASH_ATTENTION_CUTE_DSL_CACHE_DIR=${FLASH_ATTENTION_CUTE_DSL_CACHE_DIR}/prefill_rank$((START_RANK + R)) \
+                  TILELANG_CACHE_DIR=${TILELANG_CACHE_DIR}/prefill_rank$((START_RANK + R)) \
                   CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
                     deepseek-ai/DeepSeek-V4-Pro \
+                    --load-format auto \
                     --disable-uvicorn-access-log \
                     --port $((8000 + R)) \
                     --tensor-parallel-size $TP_SIZE \
@@ -135,7 +141,6 @@ spec:
                     --block-size 256 \
                     --no-disable-hybrid-kv-cache-manager \
                     --attention_config.use_fp4_indexer_cache=True \
-                    --enable-sleep-mode \
                     --enable-force-include-usage &
                 done
 
@@ -165,7 +170,13 @@ spec:
 
               - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
                 value: "120"
+
+              - name: VLLM_DP_SYNC_BACKEND
+                value: "ucx"
+
               - name: VLLM_NO_USAGE_STATS
+                value: "1"
+              - name: VLLM_COMPUTE_NANS_IN_LOGITS
                 value: "1"
               - name: TQDM_DISABLE
                 value: "1"
@@ -193,12 +204,18 @@ spec:
                 value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_extdp
               - name: FLASHINFER_CACHE_DIR
                 value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_extdp
+              - name: FLASHINFER_WORKSPACE_BASE
+                value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_workspace
 
               # Flash Attention cute DSL JIT - persist compiled kernels to Lustre
               - name: FLASH_ATTENTION_CUTE_DSL_CACHE_ENABLED
                 value: "1"
               - name: FLASH_ATTENTION_CUTE_DSL_CACHE_DIR
                 value: LUSTRE_PREFIX_PLACEHOLDER/fa_cute_dsl_cache
+
+              # TileLang JIT cache - persist compiled kernels to Lustre
+              - name: TILELANG_CACHE_DIR
+                value: LUSTRE_PREFIX_PLACEHOLDER/tilelang_cache
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
@@ -226,7 +243,7 @@ spec:
               - name: NCCL_MNNVL_ENABLE
                 value: "1"
               - name: NCCL_NVLS_ENABLE
-                value: "1"
+                value: "0"
 
               # Override container default that disables VMM
               - name: NVSHMEM_DISABLE_CUDA_VMM
@@ -317,10 +334,10 @@ spec:
                 readOnly: true
             resources:
               requests:
-                cpu: 100m
-                memory: 256Mi
+                cpu: 250m
+                memory: 512Mi
               limits:
-                memory: 256Mi
+                memory: 512Mi
             securityContext:
               allowPrivilegeEscalation: false
           - name: node-exporter

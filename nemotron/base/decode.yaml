@@ -114,22 +114,17 @@ spec:
                   PROFILER_ARGS="--profiler-config {\"profiler\":\"torch\",\"max_iterations\":${PROFILER_MAX_ITERS:-32},\"torch_profiler_dir\":\"/trace\"}"
                 fi
 
-                HEADLESS_FLAG=""
-                RANK_FLAG=""
-                if [ "${LWS_WORKER_INDEX:-0}" -gt 0 ]; then
-                  HEADLESS_FLAG="--headless"
-                  RANK_FLAG="--data-parallel-start-rank $START_RANK"
-                fi
+                RANK_FLAG="--data-parallel-start-rank $START_RANK"
 
                 vllm serve $PROFILER_ARGS \
                   nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 \
-                  $HEADLESS_FLAG \
                   --disable-uvicorn-access-log \
                   --port 8200 \
                   --tensor-parallel-size $TP_SIZE \
                   --enable-expert-parallel \
                   --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
                   --data-parallel-size-local $DP_SIZE_LOCAL \
+                  --data-parallel-hybrid-lb \
                   $RANK_FLAG \
                   --data-parallel-address ${LWS_LEADER_ADDRESS} \
                   --data-parallel-rpc-port 5555 \

@@ -17,9 +17,16 @@ default:
   fi
   echo "$MODEL"
 
-eval:
+eval CONCURRENT='128':
     .lm_eval/bin/lm_eval --model local-completions --tasks gsm8k \
-    --model_args model=$(just _model),base_url={{BASE_URL}}/v1/completions,num_concurrent=2000,max_retries=3,tokenized_requests=False \
+    --model_args model=$(just _model),base_url={{BASE_URL}}/v1/completions,num_concurrent={{CONCURRENT}},max_retries=3,tokenized_requests=False \
+    --num_fewshot 10 \
+
+eval-chat CONCURRENT='128':
+    .lm_eval/bin/lm_eval --model local-chat-completions --tasks gsm8k \
+    --model_args model=$(just _model),base_url={{BASE_URL}}/v1/chat/completions,num_concurrent={{CONCURRENT}},max_retries=3,tokenized_requests=False \
+    --apply_chat_template \
+    --gen_kwargs max_gen_toks=4096 \
     --num_fewshot 10 \
 
 benchmark MC NUM_REQUESTS INPUT_LEN OUTPUT_LEN:

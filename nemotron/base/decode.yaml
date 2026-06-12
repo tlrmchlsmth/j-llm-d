@@ -139,7 +139,8 @@ spec:
                   --enable-flashinfer-autotune \
                   --all2all-backend "flashinfer_nvlink_one_sided" \
                   --kv-cache-dtype fp8 \
-                  --enable-force-include-usage
+                  --enable-force-include-usage \
+                  --reasoning-parser nemotron_v3
 
             env:
               - name: VLLM_USE_V2_MODEL_RUNNER

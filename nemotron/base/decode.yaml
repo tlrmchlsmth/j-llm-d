@@ -136,7 +136,6 @@ spec:
                   --async-scheduling \
                   --mamba-backend triton \
                   --mamba-ssm-cache-dtype float32 \
-                  --reasoning-parser nemotron_v3 \
                   --enable-flashinfer-autotune \
                   --all2all-backend "flashinfer_nvlink_one_sided" \
                   --kv-cache-dtype fp8 \

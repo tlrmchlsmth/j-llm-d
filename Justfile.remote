@@ -22,12 +22,20 @@ eval CONCURRENT='128':
     --model_args model=$(just _model),base_url={{BASE_URL}}/v1/completions,num_concurrent={{CONCURRENT}},max_retries=3,tokenized_requests=False \
     --num_fewshot 10 \
 
-eval-chat CONCURRENT='128':
-    .lm_eval/bin/lm_eval --model local-chat-completions --tasks gsm8k \
-    --model_args model=$(just _model),base_url={{BASE_URL}}/v1/chat/completions,num_concurrent={{CONCURRENT}},max_retries=3,tokenized_requests=False \
+eval-nvidia CONCURRENT='128' LIMIT='' FEWSHOT='0':
+    .lm_eval/bin/lm_eval --model local-chat-completions --tasks adlr_gsm8k_chat_cot \
+    --model_args model=$(just _model),base_url={{BASE_URL}}/v1/chat/completions,num_concurrent={{CONCURRENT}},max_retries=3,tokenized_requests=False,max_gen_toks=8192,timeout=600 \
     --apply_chat_template \
-    --gen_kwargs max_gen_toks=4096 \
-    --num_fewshot 10 \
+    --num_fewshot {{FEWSHOT}} \
+    {{ if FEWSHOT != "0" { "--fewshot_as_multiturn" } else { "" } }} \
+    {{ if LIMIT != "" { "--limit " + LIMIT } else { "" } }}
+
+eval-chat CONCURRENT='128' MAX_TOKENS='8192':
+    .lm_eval/bin/lm_eval --model local-chat-completions --tasks gsm8k_cot_llama \
+    --model_args model=$(just _model),base_url={{BASE_URL}}/v1/chat/completions,num_concurrent={{CONCURRENT}},max_retries=3,tokenized_requests=False,max_gen_toks={{MAX_TOKENS}} \
+    --apply_chat_template \
+    --fewshot_as_multiturn \
+    --num_fewshot 8 \
 
 benchmark MC NUM_REQUESTS INPUT_LEN OUTPUT_LEN:
     vllm bench serve \

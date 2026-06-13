@@ -9,12 +9,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-This is a development workspace for [llm-d](https://github.com/llm-d/llm-d), a Kubernetes-native distributed inference serving stack for large language models. The current focus is deploying DeepSeek-R1 on **GB200 NVL72** clusters with wide expert-parallelism and prefill/decode disaggregation.
+This is a development workspace for [llm-d](https://github.com/llm-d/llm-d), a Kubernetes-native distributed inference serving stack for large language models. The current focus is deploying DeepSeek-R1 and Nemotron 3 Ultra on **GB200 NVL72** clusters with wide expert-parallelism and prefill/decode disaggregation.
 
 The repository contains:
 
 - `llm-d/` - Git submodule pointing to the main llm-d project
-- `gb200/` - Kustomize-based deployment manifests for GB200 NVL72 (model servers, gateway, InferencePool)
+- `gb200/` - Kustomize-based deployment manifests for DeepSeek-R1 on GB200 NVL72
+- `nemotron/` - Kustomize-based deployment manifests for Nemotron 3 Ultra on GB200 NVL72
 - `poker/` - Interactive in-cluster benchmarking pod (Dockerfile + manifests)
 - `dev/` - Persistent CPU-only pod for building vLLM from source on Lustre
 - `monitoring/` - Namespace-scoped Prometheus + Grafana stack
@@ -38,23 +39,41 @@ Key components:
 - **LeaderWorkerSet (LWS)** - Multi-host inference coordination
 - **NIXL** - Fast interconnect library for KV cache transfer (RDMA, IB/RoCE)
 
-## Current Deployment Target
+## Current Deployment Targets
 
 - **Hardware**: GB200 NVL72 with InfiniBand RDMA
-- **Model**: `nvidia/DeepSeek-R1-NVFP4` (FP4 quantized)
-- **Topology**: Prefill LWS + Decode LWS (4 vLLM processes per pod)
 - **Namespace**: `vllm` (configurable)
 - **Naming**: All resources prefixed with `$USER-wide-ep` (e.g., `$USER-wide-ep-decode`)
 - **Storage**: Lustre PVC (`lustre-pvc-vllm`) for shared vLLM builds and caches
+
+### DeepSeek-R1 (`gb200/`)
+
+- **Model**: `nvidia/DeepSeek-R1-0528-NVFP4-v2`
+- **Topology**: Prefill LWS + Decode LWS, 4 separate vLLM processes per pod (one per GPU)
+- **All2all**: DeepEP (`deepep_low_latency` for decode, `deepep_high_throughput` for prefill)
+- **Deploy**: `just start` (defaults to `gb200/`)
+
+### Nemotron 3 Ultra (`nemotron/`)
+
+- **Model**: `nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4` (hybrid Mamba-2 + LatentMoE)
+- **Topology**: Prefill LWS + Decode LWS, single vLLM process per pod with `--data-parallel-size-local 4`
+- **All2all**: `flashinfer_nvlink_one_sided`
+- **Extra flags**: `--mamba-backend triton --mamba-ssm-cache-dtype float32 --reasoning-parser nemotron_v3`
+- **Deploy**: `just start pd load-aware false nemotron`
 
 ## Decode vs Prefill Architecture
 
 Decode and prefill pods differ in important ways:
 
+**DeepSeek-R1 (gb200/):**
 - **Decode**: Has routing sidecar init containers (proxy ports 8000-8003 → vLLM ports 8200-8203). Uses `deepep_low_latency` all2all backend and MNNVL for cross-pod NVLink fabric. `TP_SIZE` defaults to 1 (pure EP).
 - **Prefill**: No routing sidecars — serves directly on ports 8000-8003. Uses `deepep_high_throughput` all2all backend. `TP_SIZE` defaults to 4 (TP within pod, EP across pods).
+- The `TP_SIZE` env var controls tensor parallelism per DP rank. `DP_SIZE_LOCAL` is derived as `4 / TP_SIZE` (4 GPUs per pod). Changing `TP_SIZE` changes the TP/EP tradeoff without modifying the launch script.
 
-The `TP_SIZE` env var controls tensor parallelism per DP rank. `DP_SIZE_LOCAL` is derived as `4 / TP_SIZE` (4 GPUs per pod). Changing `TP_SIZE` changes the TP/EP tradeoff without modifying the launch script.
+**Nemotron 3 Ultra (nemotron/):**
+- **Decode**: Single routing sidecar (proxy port 8000 → vLLM port 8200). Single vLLM process manages all 4 GPUs via `--data-parallel-size-local 4`.
+- **Prefill**: No routing sidecars — serves directly on port 8000. Same single-process model.
+- InferencePool targets only port 8000 (vs 8000-8003 for R1).
 
 ## Common Commands
 
@@ -74,14 +93,17 @@ just                     # List available commands
 just create-secrets      # Create HF and GH secrets in the namespace
 
 # Start the full stack (model servers + InferencePool + gateway)
-just start               # Default: P/D mode with load-aware routing
+# The 4th arg (MODEL_DIR) selects model configs: gb200 (default) or nemotron
+just start               # Default: R1 P/D mode with load-aware routing
 just start pd            # Explicit P/D mode (prefill + decode)
 just start decode-bench  # Pure decode benchmark mode (no prefill)
 just start pd pd         # P/D mode with P/D-aware routing
 just start pd load-aware true  # P/D mode with dev vLLM build from Lustre
+just start pd load-aware false nemotron  # Nemotron 3 Ultra P/D mode
 
 just stop                # Tear down everything
 just restart             # Stop then start
+just restart pd load-aware false nemotron  # Restart with Nemotron
 
 just deploy_inferencepool load-aware  # Redeploy InferencePool with different routing
 # Routing options: load-aware, random, pd
@@ -159,12 +181,13 @@ After building, deploy with `just start pd load-aware true` to use the dev vLLM 
 
 - `Justfile` - Local automation and deployment orchestration
 - `Justfile.remote` - In-cluster benchmarking commands (copied to poker pod via `just poke`)
-- `gb200/base/` - Base kustomize resources (decode LWS, prefill LWS, service account)
+- `gb200/base/` - Base kustomize resources for DeepSeek-R1 (decode LWS, prefill LWS, service account)
 - `gb200/overlays/pd/` - P/D overlay (adds NixlConnector KV transfer config)
 - `gb200/overlays/decode-bench/` - Decode-bench overlay (removes prefill, adds DecodeBenchConnector)
 - `gb200/gateway.yaml` - Istio Gateway + Service
 - `gb200/httproute.yaml` - HTTPRoute to InferencePool
 - `gb200/inferencepool-*.values.yaml` - Helm values for InferencePool routing strategies
+- `nemotron/` - Same structure as `gb200/` but for Nemotron 3 Ultra (single-process vLLM, Mamba backend, single port)
 - `inference-perf-job.yaml` - kubernetes-sigs/inference-perf Job + ConfigMap template
 - `parallel-guidellm.yaml` - Kubernetes Job template for parallel vllm bench
 - `poker/poker.yaml` - Poker pod manifest
@@ -185,7 +208,7 @@ After building, deploy with `just start pd load-aware true` to use the dev vLLM 
 ## Important Notes
 
 - Deployment uses LeaderWorkerSet for multi-host inference coordination
-- Decode pods run 4 vLLM processes per pod (ports 8000-8003) with routing sidecars
+- R1 decode pods run 4 vLLM processes per pod (ports 8000-8003) with routing sidecars; Nemotron runs a single process with `--data-parallel-size-local 4` on port 8000
 - vLLM API servers can take **7-10 minutes** to start up for large MoE models
 - The poker pod image (`quay.io/tms/poker`) includes guidellm, lm_eval, and network tools. **It must be multi-arch (arm64 + amd64)** — always use `just release <version>` from `poker/` to build and push. Never do a single-arch `podman build && podman push`.
 - PyTorch profiling traces are stored in decode pods at `/traces` and copied locally to `./traces/` (gitignored)

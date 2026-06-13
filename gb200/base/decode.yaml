@@ -286,7 +286,11 @@ spec:
                     key: HF_TOKEN
                     optional: true
               - name: HF_HOME
-                value: /mnt/local/hf_cache
+                value: /mnt/lustre/vllm-vlm-elvircrn
+              - name: TRANSFORMERS_CACHE
+                value: /mnt/lustre/vllm-vlm-elvircrn
+              - name: HF_HUB_CACHE
+                value: /mnt/lustre/vllm-vlm-elvircrn
 
               # Compile caches - persist across restarts for faster startup
               - name: VLLM_CACHE_ROOT
@@ -296,9 +300,6 @@ spec:
 
               # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
               - name: TP_SIZE
-                value: "1"
-
-              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"
 
               # DeepEP LL sgl fork allocates two buffers, only one of which is required for MNNVL.

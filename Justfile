@@ -392,40 +392,34 @@ profile:
   #!/usr/bin/env bash
   set -euo pipefail
 
-  # Get decode pod IPs
-  DECODE_IPS=$({{KN}} get pods -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | .status.podIP' | tr '\n' ' ')
-  if [[ -z "$DECODE_IPS" ]]; then
+  # Get decode pod names
+  DECODE_PODS=$({{KN}} get pods -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | .metadata.name' | tr '\n' ' ')
+  if [[ -z "$DECODE_PODS" ]]; then
     echo "No decode pods found"
     exit 1
   fi
-  PORTS="8200 8201 8202 8203"
 
   echo "Starting profile on all decode ranks..."
-  {{KN}} exec {{POKER_NAME}} -- bash -c "
-    for IP in $DECODE_IPS; do
-      for PORT in $PORTS; do
-        curl -s -X POST http://\$IP:\$PORT/start_profile &
-      done
-    done
-    wait
-  "
+  for POD in $DECODE_PODS; do
+    echo "  Starting $POD..."
+    {{KN}} exec "$POD" -c vllm -- curl -s -m 30 -X POST http://localhost:8200/start_profile &
+  done
+  wait
 
-  echo "Waiting for profiles to complete..."
-  {{KN}} exec {{POKER_NAME}} -- bash -c "
-    for IP in $DECODE_IPS; do
-      for PORT in $PORTS; do
-        echo \"  Stopping \$IP:\$PORT...\"
-        curl -s -X POST http://\$IP:\$PORT/stop_profile
-      done
-    done
-  "
+  echo "Profiler running — capturing traces for 5 seconds..."
+  sleep 5
 
-  echo "Copying and processing traces..."
+  echo "Stopping profiler on all decode ranks..."
+  for POD in $DECODE_PODS; do
+    echo "  Stopping $POD..."
+    {{KN}} exec "$POD" -c vllm -- curl -s -m 120 -X POST http://localhost:8200/stop_profile &
+  done
+  wait
+
+  echo "Copying traces..."
   just get-decode-pods
   just copy-traces
   TRACE_DIR=$(ls -d ./traces/[0-9]* 2>/dev/null | sort -t/ -k3 -n | tail -1)
-  N=$(basename "$TRACE_DIR")
-  just process-traces "$N"
   echo "Opening $TRACE_DIR"
   open "$TRACE_DIR"
 

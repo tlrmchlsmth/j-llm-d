@@ -110,8 +110,8 @@ spec:
 
                 PROFILER_ARGS=""
                 if [ "${ENABLE_PROFILING:-0}" = "1" ]; then
-                  mkdir -p /trace
-                  PROFILER_ARGS="--profiler-config {\"profiler\":\"torch\",\"max_iterations\":${PROFILER_MAX_ITERS:-32},\"torch_profiler_dir\":\"/trace\"}"
+                  mkdir -p /traces
+                  PROFILER_ARGS="--profiler-config {\"profiler\":\"torch\",\"torch_profiler_dir\":\"/traces\"}"
                 fi
 
                 RANK_FLAG="--data-parallel-start-rank $START_RANK"
@@ -134,7 +134,7 @@ spec:
                   --max-num-batched-tokens $MAX_TOKENS \
                   --max-num-seqs $MAX_TOKENS \
                   --async-scheduling \
-                  --mamba-backend triton \
+                  --mamba-backend flashinfer \
                   --mamba-ssm-cache-dtype float32 \
                   --enable-flashinfer-autotune \
                   --all2all-backend "flashinfer_nvlink_one_sided" \

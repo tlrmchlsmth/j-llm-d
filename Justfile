@@ -127,13 +127,13 @@ inference-perf NUM_REQUESTS='25000' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKER
 inference-perf-logs:
   {{KN}} logs -f job/inference-perf
 
-deploy_inferencepool ROUTING='load-aware':
+deploy_inferencepool ROUTING='load-aware' MODEL_DIR=GB200_DIR:
   #!/usr/bin/env bash
   set -euo pipefail
   mkdir -p ./.tmp
   export DEPLOY_NAME="{{DEPLOY_NAME}}"
   export OWNER="{{NAME_PREFIX}}"
-  envsubst '${DEPLOY_NAME} ${OWNER}' < {{GB200_DIR}}/inferencepool-{{ROUTING}}.values.yaml > .tmp/inferencepool-values.yaml
+  envsubst '${DEPLOY_NAME} ${OWNER}' < {{MODEL_DIR}}/inferencepool-{{ROUTING}}.values.yaml > .tmp/inferencepool-values.yaml
   helm upgrade --install {{DEPLOY_NAME}}-infpool \
     oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
     --version v1.3.0 \
@@ -155,11 +155,11 @@ deploy_inferencepool ROUTING='load-aware':
     echo "         Apply manually later with: just apply-infpool-dr"
   else
     export DEPLOY_NAME INFPOOL_IP_SVC
-    envsubst '${DEPLOY_NAME} ${INFPOOL_IP_SVC}' < {{GB200_DIR}}/infpool-backend-dr.yaml | {{KN}} apply -f -
+    envsubst '${DEPLOY_NAME} ${INFPOOL_IP_SVC}' < {{MODEL_DIR}}/infpool-backend-dr.yaml | {{KN}} apply -f -
   fi
 
 # Apply the infpool-ip DestinationRule (envoy OOM fix) if it was skipped during deploy
-apply-infpool-dr:
+apply-infpool-dr MODEL_DIR=GB200_DIR:
   #!/usr/bin/env bash
   set -euo pipefail
   INFPOOL_IP_SVC=$({{KN}} get svc -l istio.io/inferencepool-name={{DEPLOY_NAME}}-infpool -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
@@ -168,7 +168,7 @@ apply-infpool-dr:
     exit 1
   fi
   export DEPLOY_NAME="{{DEPLOY_NAME}}" INFPOOL_IP_SVC
-  envsubst '${DEPLOY_NAME} ${INFPOOL_IP_SVC}' < {{GB200_DIR}}/infpool-backend-dr.yaml | {{KN}} apply -f -
+  envsubst '${DEPLOY_NAME} ${INFPOOL_IP_SVC}' < {{MODEL_DIR}}/infpool-backend-dr.yaml | {{KN}} apply -f -
   echo "DestinationRule applied for $INFPOOL_IP_SVC"
 
 VLLM_DEV_VENV := "/mnt/lustre/" + NAME_PREFIX + "/vllm-venv"
@@ -181,7 +181,9 @@ VLLM_IMAGE := env("VLLM_IMAGE", "ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091")
 FORK_REPO := env("FORK_REPO", "")
 FORK_BRANCH := env("FORK_BRANCH", "")
 
-start MODE='pd' ROUTING='load-aware' DEV='false':
+NEMOTRON_DIR := "nemotron"
+
+start MODE='pd' ROUTING='load-aware' DEV='false' MODEL_DIR=GB200_DIR:
   #!/usr/bin/env bash
   set -euo pipefail
   export DEPLOY_NAME="{{DEPLOY_NAME}}"
@@ -189,14 +191,14 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
 
   # Generate wrapper kustomization with user-specific namePrefix
   printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: {{NAME_PREFIX}}-\nresources:\n  - overlays/{{MODE}}\n' \
-    > {{GB200_DIR}}/kustomization.yaml
+    > {{MODEL_DIR}}/kustomization.yaml
   # Render kustomize, substitute placeholders, apply in one shot (no double rollout)
   DEV_VENV=""
   if [ "{{DEV}}" = "true" ]; then
     DEV_VENV="{{VLLM_DEV_VENV}}"
     echo "Dev mode: VLLM_DEV_VENV=$DEV_VENV"
   fi
-  kubectl kustomize {{GB200_DIR}} \
+  kubectl kustomize {{MODEL_DIR}} \
     | sed -e "s/DEPLOY_TS_PLACEHOLDER/$DEPLOY_TS/g" \
           -e "s/OWNER_PLACEHOLDER/{{NAME_PREFIX}}/g" \
           -e "s|VLLM_DEV_VENV_PLACEHOLDER|$DEV_VENV|g" \
@@ -205,21 +207,21 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
           -e "s|FORK_REPO_PLACEHOLDER|{{FORK_REPO}}|g" \
           -e "s|FORK_BRANCH_PLACEHOLDER|{{FORK_BRANCH}}|g" \
     | {{KN}} apply -f -
-  rm -f {{GB200_DIR}}/kustomization.yaml
+  rm -f {{MODEL_DIR}}/kustomization.yaml
 
-  envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/gateway.yaml | {{KN}} apply -f -
+  envsubst '${DEPLOY_NAME}' < {{MODEL_DIR}}/gateway.yaml | {{KN}} apply -f -
   if [ "{{MODE}}" = "pd" ]; then
-    just deploy_inferencepool pd
+    just deploy_inferencepool pd {{MODEL_DIR}}
   elif [ "{{MODE}}" = "agg" ]; then
     if [ "{{ROUTING}}" = "load-aware" ]; then
-      just deploy_inferencepool agg
+      just deploy_inferencepool agg {{MODEL_DIR}}
     else
-      just deploy_inferencepool agg-{{ROUTING}}
+      just deploy_inferencepool agg-{{ROUTING}} {{MODEL_DIR}}
     fi
   else
-    just deploy_inferencepool {{ROUTING}}
+    just deploy_inferencepool {{ROUTING}} {{MODEL_DIR}}
   fi
-  envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/httproute.yaml | {{KN}} apply -f -
+  envsubst '${DEPLOY_NAME}' < {{MODEL_DIR}}/httproute.yaml | {{KN}} apply -f -
   echo "Deployed $DEPLOY_TS"
 
 stop NOW='false':
@@ -244,7 +246,7 @@ stop NOW='false':
   wait
   {{KN}} delete sa {{DEPLOY_NAME}} --ignore-not-found=true
 
-restart MODE='pd' ROUTING='load-aware' DEV='false':
+restart MODE='pd' ROUTING='load-aware' DEV='false' MODEL_DIR=GB200_DIR:
   #!/usr/bin/env bash
   set -euo pipefail
   # Force-delete LWS to kill pods immediately, then re-apply the full stack.
@@ -258,7 +260,7 @@ restart MODE='pd' ROUTING='load-aware' DEV='false':
   # Wait for everything to be fully gone
   {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-decode --timeout=60s 2>/dev/null || true
   {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-prefill --timeout=60s 2>/dev/null || true
-  just start {{MODE}} {{ROUTING}} {{DEV}}
+  just start {{MODE}} {{ROUTING}} {{DEV}} {{MODEL_DIR}}
 
 # Wait for the full stack to be ready (pods + gateway serving)
 ready:
@@ -390,40 +392,34 @@ profile:
   #!/usr/bin/env bash
   set -euo pipefail
 
-  # Get decode pod IPs
-  DECODE_IPS=$({{KN}} get pods -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | .status.podIP' | tr '\n' ' ')
-  if [[ -z "$DECODE_IPS" ]]; then
+  # Get decode pod names
+  DECODE_PODS=$({{KN}} get pods -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | .metadata.name' | tr '\n' ' ')
+  if [[ -z "$DECODE_PODS" ]]; then
     echo "No decode pods found"
     exit 1
   fi
-  PORTS="8200 8201 8202 8203"
 
   echo "Starting profile on all decode ranks..."
-  {{KN}} exec {{POKER_NAME}} -- bash -c "
-    for IP in $DECODE_IPS; do
-      for PORT in $PORTS; do
-        curl -s -X POST http://\$IP:\$PORT/start_profile &
-      done
-    done
-    wait
-  "
+  for POD in $DECODE_PODS; do
+    echo "  Starting $POD..."
+    {{KN}} exec "$POD" -c vllm -- curl -s -m 30 -X POST http://localhost:8200/start_profile &
+  done
+  wait
 
-  echo "Waiting for profiles to complete..."
-  {{KN}} exec {{POKER_NAME}} -- bash -c "
-    for IP in $DECODE_IPS; do
-      for PORT in $PORTS; do
-        echo \"  Stopping \$IP:\$PORT...\"
-        curl -s -X POST http://\$IP:\$PORT/stop_profile
-      done
-    done
-  "
+  echo "Profiler running — capturing traces for 5 seconds..."
+  sleep 5
 
-  echo "Copying and processing traces..."
+  echo "Stopping profiler on all decode ranks..."
+  for POD in $DECODE_PODS; do
+    echo "  Stopping $POD..."
+    {{KN}} exec "$POD" -c vllm -- curl -s -m 120 -X POST http://localhost:8200/stop_profile &
+  done
+  wait
+
+  echo "Copying traces..."
   just get-decode-pods
   just copy-traces
   TRACE_DIR=$(ls -d ./traces/[0-9]* 2>/dev/null | sort -t/ -k3 -n | tail -1)
-  N=$(basename "$TRACE_DIR")
-  just process-traces "$N"
   echo "Opening $TRACE_DIR"
   open "$TRACE_DIR"
 
@@ -480,6 +476,9 @@ process-traces N='':
   python3 profiling/process_traces.py "traces/$N"
 
 NYANN_BENCH_DIR := env("NYANN_BENCH_DIR", "")
+EVAL_BASE_URL := env("EVAL_BASE_URL", "")
+LUSTRE_DATA := env("LUSTRE_DATA", "")
+NYANN_IMAGE_TAG := env("NYANN_IMAGE_TAG", "")
 
 # Wait for stack readiness, then launch nyann-bench load + eval jobs
 benchmark-stairs SWEEP_MIN='1600' SWEEP_MAX='14400' STEPS='10' STEP_DURATION='300s' ISL='500' OSL='1500' EVAL_CONCURRENCY='16':
@@ -489,7 +488,8 @@ benchmark-stairs SWEEP_MIN='1600' SWEEP_MAX='14400' STEPS='10' STEP_DURATION='30
       echo "Error: NYANN_BENCH_DIR is not set. Add it to .env or export it." >&2
       exit 1
     fi
-    STEP_SECS="${{STEP_DURATION}%s}"
+    STEP_DURATION="{{STEP_DURATION}}"
+    STEP_SECS="${STEP_DURATION%s}"
     EVAL_DURATION="$(( {{STEPS}} * STEP_SECS ))s"
     cd "{{NYANN_BENCH_DIR}}"
     go run ./cmd/nyann-bench/ generate \

@@ -489,7 +489,8 @@ benchmark-stairs SWEEP_MIN='1600' SWEEP_MAX='14400' STEPS='10' STEP_DURATION='30
       echo "Error: NYANN_BENCH_DIR is not set. Add it to .env or export it." >&2
       exit 1
     fi
-    STEP_SECS="${{STEP_DURATION}%s}"
+    STEP_DURATION_VAL="{{STEP_DURATION}}"
+    STEP_SECS="${STEP_DURATION_VAL%s}"
     EVAL_DURATION="$(( {{STEPS}} * STEP_SECS ))s"
     cd "{{NYANN_BENCH_DIR}}"
     go run ./cmd/nyann-bench/ generate \

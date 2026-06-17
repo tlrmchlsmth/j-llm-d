@@ -20,7 +20,7 @@ spec:
     runAsGroup: 0
   containers:
     - name: dev
-      image: quay.io/tms/vllm-dev:deepep-v2
+      image: ${DEEPEP_V2_IMAGE}
       imagePullPolicy: Always
       command: ["sleep", "infinity"]
       resources:

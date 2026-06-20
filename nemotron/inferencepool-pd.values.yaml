@@ -6,7 +6,7 @@ inferenceExtension:
   image:
     name: llm-d-inference-scheduler
     hub: ghcr.io/llm-d
-    tag: v0.6.0
+    tag: v0.8.0
   extProcPort: 9002
   monitoring:
     interval: "10s"
@@ -27,23 +27,23 @@ inferenceExtension:
     limits:
       cpu: "8"
       memory: 16Gi
-  pluginsConfigFile: "custom-plugins.yaml"
+  pluginsConfigFile: "pd-config.yaml"
   pluginsCustomConfig:
-    custom-plugins.yaml: |
+    pd-config.yaml: |
       apiVersion: inference.networking.x-k8s.io/v1alpha1
       kind: EndpointPickerConfig
       plugins:
-      - type: prefill-header-handler
+      - type: passthrough-parser
+      - type: disagg-headers-handler
       - type: prefill-filter
       - type: decode-filter
-      - type: prefix-cache-scorer
       - type: active-request-scorer
       - type: queue-scorer
       - type: always-disagg-pd-decider
-      - type: pd-profile-handler
+      - type: disagg-profile-handler
         parameters:
-          threshold: 0
-          hashBlockSize: 5
+          deciders:
+            prefill: always-disagg-pd-decider
       - type: weighted-random-picker
         name: prefill-picker
         parameters:
@@ -57,8 +57,6 @@ inferenceExtension:
       - name: prefill
         plugins:
         - pluginRef: prefill-filter
-        - pluginRef: prefix-cache-scorer
-          weight: 3
         - pluginRef: active-request-scorer
           weight: 2
         - pluginRef: queue-scorer
@@ -70,6 +68,8 @@ inferenceExtension:
         - pluginRef: active-request-scorer
           weight: 2
         - pluginRef: decode-picker
+      parser:
+        pluginRef: passthrough-parser
 
 inferencePool:
   name: ${DEPLOY_NAME}-infpool
@@ -81,7 +81,6 @@ inferencePool:
       llm-d.ai/model: NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
       llm-d.ai/deployment: pd
       llm-d.ai/owner: ${OWNER}
-
 provider:
   name: istio
   istio:

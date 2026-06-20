@@ -3,21 +3,21 @@ kind: Kustomization
 resources:
   - ../../base
 patches:
-  # Remove prefill LWS (aggregated has no prefill)
+  # Remove decode LWS (aggregated uses prefill — no routing sidecar, serves on port 8000)
   - target:
       kind: LeaderWorkerSet
-      name: wide-ep-prefill
+      name: wide-ep-decode
     patch: |
       $patch: delete
       apiVersion: leaderworkerset.x-k8s.io/v1
       kind: LeaderWorkerSet
       metadata:
-        name: wide-ep-prefill
+        name: wide-ep-decode
 
-  # Patch decode for aggregated mode
+  # Patch prefill for aggregated mode
   - target:
       kind: LeaderWorkerSet
-      name: wide-ep-decode
+      name: wide-ep-prefill
     patch: |-
       - op: add
         path: /metadata/labels/llm-d.ai~1deployment

@@ -62,14 +62,22 @@ create-secrets:
 start-poker:
     POKER_NAME={{POKER_NAME}} envsubst '${POKER_NAME}' < poker/poker.yaml | {{KN}} apply -f -
 
-# Fetch decode pod names and IPs and cache them
+# Fetch model server pod names and IPs and cache them
+# Auto-detects role: uses decode pods if they exist, otherwise prefill (agg mode)
+# Scoped to current user via llm-d.ai/owner label
 get-decode-pods:
   #!/usr/bin/env bash
   set -euo pipefail
   mkdir -p ./.tmp
-  echo "Fetching decode pod information..."
-  {{KN}} get pods -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | "\(.metadata.name) \(.status.podIP)"' > .tmp/decode_pods.txt
-  echo "Decode pods:"
+  ROLE="decode"
+  PODS=$({{KN}} get pods -l llm-d.ai/owner={{NAME_PREFIX}},llm-d.ai/role=decode -o json | jq -r '.items[] | "\(.metadata.name) \(.status.podIP)"')
+  if [[ -z "$PODS" ]]; then
+    ROLE="prefill"
+    PODS=$({{KN}} get pods -l llm-d.ai/owner={{NAME_PREFIX}},llm-d.ai/role=prefill -o json | jq -r '.items[] | "\(.metadata.name) \(.status.podIP)"')
+  fi
+  echo "$PODS" > .tmp/decode_pods.txt
+  echo "$ROLE" > .tmp/profile_role.txt
+  echo "Model server pods ($ROLE):"
   cat .tmp/decode_pods.txt
 
 poke:
@@ -223,6 +231,53 @@ start MODE='pd' ROUTING='load-aware' DEV='false' MODEL_DIR=GB200_DIR:
   fi
   envsubst '${DEPLOY_NAME}' < {{MODEL_DIR}}/httproute.yaml | {{KN}} apply -f -
   echo "Deployed $DEPLOY_TS"
+
+# Start with custom P/D configuration: P(replicas,size)/D(replicas,size)
+# Example: just start-pd 1 4 2 8 → P4/D16 (1×4 prefill workers, 2×8 decode workers)
+start-pd PREFILL_REPLICAS PREFILL_SIZE DECODE_REPLICAS DECODE_SIZE ROUTING='load-aware' DEV='false' MODEL_DIR=NEMOTRON_DIR:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  export DEPLOY_NAME="{{DEPLOY_NAME}}"
+  DEPLOY_TS=$(date +%Y%m%d-%H%M%S)
+
+  TOTAL_PREFILL_WORKERS=$(({{PREFILL_REPLICAS}} * {{PREFILL_SIZE}}))
+  TOTAL_DECODE_WORKERS=$(({{DECODE_REPLICAS}} * {{DECODE_SIZE}}))
+  TOTAL_GPUS=$(((TOTAL_PREFILL_WORKERS + TOTAL_DECODE_WORKERS) * 4))
+
+  echo "Deploying P${TOTAL_PREFILL_WORKERS}/D${TOTAL_DECODE_WORKERS} (${TOTAL_GPUS} GPUs total)"
+  echo "  Prefill: {{PREFILL_REPLICAS}} replicas × {{PREFILL_SIZE}} workers = ${TOTAL_PREFILL_WORKERS} workers"
+  echo "  Decode:  {{DECODE_REPLICAS}} replicas × {{DECODE_SIZE}} workers = ${TOTAL_DECODE_WORKERS} workers"
+
+  # Generate wrapper kustomization with user-specific namePrefix
+  printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: {{NAME_PREFIX}}-\nresources:\n  - overlays/pd-custom\n' \
+    > {{MODEL_DIR}}/kustomization.yaml
+
+  # Render kustomize and substitute all placeholders
+  DEV_VENV=""
+  if [ "{{DEV}}" = "true" ]; then
+    DEV_VENV="{{VLLM_DEV_VENV}}"
+    echo "Dev mode: VLLM_DEV_VENV=$DEV_VENV"
+  fi
+
+  kubectl kustomize {{MODEL_DIR}} \
+    | sed -e "s/DEPLOY_TS_PLACEHOLDER/$DEPLOY_TS/g" \
+          -e "s/OWNER_PLACEHOLDER/{{NAME_PREFIX}}/g" \
+          -e "s|VLLM_DEV_VENV_PLACEHOLDER|$DEV_VENV|g" \
+          -e "s|LUSTRE_PREFIX_PLACEHOLDER|/mnt/lustre/{{NAME_PREFIX}}|g" \
+          -e "s|VLLM_IMAGE_PLACEHOLDER|{{VLLM_IMAGE}}|g" \
+          -e "s|FORK_REPO_PLACEHOLDER|{{FORK_REPO}}|g" \
+          -e "s|FORK_BRANCH_PLACEHOLDER|{{FORK_BRANCH}}|g" \
+          -e "s/PREFILL_REPLICAS_PLACEHOLDER/{{PREFILL_REPLICAS}}/g" \
+          -e "s/PREFILL_SIZE_PLACEHOLDER/{{PREFILL_SIZE}}/g" \
+          -e "s/DECODE_REPLICAS_PLACEHOLDER/{{DECODE_REPLICAS}}/g" \
+          -e "s/DECODE_SIZE_PLACEHOLDER/{{DECODE_SIZE}}/g" \
+    | {{KN}} apply -f -
+  rm -f {{MODEL_DIR}}/kustomization.yaml
+
+  envsubst '${DEPLOY_NAME}' < {{MODEL_DIR}}/gateway.yaml | {{KN}} apply -f -
+  just deploy_inferencepool pd {{MODEL_DIR}}
+  envsubst '${DEPLOY_NAME}' < {{MODEL_DIR}}/httproute.yaml | {{KN}} apply -f -
+  echo "Deployed P${TOTAL_PREFILL_WORKERS}/D${TOTAL_DECODE_WORKERS} at $DEPLOY_TS"
 
 stop NOW='false':
   #!/usr/bin/env bash
@@ -387,41 +442,49 @@ cache-model:
 flush-cache:
   {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/{{NAME_PREFIX}}/vllm_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/flashinfer_cache_extdp && echo "Compile caches flushed"'
 
-# Profile all decode pods, copy traces, combine, fix, and open in Finder
+# Profile all model server pods, copy traces, and open in Finder
+# Auto-detects role: uses decode pods (port 8200) if they exist, otherwise prefill (port 8000)
 profile:
   #!/usr/bin/env bash
   set -euo pipefail
 
-  # Get decode pod names
-  DECODE_PODS=$({{KN}} get pods -o json | jq -r '.items[] | select(.metadata.name | contains("decode")) | .metadata.name' | tr '\n' ' ')
-  if [[ -z "$DECODE_PODS" ]]; then
-    echo "No decode pods found"
+  # Auto-detect role and port (scoped to current user)
+  PODS=$({{KN}} get pods -l llm-d.ai/owner={{NAME_PREFIX}},llm-d.ai/role=decode -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}')
+  PORT=8200
+  if [[ -z "$PODS" ]]; then
+    PODS=$({{KN}} get pods -l llm-d.ai/owner={{NAME_PREFIX}},llm-d.ai/role=prefill -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}')
+    PORT=8000
+  fi
+  if [[ -z "$PODS" ]]; then
+    echo "No model server pods found for owner {{NAME_PREFIX}}"
     exit 1
   fi
 
-  echo "Starting profile on all decode ranks..."
-  for POD in $DECODE_PODS; do
+  echo "Starting profile on all ranks (port $PORT)..."
+  for POD in $PODS; do
     echo "  Starting $POD..."
-    {{KN}} exec "$POD" -c vllm -- curl -s -m 30 -X POST http://localhost:8200/start_profile &
+    {{KN}} exec "$POD" -c vllm -- curl -s -m 30 -X POST http://localhost:$PORT/start_profile &
   done
   wait
 
   echo "Profiler running — capturing traces for 5 seconds..."
   sleep 5
 
-  echo "Stopping profiler on all decode ranks..."
-  for POD in $DECODE_PODS; do
+  echo "Stopping profiler on all ranks..."
+  for POD in $PODS; do
     echo "  Stopping $POD..."
-    {{KN}} exec "$POD" -c vllm -- curl -s -m 120 -X POST http://localhost:8200/stop_profile &
+    {{KN}} exec "$POD" -c vllm -- curl -s -m 120 -X POST http://localhost:$PORT/stop_profile &
   done
   wait
 
   echo "Copying traces..."
   just get-decode-pods
+  # Determine trace dir before copy-traces runs
+  N=0
+  while [ -d "./traces/$N" ]; do
+    N=$((N + 1))
+  done
   just copy-traces
-  TRACE_DIR=$(ls -d ./traces/[0-9]* 2>/dev/null | sort -t/ -k3 -n | tail -1)
-  echo "Opening $TRACE_DIR"
-  open "$TRACE_DIR"
 
 # Copy PyTorch traces from all decode pods to local ./traces/N directory
 copy-traces:
@@ -448,17 +511,30 @@ copy-traces:
     echo "Copying traces from $POD_NAME..."
     POD_DIR="$TRACE_DIR/$POD_NAME"
     mkdir -p "$POD_DIR"
-    {{KN}} cp "$POD_NAME:/traces" "$POD_DIR" 2>/dev/null || echo "  No traces found in $POD_NAME or copy failed"
+    {{KN}} cp "$POD_NAME:/traces" "$POD_DIR" 2>&1 | grep -v "Removing leading" || true
   done < .tmp/decode_pods.txt
 
-  # Remove empty pod directories (pods that had no traces)
-  find "$TRACE_DIR" -maxdepth 1 -type d -empty -delete 2>/dev/null || true
-
   echo "Traces copied to $TRACE_DIR"
-  if [ -d "$TRACE_DIR" ]; then
-    echo "Total size: $(du -sh $TRACE_DIR | cut -f1)"
-  fi
+  echo "Total size: $(du -sh $TRACE_DIR | cut -f1)"
   echo "Run 'just process-traces $N' to combine and fix for Perfetto"
+
+# Delete /traces on all model server pods (prompts for confirmation)
+clean-traces:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  just get-decode-pods
+  echo ""
+  echo "This will delete /traces on all pods listed above."
+  read -p "Continue? [y/N] " confirm
+  if [[ "$confirm" != [yY] ]]; then
+    echo "Aborted."
+    exit 0
+  fi
+  while read -r POD_NAME POD_IP; do
+    echo "Deleting /traces on $POD_NAME..."
+    {{KN}} exec "$POD_NAME" -c vllm -- rm -rf /traces
+  done < .tmp/decode_pods.txt
+  echo "Done."
 
 # Combine per-rank traces and fix Perfetto overlaps
 process-traces N='':
@@ -474,6 +550,75 @@ process-traces N='':
   fi
   echo "Processing traces/$N ..."
   python3 profiling/process_traces.py "traces/$N"
+
+# Launch constant-load benchmark + KV cache sampling in parallel
+# DURATION is in seconds (no suffix). KV_INTERVAL supports fractional seconds.
+calibrate CONCURRENCY ISL OSL DURATION='600' KV_INTERVAL='0.5':
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  PROM_URL="http://prometheus-server.{{NAMESPACE}}.svc.cluster.local:80"
+
+  just benchmark-constant {{CONCURRENCY}} {{DURATION}}s {{ISL}} {{OSL}}
+
+  mkdir -p .tmp
+  KV_LOG=".tmp/kv-samples-$(date +%Y%m%d-%H%M%S).csv"
+  echo "timestamp,kv_util" > "$KV_LOG"
+
+  echo "Sampling KV utilization every {{KV_INTERVAL}}s for {{DURATION}}s → $KV_LOG"
+
+  # Sample in background (set +e so curl failures don't kill the loop)
+  (
+    set +e
+    while true; do
+      KV=$({{KN}} exec {{POKER_NAME}} -- curl -s --max-time 5 "$PROM_URL/api/v1/query" \
+        --data-urlencode 'query=max(vllm:kv_cache_usage_perc{pod=~"{{DEPLOY_NAME}}-decode.*"})' \
+        2>/dev/null | jq -r '.data.result[0].value[1] // empty' 2>/dev/null)
+      if [ -n "$KV" ]; then
+        echo "$(date +%s),$KV" >> "$KV_LOG"
+      fi
+      sleep {{KV_INTERVAL}}
+    done
+  ) &
+  SAMPLE_PID=$!
+
+  sleep {{DURATION}}
+  kill $SAMPLE_PID 2>/dev/null
+  wait $SAMPLE_PID 2>/dev/null || true
+
+  MAX_KV=$(awk -F, 'NR>1 && $2+0 > max {max=$2+0} END{print max+0}' "$KV_LOG")
+  SAMPLES=$(awk 'END{print NR-1}' "$KV_LOG")
+  MAX_PCT=$(echo "scale=1; $MAX_KV * 100" | bc)
+  MAX_C=$(echo "scale=0; {{CONCURRENCY}} * 0.90 / $MAX_KV" | bc 2>/dev/null || echo "0")
+
+  echo ""
+  echo "=== Calibration ==="
+  echo "ISL={{ISL}} OSL={{OSL}} concurrency={{CONCURRENCY}} (${SAMPLES} samples)"
+  echo "Peak KV utilization: ${MAX_PCT}%"
+  echo "Estimated max concurrency at 90%% KV: ${MAX_C}"
+  echo "Samples: $KV_LOG"
+
+  if [ "$MAX_C" = "0" ] || [ "$MAX_C" = "N/A" ]; then
+    echo "ERROR: Could not estimate max concurrency — skipping stairs"
+    exit 1
+  fi
+
+  # Stop calibration load
+  just stop-nyann
+
+  SWEEP_MIN=$(echo "scale=0; $MAX_C / 10" | bc)
+  SWEEP_MAX=$MAX_C
+
+  echo ""
+  echo "=== Starting stairs benchmark ==="
+  echo "Sweep: ${SWEEP_MIN} → ${SWEEP_MAX} concurrency, 8 steps × 60s"
+
+  just benchmark-stairs $SWEEP_MIN $SWEEP_MAX 8 60s {{ISL}} {{OSL}}
+
+# Stop calibrate (benchmark + KV sampling)
+stop-calibrate:
+  just stop-nyann
+  @echo "Stopped."
 
 NYANN_BENCH_DIR := env("NYANN_BENCH_DIR", "")
 EVAL_BASE_URL := env("EVAL_BASE_URL", "")
@@ -576,6 +721,37 @@ load-dashboards:
       {{KN}} apply -f -
   done
   echo "Dashboards loaded. Grafana will auto-discover them within 30 seconds."
+
+# Get KV cache utilization across decode pods
+kv-util:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  just get-decode-pods > /dev/null
+  printf "%-40s %8s %6s %6s %6s\n" "POD/ENGINE" "KV_UTIL" "RUN" "WAIT" "CAP"
+  printf "%-40s %8s %6s %6s %6s\n" "----------" "-------" "---" "----" "---"
+  while read -r POD_NAME POD_IP; do
+    {{KN}} exec "$POD_NAME" -c vllm -- curl -s http://localhost:8200/metrics 2>/dev/null \
+      | awk -F'[{} ]' '
+        /^vllm:kv_cache_usage_perc/    { split($2,a,"\""); kv[a[2]] = $NF }
+        /^vllm:num_requests_running\{/ { split($2,a,"\""); run[a[2]] = $NF }
+        /^vllm:num_requests_waiting\{engine/ { split($2,a,"\""); wait[a[2]] = $NF }
+        /^vllm:num_requests_waiting_by_reason.*reason="capacity"/ { split($2,a,"\""); cap[a[2]] = $NF }
+        END {
+          for (e in kv) {
+            printf "%-40s %7.1f%% %6.0f %6.0f %6.0f\n", "'"$POD_NAME"'/e" e, kv[e]*100, run[e], wait[e], cap[e]
+          }
+        }' | sort
+  done < .tmp/decode_pods.txt
+
+# Get peak KV cache utilization across all decode engines
+kv-max:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  curl -s 'http://localhost:9090/api/v1/query' \
+    --data-urlencode 'query=max(vllm:kv_cache_usage_perc{pod=~"{{DEPLOY_NAME}}-decode.*"})' \
+    | jq -r '.data.result[0].value[1] // "0"' \
+    | awk '{printf "%.1f%%\n", $1*100}'
+
 
 # === KV Cache Sweep ===
 

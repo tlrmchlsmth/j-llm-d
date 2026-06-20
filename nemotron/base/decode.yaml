@@ -118,6 +118,7 @@ spec:
 
                 vllm serve $PROFILER_ARGS \
                   nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 \
+                  --served-model-name NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 \
                   --disable-uvicorn-access-log \
                   --port 8200 \
                   --tensor-parallel-size $TP_SIZE \
@@ -129,13 +130,13 @@ spec:
                   --data-parallel-address ${LWS_LEADER_ADDRESS} \
                   --data-parallel-rpc-port 5555 \
                   --trust-remote-code \
-                  --kv_transfer_config "$KV_TRANSFER_CONFIG" \
+                  ${KV_TRANSFER_CONFIG:+--kv_transfer_config "$KV_TRANSFER_CONFIG"} \
                   --gpu-memory-utilization 0.90 \
                   --max-num-batched-tokens $MAX_TOKENS \
                   --max-num-seqs $MAX_TOKENS \
                   --async-scheduling \
                   --mamba-backend flashinfer \
-                  --mamba-ssm-cache-dtype float32 \
+                  --mamba-ssm-cache-dtype float16 \
                   --enable-flashinfer-autotune \
                   --all2all-backend "flashinfer_nvlink_one_sided" \
                   --kv-cache-dtype fp8 \
@@ -153,6 +154,9 @@ spec:
               - name: TQDM_DISABLE
                 value: "1"
 
+              - name: ENABLE_PROFILING
+                value: "0"
+
               - name: VLLM_DEV_VENV
                 value: VLLM_DEV_VENV_PLACEHOLDER
 
@@ -160,7 +164,8 @@ spec:
                 value: "1"
               - name: VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS
                 value: "1"
-              # Mamba conv state in dim-first layout, required by NIXL for KV transfer
+
+              # Mamba conv state in dim-first layout.
               - name: VLLM_SSM_CONV_STATE_LAYOUT
                 value: "DS"
 
@@ -170,9 +175,6 @@ spec:
 
               - name: VLLM_TORCH_PROFILER_DIR
                 value: "/traces"
-
-              - name: ENABLE_PROFILING
-                value: "1"
 
               - name: HF_TOKEN
                 valueFrom:

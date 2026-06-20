@@ -1,0 +1,59 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # Parameterized P/D split with dynamic replication support
+  # Use envsubst to substitute: PREFILL_REPLICAS, PREFILL_SIZE, DECODE_REPLICAS, DECODE_SIZE
+
+  # Shared: deployment label + NIXL side channel (both roles)
+  - target:
+      kind: LeaderWorkerSet
+    patch: |-
+      - op: add
+        path: /metadata/labels/llm-d.ai~1deployment
+        value: pd
+      - op: add
+        path: /spec/leaderWorkerTemplate/workerTemplate/metadata/labels/llm-d.ai~1deployment
+        value: pd
+      - op: add
+        path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/-
+        value:
+          name: VLLM_NIXL_SIDE_CHANNEL_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+
+  # Prefill: configurable replicas and size
+  - target:
+      kind: LeaderWorkerSet
+      name: wide-ep-prefill
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: PREFILL_REPLICAS_PLACEHOLDER
+      - op: replace
+        path: /spec/leaderWorkerTemplate/size
+        value: PREFILL_SIZE_PLACEHOLDER
+      - op: add
+        path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/-
+        value:
+          name: KV_TRANSFER_CONFIG
+          value: '{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_buffer_device":"cuda","kv_load_failure_policy":"fail"}'
+
+  # Decode: configurable replicas and size
+  - target:
+      kind: LeaderWorkerSet
+      name: wide-ep-decode
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: DECODE_REPLICAS_PLACEHOLDER
+      - op: replace
+        path: /spec/leaderWorkerTemplate/size
+        value: DECODE_SIZE_PLACEHOLDER
+      - op: add
+        path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/-
+        value:
+          name: KV_TRANSFER_CONFIG
+          value: '{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_buffer_device":"cuda","kv_load_failure_policy":"fail"}'

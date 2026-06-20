@@ -1,0 +1,156 @@
+From: Elvir Crncevic
+Subject: fix: suppress stop string matching inside reasoning/thinking blocks
+
+Stop sequences (e.g. "Question:" from lm_eval) were being matched against
+tokens inside <think>...</think> blocks, killing generation before any
+content was produced. This caused ~8.6% empty responses in P/D mode with
+Nemotron 3 Ultra on GSM8K.
+
+The detokenizer's check_stop_strings() operates on the raw output text
+which includes reasoning tokens. The reasoning parser that splits
+<think> from content runs in the serving layer, after generation is
+already terminated. This patch bridges the gap by passing reasoning
+markers (start/end token strings) from the serving layer down to the
+detokenizer, which tracks whether generation is inside a thinking block
+and suppresses stop string matching while it is.
+
+Files changed:
+  vllm/v1/engine/__init__.py                           - Add reasoning_markers field to EngineCoreRequest
+  vllm/v1/engine/detokenizer.py                        - Track <think> state, skip stop checks in reasoning
+  vllm/v1/engine/async_llm.py                          - Thread reasoning_markers through generate()/add_request()
+  vllm/entrypoints/openai/chat_completion/serving.py   - Pass reasoning parser markers into generate()
+
+--- a/vllm/v1/engine/__init__.py
++++ b/vllm/v1/engine/__init__.py
+@@ -127,6 +127,7 @@
+
+     reasoning_ended: bool | None = None
+     reasoning_parser_kwargs: dict[str, Any] | None = None
++    reasoning_markers: tuple[str, str] | None = None
+
+     # If True, the request should be added to the scheduler's waiting queue
+     # and immediately aborted, so connector-side cleanup runs via the standard
+--- a/vllm/v1/engine/detokenizer.py
++++ b/vllm/v1/engine/detokenizer.py
+@@ -89,9 +89,26 @@
+             self.stop_buffer_length = 0
+         self._last_output_text_offset: int = 0
+
++        # Reasoning markers for suppressing stop strings inside <think> blocks
++        self._reasoning_start: str | None = None
++        self._reasoning_end: str | None = None
++        self._in_reasoning: bool = False
++        if request.reasoning_markers is not None:
++            self._reasoning_start, self._reasoning_end = request.reasoning_markers
++
+         # Generation data
+         self.output_text = ""
+
++    def _update_reasoning_state(self) -> None:
++        if self._reasoning_start is None:
++            return
++        if not self._in_reasoning:
++            if self._reasoning_start in self.output_text:
++                self._in_reasoning = True
++        if self._in_reasoning:
++            if self._reasoning_end in self.output_text:
++                self._in_reasoning = False
++
+     def update(self, new_token_ids: list[int], stop_terminated: bool) -> str | None:
+         """
+         Update RequestState for the request_id by:
+@@ -125,19 +142,24 @@
+             # Cleanup after skipping detokenization.
+             self.token_ids.append(skipped_stop_token_id)
+
+-        # 2) Evaluate stop strings.
++        # 2) Update reasoning state and evaluate stop strings.
++        self._update_reasoning_state()
+         stop_string = None
+         if self.stop and self.num_output_tokens() > self.min_tokens:
+-            stop = check_stop_strings(
+-                output_text=self.output_text,
+-                new_char_count=len(self.output_text) - stop_check_offset,
+-                stop=self.stop,
+-                include_in_output=self.include_stop_str_in_output,
+-            )
+-            if stop is not None:
+-                stop_string, truncate_to = stop
+-                if truncate_to != -1:
+-                    self.output_text = self.output_text[:truncate_to]
++            if self._in_reasoning:
++                # Don't match stop strings against reasoning/thinking tokens.
++                pass
++            else:
++                stop = check_stop_strings(
++                    output_text=self.output_text,
++                    new_char_count=len(self.output_text) - stop_check_offset,
++                    stop=self.stop,
++                    include_in_output=self.include_stop_str_in_output,
++                )
++                if stop is not None:
++                    stop_string, truncate_to = stop
++                    if truncate_to != -1:
++                        self.output_text = self.output_text[:truncate_to]
+
+         return stop_string
+
+--- a/vllm/v1/engine/async_llm.py
++++ b/vllm/v1/engine/async_llm.py
+@@ -294,6 +294,7 @@
+         prompt_text: str | None = None,
+         reasoning_ended: bool | None = None,
+         reasoning_parser_kwargs: dict[str, Any] | None = None,
++        reasoning_markers: tuple[str, str] | None = None,
+     ) -> RequestOutputCollector:
+         """Add new request to the AsyncLLM."""
+
+@@ -364,6 +365,8 @@
+             request.reasoning_ended = reasoning_ended
+         if reasoning_parser_kwargs is not None:
+             request.reasoning_parser_kwargs = reasoning_parser_kwargs
++        if reasoning_markers is not None:
++            request.reasoning_markers = reasoning_markers
+
+         self.input_processor.assign_request_id(request)
+
+@@ -538,6 +541,7 @@
+         data_parallel_rank: int | None = None,
+         reasoning_ended: bool | None = None,
+         reasoning_parser_kwargs: dict[str, Any] | None = None,
++        reasoning_markers: tuple[str, str] | None = None,
+     ) -> AsyncGenerator[RequestOutput, None]:
+         """
+         Main function called by the API server to kick off a request
+@@ -568,6 +572,7 @@
+                 prompt_text=prompt_text,
+                 reasoning_ended=reasoning_ended,
+                 reasoning_parser_kwargs=reasoning_parser_kwargs,
++                reasoning_markers=reasoning_markers,
+             )
+
+             # The output_handler task pushes items into the queue.
+--- a/vllm/entrypoints/openai/chat_completion/serving.py
++++ b/vllm/entrypoints/openai/chat_completion/serving.py
+@@ -365,6 +365,13 @@
+                     )
+                 else:
+                     reasoning_ended = None
++
++                reasoning_markers = None
++                if reasoning_parser is not None:
++                    start = reasoning_parser.reasoning_start_str
++                    end = reasoning_parser.reasoning_end_str
++                    if start and end:
++                        reasoning_markers = (start, end)
+
+                 generator = self.engine_client.generate(
+                     engine_input,
+@@ -380,6 +387,7 @@
+                     }
+                     if reasoning_parser
+                     else None,
++                    reasoning_markers=reasoning_markers,
+                 )
+
+             generators.append(generator)

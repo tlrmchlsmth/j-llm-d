@@ -59,8 +59,9 @@ create-secrets:
   kubectl create secret generic hf-secret --from-literal=HF_TOKEN={{HF_TOKEN}} -n {{NAMESPACE}} \
   && kubectl create secret generic gh-token-secret --from-literal=GH_TOKEN={{GH_TOKEN}} -n {{NAMESPACE}}
 
+SERVICE_ACCOUNT := env("SERVICE_ACCOUNT", "default")
 start-poker:
-    POKER_NAME={{POKER_NAME}} envsubst '${POKER_NAME}' < poker/poker.yaml | {{KN}} apply -f -
+    POKER_NAME={{POKER_NAME}} SERVICE_ACCOUNT={{SERVICE_ACCOUNT}} envsubst '${POKER_NAME} ${SERVICE_ACCOUNT}' < poker/poker.yaml | {{KN}} apply -f -
 
 # Fetch model server pod names and IPs and cache them
 # Auto-detects role: uses decode pods if they exist, otherwise prefill (agg mode)
@@ -622,10 +623,64 @@ stop-calibrate:
   just stop-nyann
   @echo "Stopped."
 
-# Run KV cache calibration sweep across P/D configs
-# Example: just sweep "1,2,1,4;1,4,1,8" 500 1500 256 60s
+# Run KV cache calibration sweep locally
+# Example: just sweep "1,2,1,4;1,4,1,8" 500 1500 256 180s
 sweep CONFIGS ISL='500' OSL='1500' CALIB_CONCURRENCY='256' CALIB_DURATION='180s' OUTPUT='kv-sweep-results.csv' *ARGS='':
-  cd kv-sweep && go run . --configs "{{CONFIGS}}" --isl {{ISL}} --osl {{OSL}} --calibration-concurrency {{CALIB_CONCURRENCY}} --calibration-duration {{CALIB_DURATION}} --output "{{OUTPUT}}" {{ARGS}}
+  cd kv-sweep && go run . --configs "{{CONFIGS}}" --isl {{ISL}} --osl {{OSL}} --calibration-concurrency {{CALIB_CONCURRENCY}} --calibration-duration {{CALIB_DURATION}} --output "{{OUTPUT}}" --namespace {{NAMESPACE}} --deploy-name {{DEPLOY_NAME}} --name-prefix {{NAME_PREFIX}} --vllm-image "{{VLLM_IMAGE}}" --nyann-bench "{{NYANN_BENCH_DIR}}/nyann-bench" --eval-base-url "{{EVAL_BASE_URL}}" --lustre-data "{{LUSTRE_DATA}}" --nyann-image-tag "{{NYANN_IMAGE_TAG}}" {{ARGS}}
+
+# Build, copy, and run KV sweep on the poker pod (survives laptop disconnect)
+# Example: just sweep-remote "2,1,1,1;2,1,1,2;2,1,1,4" 500 1500 256 180s
+sweep-remote CONFIGS ISL='500' OSL='1500' CALIB_CONCURRENCY='256' CALIB_DURATION='180s' OUTPUT='kv-sweep-results.csv' *ARGS='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  echo "=== Pre-rendering kustomize manifests ==="
+  printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: NAME_PREFIX_PLACEHOLDER-\nresources:\n  - overlays/pd-custom\n' > {{NEMOTRON_DIR}}/kustomization.yaml
+  kubectl kustomize {{NEMOTRON_DIR}}/ > kv-sweep/manifests/lws.yaml
+  rm {{NEMOTRON_DIR}}/kustomization.yaml
+  cp {{NEMOTRON_DIR}}/gateway.yaml kv-sweep/manifests/
+  cp {{NEMOTRON_DIR}}/httproute.yaml kv-sweep/manifests/
+  cp {{NEMOTRON_DIR}}/inferencepool-pd.values.yaml kv-sweep/manifests/
+  cp {{NEMOTRON_DIR}}/infpool-backend-dr.yaml kv-sweep/manifests/
+
+  echo "=== Copying source + manifests to poker pod ==="
+  {{KN}} exec {{POKER_NAME}} -- mkdir -p /tmp/sweep/kv-sweep-src /tmp/sweep/nyann-bench-src
+  (cd kv-sweep && tar -cf - go.mod *.go manifests/) | {{KN}} exec -i {{POKER_NAME}} -- tar -xf - -C /tmp/sweep/kv-sweep-src
+  (cd {{NYANN_BENCH_DIR}} && find . -name '*.go' -o -name 'go.mod' -o -name 'go.sum' | tar -cf - -T -) | {{KN}} exec -i {{POKER_NAME}} -- tar -xf - -C /tmp/sweep/nyann-bench-src
+
+  echo "=== Ensuring go + kubectl + helm on poker pod ==="
+  {{KN}} exec {{POKER_NAME}} -- bash -c 'ARCH=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/"); go version >/dev/null 2>&1 || (rm -rf /usr/local/go /usr/local/bin/go && curl -sL "https://go.dev/dl/go1.23.6.linux-${ARCH}.tar.gz" | tar -xz -C /usr/local && ln -sf /usr/local/go/bin/go /usr/local/bin/go) && go version'
+  {{KN}} exec {{POKER_NAME}} -- bash -c 'ARCH=$(uname -m | sed "s/x86_64/amd64/;s/aarch64/arm64/"); which kubectl >/dev/null 2>&1 || (curl -sLO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/${ARCH}/kubectl" && chmod +x kubectl && mv kubectl /usr/local/bin/)'
+  {{KN}} exec {{POKER_NAME}} -- bash -c 'which helm >/dev/null 2>&1 || (curl -s https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | DESIRED_VERSION=v3.17.3 USE_SUDO=false HELM_INSTALL_DIR=/usr/local/bin bash)'
+
+  echo "=== Building on poker pod ==="
+  {{KN}} exec {{POKER_NAME}} -- bash -c 'cd /tmp/sweep/kv-sweep-src && CGO_ENABLED=0 go build -o /tmp/sweep/kv-sweep .'
+  {{KN}} exec {{POKER_NAME}} -- bash -c 'cd /tmp/sweep/nyann-bench-src && CGO_ENABLED=0 go build -o /tmp/sweep/nyann-bench ./cmd/nyann-bench/'
+
+  echo "=== Launching sweep in tmux ==="
+  {{KN}} exec {{POKER_NAME}} -- tmux kill-session -t sweep 2>/dev/null || true
+  {{KN}} exec {{POKER_NAME}} -- tmux new-session -d -s sweep \
+    "/tmp/sweep/kv-sweep \
+      --configs '{{CONFIGS}}' \
+      --isl {{ISL}} --osl {{OSL}} \
+      --calibration-concurrency {{CALIB_CONCURRENCY}} \
+      --calibration-duration {{CALIB_DURATION}} \
+      --output /tmp/sweep/{{OUTPUT}} \
+      --nyann-bench /tmp/sweep/nyann-bench \
+      --manifests /tmp/sweep/kv-sweep-src/manifests \
+      --namespace {{NAMESPACE}} \
+      --deploy-name {{DEPLOY_NAME}} \
+      --name-prefix {{NAME_PREFIX}} \
+      --vllm-image '{{VLLM_IMAGE}}' \
+      --eval-base-url '{{EVAL_BASE_URL}}' \
+      --lustre-data '{{LUSTRE_DATA}}' \
+      --nyann-image-tag '{{NYANN_IMAGE_TAG}}' \
+      {{ARGS}} ; echo 'SWEEP DONE'; sleep 86400"
+
+  echo ""
+  echo "Sweep launched on {{POKER_NAME}} in tmux session 'sweep'"
+  echo "  Attach:  kubectl -n {{NAMESPACE}} exec -it {{POKER_NAME}} -- tmux attach -t sweep"
+  echo "  Results: kubectl -n {{NAMESPACE}} cp {{POKER_NAME}}:/tmp/sweep/{{OUTPUT}} ./{{OUTPUT}}"
 
 NYANN_BENCH_DIR := env("NYANN_BENCH_DIR", "")
 EVAL_BASE_URL := env("EVAL_BASE_URL", "")

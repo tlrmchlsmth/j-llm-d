@@ -6,6 +6,7 @@ metadata:
     app: poker
 
 spec:
+  serviceAccountName: ${SERVICE_ACCOUNT}
   restartPolicy: Never
   affinity:
     nodeAffinity:

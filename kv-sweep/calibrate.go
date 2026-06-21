@@ -24,7 +24,7 @@ func calibrate(params SweepParams, env EnvConfig) (*CalibrationResult, error) {
 		params.ISL, params.OSL,
 	)
 
-	cmd := exec.Command("go", "run", "./cmd/nyann-bench/", "generate",
+	cmd := exec.Command(env.NyannBenchPath, "generate",
 		"--target", env.EvalBaseURL,
 		"--config", loadConfig,
 		"--workers", "auto",
@@ -34,7 +34,6 @@ func calibrate(params SweepParams, env EnvConfig) (*CalibrationResult, error) {
 		"--kube.image", env.NyannImageTag,
 		"--kube.namespace", env.Namespace,
 	)
-	cmd.Dir = env.NyannBenchDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -59,7 +58,7 @@ func calibrate(params SweepParams, env EnvConfig) (*CalibrationResult, error) {
 			case <-done:
 				return
 			case <-ticker.C:
-				kv, err := queryKV(env.Namespace, env.PokerPod, env.DeployName)
+				kv, err := queryKV(env.Namespace, env.DeployName)
 				if err != nil {
 					continue
 				}

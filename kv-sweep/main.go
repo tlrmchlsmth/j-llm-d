@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,33 +39,28 @@ type SweepParams struct {
 }
 
 type EnvConfig struct {
-	NyannBenchDir string
-	EvalBaseURL   string
-	LustreData    string
-	NyannImageTag string
-	VLLMImage     string
-	Namespace     string
-	NamePrefix    string
-	DeployName    string
-	PokerPod      string
-	RepoDir       string
+	NyannBenchPath string
+	ManifestsDir   string
+	EvalBaseURL    string
+	LustreData     string
+	NyannImageTag  string
+	VLLMImage      string
+	Namespace      string
+	NamePrefix     string
+	DeployName     string
 }
 
 type SweepResult struct {
 	Config          PDConfig
 	TotalGPUs       int
 	CalibResult     *CalibrationResult
+	CalibStart      time.Time
+	CalibEnd        time.Time
+	StairsStart     time.Time
+	StairsEnd       time.Time
 	StairsCompleted bool
 	Error           string
 	Timestamp       time.Time
-}
-
-func findRepoRoot() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return "", fmt.Errorf("finding git repo root: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 func parseConfigs(s string) ([]PDConfig, error) {
@@ -99,53 +93,12 @@ func parseConfigs(s string) ([]PDConfig, error) {
 	return configs, nil
 }
 
-func loadEnv(namespace string) (EnvConfig, error) {
-	required := map[string]*string{
-		"NYANN_BENCH_DIR": nil,
-		"EVAL_BASE_URL":   nil,
-		"LUSTRE_DATA":     nil,
-		"NYANN_IMAGE_TAG": nil,
-	}
-	for k := range required {
-		v := os.Getenv(k)
-		if v == "" {
-			return EnvConfig{}, fmt.Errorf("required env var %s is not set", k)
-		}
-		s := v
-		required[k] = &s
-	}
-
-	user := os.Getenv("USER")
-	if user == "" {
-		return EnvConfig{}, fmt.Errorf("USER env var is not set")
-	}
-
-	namePrefix := user
-	deployName := namePrefix + "-wide-ep"
-
-	pokerPod, err := findPokerPod(namespace)
+func readManifest(dir, name string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
-		return EnvConfig{}, err
+		return "", fmt.Errorf("reading manifest %s: %w", name, err)
 	}
-	fmt.Printf("Using poker pod: %s\n", pokerPod)
-
-	repoDir, err := findRepoRoot()
-	if err != nil {
-		return EnvConfig{}, err
-	}
-
-	return EnvConfig{
-		NyannBenchDir: *required["NYANN_BENCH_DIR"],
-		EvalBaseURL:   *required["EVAL_BASE_URL"],
-		LustreData:    *required["LUSTRE_DATA"],
-		NyannImageTag: *required["NYANN_IMAGE_TAG"],
-		VLLMImage:     os.Getenv("VLLM_IMAGE"),
-		Namespace:     namespace,
-		NamePrefix:    namePrefix,
-		DeployName:    deployName,
-		PokerPod:      pokerPod,
-		RepoDir:       repoDir,
-	}, nil
+	return string(data), nil
 }
 
 func appendResult(outputPath string, r SweepResult) error {
@@ -168,6 +121,8 @@ func appendResult(outputPath string, r SweepResult) error {
 			"timestamp", "config",
 			"prefill_replicas", "prefill_size", "decode_replicas", "decode_size",
 			"total_gpus", "peak_kv_pct", "est_max_c_90pct",
+			"calib_start", "calib_end",
+			"stairs_start", "stairs_end",
 			"stairs_completed", "error",
 		})
 	}
@@ -177,6 +132,13 @@ func appendResult(outputPath string, r SweepResult) error {
 	if r.CalibResult != nil {
 		peakKV = fmt.Sprintf("%.2f", r.CalibResult.PeakKV*100)
 		maxC = strconv.Itoa(r.CalibResult.MaxC)
+	}
+
+	fmtTime := func(t time.Time) string {
+		if t.IsZero() {
+			return ""
+		}
+		return t.Format(time.RFC3339)
 	}
 
 	return w.Write([]string{
@@ -189,6 +151,10 @@ func appendResult(outputPath string, r SweepResult) error {
 		strconv.Itoa(r.TotalGPUs),
 		peakKV,
 		maxC,
+		fmtTime(r.CalibStart),
+		fmtTime(r.CalibEnd),
+		fmtTime(r.StairsStart),
+		fmtTime(r.StairsEnd),
 		strconv.FormatBool(r.StairsCompleted),
 		r.Error,
 	})
@@ -213,24 +179,26 @@ func runSweep(params SweepParams, env EnvConfig) {
 		func() {
 			defer func() {
 				fmt.Println("\nTearing down before next config...")
-				if err := teardown(env.RepoDir); err != nil {
+				if err := teardown(env); err != nil {
 					fmt.Printf("Warning: teardown error: %v\n", err)
 				}
 			}()
 
-			if err := deploy(cfg, env.RepoDir); err != nil {
+			if err := deploy(cfg, env); err != nil {
 				result.Error = fmt.Sprintf("deploy: %v", err)
 				fmt.Printf("ERROR: %s\n", result.Error)
 				return
 			}
 
-			if err := waitReady(env.RepoDir); err != nil {
+			if err := waitReady(env); err != nil {
 				result.Error = fmt.Sprintf("wait ready: %v", err)
 				fmt.Printf("ERROR: %s\n", result.Error)
 				return
 			}
 
+			result.CalibStart = time.Now()
 			calibResult, err := calibrate(params, env)
+			result.CalibEnd = time.Now()
 			if err != nil {
 				result.Error = fmt.Sprintf("calibrate: %v", err)
 				fmt.Printf("ERROR: %s\n", result.Error)
@@ -239,21 +207,24 @@ func runSweep(params SweepParams, env EnvConfig) {
 			result.CalibResult = calibResult
 
 			fmt.Println("\nStopping calibration load...")
-			if err := stopNyann(env.RepoDir); err != nil {
+			if err := stopNyann(env); err != nil {
 				fmt.Printf("Warning: stop-nyann error: %v\n", err)
 			}
 			fmt.Println("Waiting 30s for requests to drain...")
 			time.Sleep(30 * time.Second)
 
+			result.StairsStart = time.Now()
 			if err := runStairs(calibResult.MaxC, params, env); err != nil {
+				result.StairsEnd = time.Now()
 				result.Error = fmt.Sprintf("stairs: %v", err)
 				fmt.Printf("ERROR: %s\n", result.Error)
 				return
 			}
+			result.StairsEnd = time.Now()
 			result.StairsCompleted = true
 
 			fmt.Println("\nStopping stairs...")
-			if err := stopNyann(env.RepoDir); err != nil {
+			if err := stopNyann(env); err != nil {
 				fmt.Printf("Warning: stop-nyann error: %v\n", err)
 			}
 		}()
@@ -273,11 +244,19 @@ func main() {
 		isl              = flag.Int("isl", 0, "Input sequence length")
 		osl              = flag.Int("osl", 0, "Output sequence length")
 		calibConcurrency = flag.Int("calibration-concurrency", 0, "Concurrency for calibration load")
-		calibDuration    = flag.Duration("calibration-duration", 60*time.Second, "Duration of calibration phase")
+		calibDuration    = flag.Duration("calibration-duration", 180*time.Second, "Duration of calibration phase")
 		kvInterval       = flag.Duration("kv-interval", 500*time.Millisecond, "KV sampling interval")
 		configsStr       = flag.String("configs", "", "P/D configs: pr,ps,dr,ds separated by ;")
 		output           = flag.String("output", "kv-sweep-results.csv", "Output CSV file")
 		namespace        = flag.String("namespace", "vllm", "Kubernetes namespace")
+		nyannBench       = flag.String("nyann-bench", "./nyann-bench", "Path to nyann-bench binary")
+		manifestsDir     = flag.String("manifests", "./manifests", "Path to manifests directory")
+		deployName       = flag.String("deploy-name", "", "Deploy name (default: $USER-wide-ep)")
+		namePrefix       = flag.String("name-prefix", "", "Name prefix (default: $USER)")
+		vllmImage        = flag.String("vllm-image", "", "vLLM container image")
+		evalBaseURL      = flag.String("eval-base-url", "", "Gateway endpoint URL (default: from EVAL_BASE_URL env)")
+		lustreData       = flag.String("lustre-data", "", "Lustre data path (default: from LUSTRE_DATA env)")
+		nyannImageTag    = flag.String("nyann-image-tag", "", "nyann-bench worker image (default: from NYANN_IMAGE_TAG env)")
 	)
 	flag.Parse()
 
@@ -292,9 +271,47 @@ func main() {
 		log.Fatalf("Parsing configs: %v", err)
 	}
 
-	env, err := loadEnv(*namespace)
-	if err != nil {
-		log.Fatalf("Environment: %v", err)
+	// Resolve defaults from env
+	resolve := func(flagVal, envKey string) string {
+		if flagVal != "" {
+			return flagVal
+		}
+		return os.Getenv(envKey)
+	}
+
+	prefix := resolve(*namePrefix, "USER")
+	if prefix == "" {
+		log.Fatal("--name-prefix or USER env var required")
+	}
+	dName := *deployName
+	if dName == "" {
+		dName = prefix + "-wide-ep"
+	}
+
+	ebURL := resolve(*evalBaseURL, "EVAL_BASE_URL")
+	if ebURL == "" {
+		log.Fatal("--eval-base-url or EVAL_BASE_URL env var required")
+	}
+	ld := resolve(*lustreData, "LUSTRE_DATA")
+	if ld == "" {
+		log.Fatal("--lustre-data or LUSTRE_DATA env var required")
+	}
+	nit := resolve(*nyannImageTag, "NYANN_IMAGE_TAG")
+	if nit == "" {
+		log.Fatal("--nyann-image-tag or NYANN_IMAGE_TAG env var required")
+	}
+	vi := resolve(*vllmImage, "VLLM_IMAGE")
+
+	env := EnvConfig{
+		NyannBenchPath: *nyannBench,
+		ManifestsDir:   *manifestsDir,
+		EvalBaseURL:    ebURL,
+		LustreData:     ld,
+		NyannImageTag:  nit,
+		VLLMImage:      vi,
+		Namespace:      *namespace,
+		NamePrefix:     prefix,
+		DeployName:     dName,
 	}
 
 	params := SweepParams{
@@ -311,6 +328,10 @@ func main() {
 	fmt.Printf("  ISL: %d  OSL: %d\n", params.ISL, params.OSL)
 	fmt.Printf("  Calibration: concurrency=%d duration=%s interval=%s\n",
 		params.CalibConcurrency, params.CalibDuration, params.KVInterval)
+	fmt.Printf("  Deploy: %s (prefix=%s)\n", env.DeployName, env.NamePrefix)
+	fmt.Printf("  vLLM image: %s\n", env.VLLMImage)
+	fmt.Printf("  Manifests: %s\n", env.ManifestsDir)
+	fmt.Printf("  nyann-bench: %s\n", env.NyannBenchPath)
 	fmt.Printf("  Configs: %d\n", len(params.Configs))
 	for _, c := range params.Configs {
 		fmt.Printf("    %s (%d GPUs)\n", c.Label(), c.TotalGPUs())

@@ -11,7 +11,7 @@ func runStairs(maxC int, params SweepParams, env EnvConfig) error {
 	sweepMax := maxC
 	steps := 8
 	stepDuration := "120s"
-	evalDuration := fmt.Sprintf("%ds", steps*60)
+	evalDuration := fmt.Sprintf("%ds", steps*120)
 
 	fmt.Printf("\n=== Starting stairs benchmark ===\n")
 	fmt.Printf("Sweep: %d → %d concurrency, %d steps × %s\n",
@@ -23,7 +23,7 @@ func runStairs(maxC int, params SweepParams, env EnvConfig) error {
 		env.LustreData, params.ISL, params.OSL,
 	)
 
-	loadCmd := exec.Command("go", "run", "./cmd/nyann-bench/", "generate",
+	loadCmd := exec.Command(env.NyannBenchPath, "generate",
 		"--target", env.EvalBaseURL,
 		"--config", loadConfig,
 		"--workers", "auto",
@@ -33,7 +33,6 @@ func runStairs(maxC int, params SweepParams, env EnvConfig) error {
 		"--kube.image", env.NyannImageTag,
 		"--kube.namespace", env.Namespace,
 	)
-	loadCmd.Dir = env.NyannBenchDir
 	loadCmd.Stdout = os.Stdout
 	loadCmd.Stderr = os.Stderr
 
@@ -42,7 +41,7 @@ func runStairs(maxC int, params SweepParams, env EnvConfig) error {
 		evalDuration, env.LustreData, env.LustreData,
 	)
 
-	evalCmd := exec.Command("go", "run", "./cmd/nyann-bench/", "generate",
+	evalCmd := exec.Command(env.NyannBenchPath, "generate",
 		"--target", env.EvalBaseURL,
 		"--config", evalConfig,
 		"--kube",
@@ -51,7 +50,6 @@ func runStairs(maxC int, params SweepParams, env EnvConfig) error {
 		"--kube.image", env.NyannImageTag,
 		"--kube.namespace", env.Namespace,
 	)
-	evalCmd.Dir = env.NyannBenchDir
 	evalCmd.Stdout = os.Stdout
 	evalCmd.Stderr = os.Stderr
 

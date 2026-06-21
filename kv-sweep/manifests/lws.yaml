@@ -1,0 +1,589 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: NAME_PREFIX_PLACEHOLDER-wide-ep
+---
+apiVersion: v1
+data:
+  custom-counters.csv: |
+    # NVLink / MNNVL bandwidth
+    DCGM_FI_PROF_NVLINK_TX_BYTES,  gauge, NVLink transmit bytes per second
+    DCGM_FI_PROF_NVLINK_RX_BYTES,  gauge, NVLink receive bytes per second
+
+    # GPU utilization
+    DCGM_FI_DEV_GPU_UTIL,          gauge, GPU utilization (percent)
+    DCGM_FI_DEV_MEM_COPY_UTIL,     gauge, Memory copy engine utilization (percent)
+    DCGM_FI_PROF_SM_ACTIVE,        gauge, Ratio of cycles with at least one active warp
+    DCGM_FI_PROF_SM_OCCUPANCY,     gauge, Ratio of active warps to max warps
+    DCGM_FI_PROF_DRAM_ACTIVE,      gauge, Ratio of cycles with active DRAM reads or writes
+
+    # Thermal and power
+    DCGM_FI_DEV_GPU_TEMP,          gauge, GPU temperature (C)
+    DCGM_FI_DEV_POWER_USAGE,       gauge, GPU power draw (W)
+
+    # Framebuffer memory
+    DCGM_FI_DEV_FB_USED,           gauge, Framebuffer memory used (MiB)
+    DCGM_FI_DEV_FB_FREE,           gauge, Framebuffer memory free (MiB)
+kind: ConfigMap
+metadata:
+  name: NAME_PREFIX_PLACEHOLDER-wide-ep-dcgm-metrics
+---
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  labels:
+    llm-d.ai/deployment: pd
+    llm-d.ai/inferenceServing: "true"
+    llm-d.ai/model: NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
+    llm-d.ai/role: decode
+  name: NAME_PREFIX_PLACEHOLDER-wide-ep-decode
+spec:
+  leaderWorkerTemplate:
+    size: DECODE_SIZE_PLACEHOLDER
+    workerTemplate:
+      metadata:
+        labels:
+          llm-d.ai/deploy-ts: DEPLOY_TS_PLACEHOLDER
+          llm-d.ai/deployment: pd
+          llm-d.ai/inferenceServing: "true"
+          llm-d.ai/model: NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
+          llm-d.ai/owner: OWNER_PLACEHOLDER
+          llm-d.ai/role: decode
+      spec:
+        containers:
+        - args:
+          - |-
+            set -euo pipefail
+            LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/nemotron-decode
+            mkdir -p "$LOG_DIR"
+            LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+            echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+
+            FORK_REPO="FORK_REPO_PLACEHOLDER"
+            FORK_BRANCH="FORK_BRANCH_PLACEHOLDER"
+            if [ -n "$FORK_BRANCH" ]; then
+              cd /opt/vllm-source
+              git remote add fork "$FORK_REPO" 2>/dev/null || git remote set-url fork "$FORK_REPO"
+              git fetch fork "$FORK_BRANCH"
+              git checkout "fork/$FORK_BRANCH"
+              echo "=== Checked out fork/$FORK_BRANCH at $(date) ==="
+              cd -
+            fi
+
+            if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
+              echo "Using dev venv at ${VLLM_DEV_VENV}"
+              source "${VLLM_DEV_VENV}/bin/activate"
+            else
+              source /opt/vllm/bin/activate
+            fi
+
+            DP_SIZE_LOCAL=4
+            START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
+
+            PROFILER_ARGS=""
+            if [ "${ENABLE_PROFILING:-0}" = "1" ]; then
+              mkdir -p /traces
+              PROFILER_ARGS="--profiler-config {\"profiler\":\"torch\",\"torch_profiler_dir\":\"/traces\"}"
+            fi
+
+            RANK_FLAG="--data-parallel-start-rank $START_RANK"
+
+            vllm serve $PROFILER_ARGS \
+              nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 \
+              --served-model-name NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 \
+              --disable-uvicorn-access-log \
+              --port 8200 \
+              --tensor-parallel-size $TP_SIZE \
+              --enable-expert-parallel \
+              --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
+              --data-parallel-size-local $DP_SIZE_LOCAL \
+              --data-parallel-hybrid-lb \
+              $RANK_FLAG \
+              --data-parallel-address ${LWS_LEADER_ADDRESS} \
+              --data-parallel-rpc-port 5555 \
+              --trust-remote-code \
+              ${KV_TRANSFER_CONFIG:+--kv_transfer_config "$KV_TRANSFER_CONFIG"} \
+              --gpu-memory-utilization 0.90 \
+              --max-num-batched-tokens $MAX_TOKENS \
+              --max-num-seqs $MAX_TOKENS \
+              --async-scheduling \
+              --mamba-backend flashinfer \
+              --mamba-ssm-cache-dtype float16 \
+              --enable-flashinfer-autotune \
+              --all2all-backend "flashinfer_nvlink_one_sided" \
+              --kv-cache-dtype fp8 \
+              --enable-force-include-usage \
+              --reasoning-parser nemotron_v3
+          command:
+          - /bin/bash
+          - -c
+          env:
+          - name: VLLM_USE_V2_MODEL_RUNNER
+            value: "0"
+          - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+            value: "120"
+          - name: VLLM_NO_USAGE_STATS
+            value: "1"
+          - name: TQDM_DISABLE
+            value: "1"
+          - name: ENABLE_PROFILING
+            value: "0"
+          - name: VLLM_DEV_VENV
+            value: VLLM_DEV_VENV_PLACEHOLDER
+          - name: VLLM_USE_FLASHINFER_MOE_FP4
+            value: "1"
+          - name: VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS
+            value: "1"
+          - name: VLLM_SSM_CONV_STATE_LAYOUT
+            value: DS
+          - name: MAX_TOKENS
+            value: "256"
+          - name: VLLM_TORCH_PROFILER_DIR
+            value: /traces
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                key: HF_TOKEN
+                name: hf-secret
+                optional: true
+          - name: HF_HOME
+            value: /mnt/local/hf_cache
+          - name: VLLM_CACHE_ROOT
+            value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_nemotron
+          - name: FLASHINFER_CACHE_DIR
+            value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_nemotron
+          - name: TP_SIZE
+            value: "1"
+          - name: TRITON_LIBCUDA_PATH
+            value: /usr/lib64
+          - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
+            value: "1"
+          - name: VLLM_USE_DEEP_GEMM
+            value: "1"
+          - name: NVIDIA_GDRCOPY
+            value: enabled
+          - name: UCX_NET_DEVICES
+            value: mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1
+          - name: VLLM_ENGINE_READY_TIMEOUT_S
+            value: "1800"
+          - name: VLLM_LOGGING_LEVEL
+            value: INFO
+          - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: KV_TRANSFER_CONFIG
+            value: '{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_buffer_device":"cuda","kv_load_failure_policy":"fail"}'
+          image: VLLM_IMAGE_PLACEHOLDER
+          imagePullPolicy: Always
+          name: vllm
+          ports:
+          - containerPort: 8200
+            name: vllm
+            protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+              - /bin/bash
+              - -c
+              - |
+                curl -sf http://localhost:8000/v1/models | grep -q '"id"'
+            failureThreshold: 60
+            periodSeconds: 5
+          resources:
+            claims:
+            - name: compute-domain-channel
+            limits:
+              ephemeral-storage: 128Gi
+              memory: 512Gi
+              nvidia.com/gpu: "4"
+            requests:
+              cpu: 32
+              ephemeral-storage: 128Gi
+              memory: 512Gi
+              nvidia.com/gpu: "4"
+          securityContext:
+            capabilities:
+              add:
+              - IPC_LOCK
+              - SYS_RAWIO
+            runAsGroup: 0
+            runAsUser: 0
+          volumeMounts:
+          - mountPath: /dev/shm
+            name: dshm
+          - mountPath: /mnt/lustre
+            name: lustre
+          - mountPath: /mnt/local
+            name: local-nvme
+          workingDir: /code
+        - args:
+          - -f
+          - /etc/dcgm-exporter/custom-counters.csv
+          env:
+          - name: NVIDIA_VISIBLE_DEVICES
+            value: all
+          - name: NVIDIA_DRIVER_CAPABILITIES
+            value: utility
+          - name: DCGM_EXPORTER_KUBERNETES_GPU_ID_TYPE
+            value: uid
+          image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04
+          imagePullPolicy: IfNotPresent
+          name: dcgm-exporter
+          ports:
+          - containerPort: 9400
+            name: dcgm
+            protocol: TCP
+          resources:
+            limits:
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+          - mountPath: /etc/dcgm-exporter/custom-counters.csv
+            name: dcgm-metrics
+            readOnly: true
+            subPath: custom-counters.csv
+        - args:
+          - --collector.disable-defaults
+          - --collector.infiniband
+          - --path.sysfs=/host/sys
+          image: quay.io/prometheus/node-exporter:v1.9.0
+          imagePullPolicy: IfNotPresent
+          name: node-exporter
+          ports:
+          - containerPort: 9100
+            name: node-metrics
+            protocol: TCP
+          resources:
+            limits:
+              memory: 64Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+          - mountPath: /host/sys
+            name: sys
+            readOnly: true
+        initContainers:
+        - args:
+          - --port=8000
+          - --vllm-port=8200
+          - --secure-proxy=false
+          - --connector=nixlv2
+          image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
+          imagePullPolicy: Always
+          name: routing-proxy
+          ports:
+          - containerPort: 8000
+            name: proxy
+            protocol: TCP
+          resources: {}
+          restartPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+        resourceClaims:
+        - name: compute-domain-channel
+          resourceClaimTemplateName: llm-d-dev-claim
+        serviceAccountName: NAME_PREFIX_PLACEHOLDER-wide-ep
+        terminationGracePeriodSeconds: 0
+        volumes:
+        - emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+          name: dshm
+        - name: lustre
+          persistentVolumeClaim:
+            claimName: lustre-pvc-vllm
+        - hostPath:
+            path: /mnt/numa0
+            type: Directory
+          name: local-nvme
+        - hostPath:
+            path: /sys
+            type: Directory
+          name: sys
+        - configMap:
+            name: NAME_PREFIX_PLACEHOLDER-wide-ep-dcgm-metrics
+          name: dcgm-metrics
+  replicas: DECODE_REPLICAS_PLACEHOLDER
+  rolloutStrategy:
+    rollingUpdateConfiguration:
+      maxUnavailable: 100%
+    type: RollingUpdate
+---
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  labels:
+    llm-d.ai/deployment: pd
+    llm-d.ai/inferenceServing: "true"
+    llm-d.ai/model: NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
+    llm-d.ai/role: prefill
+  name: NAME_PREFIX_PLACEHOLDER-wide-ep-prefill
+spec:
+  leaderWorkerTemplate:
+    size: PREFILL_SIZE_PLACEHOLDER
+    workerTemplate:
+      metadata:
+        labels:
+          llm-d.ai/deploy-ts: DEPLOY_TS_PLACEHOLDER
+          llm-d.ai/deployment: pd
+          llm-d.ai/inferenceServing: "true"
+          llm-d.ai/model: NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
+          llm-d.ai/owner: OWNER_PLACEHOLDER
+          llm-d.ai/role: prefill
+      spec:
+        containers:
+        - args:
+          - |-
+            set -euo pipefail
+            LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/nemotron-prefill
+            mkdir -p "$LOG_DIR"
+            LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+            echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+
+            FORK_REPO="FORK_REPO_PLACEHOLDER"
+            FORK_BRANCH="FORK_BRANCH_PLACEHOLDER"
+            if [ -n "$FORK_BRANCH" ]; then
+              cd /opt/vllm-source
+              git remote add fork "$FORK_REPO" 2>/dev/null || git remote set-url fork "$FORK_REPO"
+              git fetch fork "$FORK_BRANCH"
+              git checkout "fork/$FORK_BRANCH"
+              echo "=== Checked out fork/$FORK_BRANCH at $(date) ==="
+              cd -
+            fi
+
+            if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
+              echo "Using dev venv at ${VLLM_DEV_VENV}"
+              source "${VLLM_DEV_VENV}/bin/activate"
+            else
+              source /opt/vllm/bin/activate
+            fi
+
+            DP_SIZE_LOCAL=4
+            START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
+
+            PROFILER_ARGS=""
+            if [ "${ENABLE_PROFILING:-0}" = "1" ]; then
+              mkdir -p /traces
+              PROFILER_ARGS="--profiler-config {\"profiler\":\"torch\",\"torch_profiler_dir\":\"/traces\"}"
+            fi
+
+            RANK_FLAG="--data-parallel-start-rank $START_RANK"
+
+            vllm serve $PROFILER_ARGS \
+              nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 \
+              --served-model-name NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 \
+              --disable-uvicorn-access-log \
+              --port 8000 \
+              --tensor-parallel-size $TP_SIZE \
+              --enable-expert-parallel \
+              --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
+              --data-parallel-size-local $DP_SIZE_LOCAL \
+              --data-parallel-hybrid-lb \
+              $RANK_FLAG \
+              --data-parallel-address ${LWS_LEADER_ADDRESS} \
+              --data-parallel-rpc-port 5555 \
+              --trust-remote-code \
+              ${KV_TRANSFER_CONFIG:+--kv_transfer_config "$KV_TRANSFER_CONFIG"} \
+              --gpu-memory-utilization 0.90 \
+              --max-num-seqs 256 \
+              --async-scheduling \
+              --mamba-backend flashinfer \
+              --mamba-ssm-cache-dtype float16 \
+              --enable-flashinfer-autotune \
+              --all2all-backend "flashinfer_nvlink_one_sided" \
+              --kv-cache-dtype fp8 \
+              --enable-force-include-usage \
+              --reasoning-parser nemotron_v3
+          command:
+          - /bin/bash
+          - -c
+          env:
+          - name: VLLM_USE_V2_MODEL_RUNNER
+            value: "0"
+          - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+            value: "120"
+          - name: VLLM_NO_USAGE_STATS
+            value: "1"
+          - name: TQDM_DISABLE
+            value: "1"
+          - name: VLLM_DEV_VENV
+            value: VLLM_DEV_VENV_PLACEHOLDER
+          - name: VLLM_USE_FLASHINFER_MOE_FP4
+            value: "1"
+          - name: VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS
+            value: "1"
+          - name: VLLM_SSM_CONV_STATE_LAYOUT
+            value: DS
+          - name: VLLM_TORCH_PROFILER_DIR
+            value: /traces
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                key: HF_TOKEN
+                name: hf-secret
+                optional: true
+          - name: HF_HOME
+            value: /mnt/local/hf_cache
+          - name: VLLM_CACHE_ROOT
+            value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_nemotron
+          - name: FLASHINFER_CACHE_DIR
+            value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_nemotron
+          - name: TP_SIZE
+            value: "1"
+          - name: VLLM_USE_DEEP_GEMM
+            value: "1"
+          - name: TRITON_LIBCUDA_PATH
+            value: /usr/lib64
+          - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
+            value: "1"
+          - name: NVIDIA_GDRCOPY
+            value: enabled
+          - name: UCX_NET_DEVICES
+            value: mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1
+          - name: VLLM_ENGINE_READY_TIMEOUT_S
+            value: "1800"
+          - name: VLLM_LOGGING_LEVEL
+            value: INFO
+          - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: KV_TRANSFER_CONFIG
+            value: '{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_buffer_device":"cuda","kv_load_failure_policy":"fail"}'
+          image: VLLM_IMAGE_PLACEHOLDER
+          imagePullPolicy: Always
+          name: vllm
+          ports:
+          - containerPort: 8000
+            name: vllm
+            protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+              - /bin/bash
+              - -c
+              - |
+                curl -sf http://localhost:8000/v1/models | grep -q '"id"'
+            failureThreshold: 60
+            periodSeconds: 5
+          resources:
+            claims:
+            - name: compute-domain-channel
+            limits:
+              ephemeral-storage: 128Gi
+              memory: 512Gi
+              nvidia.com/gpu: "4"
+            requests:
+              cpu: 32
+              ephemeral-storage: 128Gi
+              memory: 512Gi
+              nvidia.com/gpu: "4"
+          securityContext:
+            capabilities:
+              add:
+              - IPC_LOCK
+              - SYS_RAWIO
+            runAsGroup: 0
+            runAsUser: 0
+          volumeMounts:
+          - mountPath: /dev/shm
+            name: dshm
+          - mountPath: /mnt/lustre
+            name: lustre
+          - mountPath: /mnt/local
+            name: local-nvme
+          workingDir: /code
+        - args:
+          - -f
+          - /etc/dcgm-exporter/custom-counters.csv
+          env:
+          - name: NVIDIA_VISIBLE_DEVICES
+            value: all
+          - name: NVIDIA_DRIVER_CAPABILITIES
+            value: utility
+          - name: DCGM_EXPORTER_KUBERNETES_GPU_ID_TYPE
+            value: uid
+          image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04
+          imagePullPolicy: IfNotPresent
+          name: dcgm-exporter
+          ports:
+          - containerPort: 9400
+            name: dcgm
+            protocol: TCP
+          resources:
+            limits:
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+          - mountPath: /etc/dcgm-exporter/custom-counters.csv
+            name: dcgm-metrics
+            readOnly: true
+            subPath: custom-counters.csv
+        - args:
+          - --collector.disable-defaults
+          - --collector.infiniband
+          - --path.sysfs=/host/sys
+          image: quay.io/prometheus/node-exporter:v1.9.0
+          imagePullPolicy: IfNotPresent
+          name: node-exporter
+          ports:
+          - containerPort: 9100
+            name: node-metrics
+            protocol: TCP
+          resources:
+            limits:
+              memory: 64Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+          - mountPath: /host/sys
+            name: sys
+            readOnly: true
+        resourceClaims:
+        - name: compute-domain-channel
+          resourceClaimTemplateName: llm-d-dev-claim
+        serviceAccountName: NAME_PREFIX_PLACEHOLDER-wide-ep
+        terminationGracePeriodSeconds: 0
+        volumes:
+        - emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+          name: dshm
+        - name: lustre
+          persistentVolumeClaim:
+            claimName: lustre-pvc-vllm
+        - hostPath:
+            path: /mnt/numa0
+            type: Directory
+          name: local-nvme
+        - hostPath:
+            path: /sys
+            type: Directory
+          name: sys
+        - configMap:
+            name: NAME_PREFIX_PLACEHOLDER-wide-ep-dcgm-metrics
+          name: dcgm-metrics
+  replicas: PREFILL_REPLICAS_PLACEHOLDER
+  rolloutStrategy:
+    rollingUpdateConfiguration:
+      maxUnavailable: 100%
+    type: RollingUpdate

@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os/exec"
+	"io"
+	"net/http"
+	"net/url"
 	"strconv"
-	"strings"
+	"time"
 )
 
 type promResponse struct {
@@ -16,42 +18,33 @@ type promResponse struct {
 	} `json:"data"`
 }
 
-func findPokerPod(namespace string) (string, error) {
-	out, err := exec.Command("kubectl", "-n", namespace, "get", "pod", "-l", "app=poker", "-o", "jsonpath={.items[0].metadata.name}").Output()
-	if err != nil {
-		return "", fmt.Errorf("finding poker pod: %w", err)
-	}
-	name := strings.TrimSpace(string(out))
-	if name == "" {
-		return "", fmt.Errorf("no poker pod found in namespace %s", namespace)
-	}
-	return name, nil
-}
-
-func queryKV(namespace, pokerPod, deployName string) (float64, error) {
+func queryKV(namespace, deployName string) (float64, error) {
 	promURL := fmt.Sprintf("http://prometheus-server.%s.svc.cluster.local:80/api/v1/query", namespace)
 	query := fmt.Sprintf("max(vllm:kv_cache_usage_perc{pod=~\"%s-decode.*\"})", deployName)
 
-	out, err := exec.Command(
-		"kubectl", "-n", namespace, "exec", pokerPod, "--",
-		"curl", "-s", "--max-time", "5", promURL,
-		"--data-urlencode", fmt.Sprintf("query=%s", query),
-	).Output()
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(promURL + "?query=" + url.QueryEscape(query))
 	if err != nil {
 		return 0, fmt.Errorf("prometheus query: %w", err)
 	}
+	defer resp.Body.Close()
 
-	var resp promResponse
-	if err := json.Unmarshal(out, &resp); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("reading prometheus response: %w", err)
+	}
+
+	var promResp promResponse
+	if err := json.Unmarshal(body, &promResp); err != nil {
 		return 0, fmt.Errorf("parsing prometheus response: %w", err)
 	}
 
-	if len(resp.Data.Result) == 0 || len(resp.Data.Result[0].Value) < 2 {
+	if len(promResp.Data.Result) == 0 || len(promResp.Data.Result[0].Value) < 2 {
 		return 0, fmt.Errorf("no KV data in prometheus response")
 	}
 
 	var valStr string
-	if err := json.Unmarshal(resp.Data.Result[0].Value[1], &valStr); err != nil {
+	if err := json.Unmarshal(promResp.Data.Result[0].Value[1], &valStr); err != nil {
 		return 0, fmt.Errorf("parsing KV value: %w", err)
 	}
 

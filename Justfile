@@ -327,7 +327,7 @@ ready:
   echo "Waiting for decode, prefill, and EPP pods..."
   wait
   echo "Checking gateway..."
-  until {{KN}} exec deploy/{{DEPLOY_NAME}}-infpool-epp -- curl -sf --max-time 5 http://{{DEPLOY_NAME}}-inference-gateway-istio:80/v1/models 2>/dev/null | grep -q '"id"'
+  until {{KN}} exec {{POKER_NAME}} -- curl -sf --max-time 5 http://{{DEPLOY_NAME}}-inference-gateway-istio:80/v1/models 2>/dev/null | grep -q '"id"'
   do
     sleep 2
   done
@@ -603,8 +603,10 @@ calibrate CONCURRENCY ISL OSL DURATION='600' KV_INTERVAL='0.5':
     exit 1
   fi
 
-  # Stop calibration load
+  # Stop calibration load and wait for requests to drain
   just stop-nyann
+  echo "Waiting 30s for requests to drain..."
+  sleep 30
 
   SWEEP_MIN=$(echo "scale=0; $MAX_C / 10" | bc)
   SWEEP_MAX=$MAX_C
@@ -619,6 +621,11 @@ calibrate CONCURRENCY ISL OSL DURATION='600' KV_INTERVAL='0.5':
 stop-calibrate:
   just stop-nyann
   @echo "Stopped."
+
+# Run KV cache calibration sweep across P/D configs
+# Example: just sweep "1,2,1,4;1,4,1,8" 500 1500 256 60s
+sweep CONFIGS ISL='500' OSL='1500' CALIB_CONCURRENCY='256' CALIB_DURATION='180s' OUTPUT='kv-sweep-results.csv' *ARGS='':
+  cd kv-sweep && go run . --configs "{{CONFIGS}}" --isl {{ISL}} --osl {{OSL}} --calibration-concurrency {{CALIB_CONCURRENCY}} --calibration-duration {{CALIB_DURATION}} --output "{{OUTPUT}}" {{ARGS}}
 
 NYANN_BENCH_DIR := env("NYANN_BENCH_DIR", "")
 EVAL_BASE_URL := env("EVAL_BASE_URL", "")

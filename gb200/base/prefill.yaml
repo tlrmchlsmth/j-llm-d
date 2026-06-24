@@ -124,8 +124,9 @@ spec:
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$((START_RANK + R)) \
                   FLASH_ATTENTION_CUTE_DSL_CACHE_DIR=${FLASH_ATTENTION_CUTE_DSL_CACHE_DIR}/prefill_rank$((START_RANK + R)) \
                   TILELANG_CACHE_DIR=${TILELANG_CACHE_DIR}/prefill_rank$((START_RANK + R)) \
-                  CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
+                  vllm serve \
                     deepseek-ai/DeepSeek-V4-Pro \
+                    --device-ids $GPUS \
                     --load-format auto \
                     --disable-uvicorn-access-log \
                     --port $((8000 + R)) \

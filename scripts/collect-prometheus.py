@@ -122,14 +122,18 @@ def hq_by_rank(quantile: float, metric: str, pod_sel: str, rate_win: str = RATE_
             f'sum(rate({metric}{pod_sel}[{rate_win}])) by (le, pod, rank))')
 
 
-def build_per_rank_range_defs(p: str, p_prefill: str | None = None) -> list[tuple[str, str]]:
+def build_per_rank_range_defs(p: str,
+                              p_prefill: str | None = None,
+                              p_decode: str | None = None) -> list[tuple[str, str]]:
     """Per-pod/rank range queries for load-vs-latency correlation.
 
     Returns time series grouped by (pod, rank) so values can be aligned
     to any expert-load dump step via its timestamp.
 
-    *p_prefill* is the prefill-only pod selector for prefill-specific metrics.
+    *p_prefill* / *p_decode* are role-specific pod selectors for metrics
+    that only make sense on one side of a P/D split.
     """
+    rw = RANGE_RATE_WIN
     defs = []
     for prefix, metric in [
         ("e2e", "vllm:e2e_request_latency_seconds_bucket"),
@@ -142,19 +146,18 @@ def build_per_rank_range_defs(p: str, p_prefill: str | None = None) -> list[tupl
                          hq_by_rank(float(pct), metric, p)))
     defs.append((
         "per_rank_gen_tokens_per_sec_range",
-        f"sum(rate(vllm:generation_tokens_total{p}[{RANGE_RATE_WIN}])) by (pod, rank)",
+        f"sum(rate(vllm:generation_tokens_total{p}[{rw}])) by (pod, rank)",
     ))
 
-    # Prefill per-rank metrics (keyed as per_rank_prefill_*_range to work
-    # with plot_per_rank_comparison(metric="prefill_*"))
+    # -- Prefill per-rank metrics
     pp = p_prefill or p
     defs.append((
         "per_rank_prefill_prompt_tokens_per_sec_range",
-        f"sum(rate(vllm:prompt_tokens_total{pp}[{RANGE_RATE_WIN}])) by (pod, rank)",
+        f"sum(rate(vllm:prompt_tokens_total{pp}[{rw}])) by (pod, rank)",
     ))
     defs.append((
         "per_rank_prefill_gen_tokens_per_sec_range",
-        f"sum(rate(vllm:generation_tokens_total{pp}[{RANGE_RATE_WIN}])) by (pod, rank)",
+        f"sum(rate(vllm:generation_tokens_total{pp}[{rw}])) by (pod, rank)",
     ))
     defs.append((
         "per_rank_prefill_requests_running_range",
@@ -178,6 +181,79 @@ def build_per_rank_range_defs(p: str, p_prefill: str | None = None) -> list[tupl
             f"per_rank_prefill_time_{label}_range",
             hq_by_rank(float(pct), "vllm:request_prefill_time_seconds_bucket", pp),
         ))
+
+    # -- Decode per-rank metrics (mirrors prefill set above)
+    pd = p_decode or p
+    defs.append((
+        "per_rank_decode_gen_tokens_per_sec_range",
+        f"sum(rate(vllm:generation_tokens_total{pd}[{rw}])) by (pod, rank)",
+    ))
+    defs.append((
+        "per_rank_decode_requests_running_range",
+        f"vllm:num_requests_running{pd}",
+    ))
+    defs.append((
+        "per_rank_decode_requests_waiting_range",
+        f"vllm:num_requests_waiting{pd}",
+    ))
+    defs.append((
+        "per_rank_decode_kv_cache_usage_range",
+        f"vllm:kv_cache_usage_perc{pd}",
+    ))
+    for pct in ["0.5", "0.99"]:
+        label = {"0.5": "p50", "0.99": "p99"}[pct]
+        defs.append((
+            f"per_rank_decode_iteration_tokens_{label}_range",
+            hq_by_rank(float(pct), "vllm:iteration_tokens_total_bucket", pd),
+        ))
+
+    # -- DeepEP/MoE per-rank timing (decode) — aggregated across layers
+    defs.extend([
+        ("per_rank_decode_deepep_dispatch_duration_rate_range",
+         f"sum(rate(vllm:deepep_dispatch_duration_seconds_sum{pd}[{rw}])) by (pod, rank)"),
+        ("per_rank_decode_deepep_combine_duration_rate_range",
+         f"sum(rate(vllm:deepep_combine_duration_seconds_sum{pd}[{rw}])) by (pod, rank)"),
+        ("per_rank_decode_moe_expert_compute_duration_rate_range",
+         f"sum(rate(vllm:moe_expert_compute_duration_seconds_sum{pd}[{rw}])) by (pod, rank)"),
+    ])
+
+    # -- DeepEP/MoE per-rank timing (prefill) — aggregated across layers
+    defs.extend([
+        ("per_rank_prefill_deepep_dispatch_duration_rate_range",
+         f"sum(rate(vllm:deepep_dispatch_duration_seconds_sum{pp}[{rw}])) by (pod, rank)"),
+        ("per_rank_prefill_deepep_combine_duration_rate_range",
+         f"sum(rate(vllm:deepep_combine_duration_seconds_sum{pp}[{rw}])) by (pod, rank)"),
+        ("per_rank_prefill_moe_expert_compute_duration_rate_range",
+         f"sum(rate(vllm:moe_expert_compute_duration_seconds_sum{pp}[{rw}])) by (pod, rank)"),
+    ])
+
+    # -- DeepEP/MoE per-rank histogram_quantile p50/p99 (summed over layers)
+    for role_sel, role_prefix in [(pd, "decode"), (pp, "prefill")]:
+        for metric, prefix in [
+            ("vllm:deepep_dispatch_duration_seconds_bucket", f"{role_prefix}_deepep_dispatch"),
+            ("vllm:deepep_combine_duration_seconds_bucket", f"{role_prefix}_deepep_combine"),
+            ("vllm:moe_expert_compute_duration_seconds_bucket", f"{role_prefix}_moe_expert_compute"),
+        ]:
+            for pct in ["0.5", "0.99"]:
+                label = {"0.5": "p50", "0.99": "p99"}[pct]
+                defs.append((
+                    f"per_rank_{prefix}_{label}_range",
+                    f"histogram_quantile({pct}, sum(rate({metric}{role_sel}[{rw}])) by (le, pod, rank))",
+                ))
+
+    # -- DeepEP/MoE per-rank-per-layer histogram_quantile p50/p99
+    for role_sel, role_prefix in [(pd, "decode"), (pp, "prefill")]:
+        for metric, prefix in [
+            ("vllm:deepep_dispatch_duration_seconds_bucket", f"{role_prefix}_deepep_dispatch"),
+            ("vllm:deepep_combine_duration_seconds_bucket", f"{role_prefix}_deepep_combine"),
+            ("vllm:moe_expert_compute_duration_seconds_bucket", f"{role_prefix}_moe_expert_compute"),
+        ]:
+            for pct in ["0.5", "0.99"]:
+                label = {"0.5": "p50", "0.99": "p99"}[pct]
+                defs.append((
+                    f"per_rank_{prefix}_{label}_per_layer_range",
+                    f"histogram_quantile({pct}, sum(rate({metric}{role_sel}[{rw}])) by (le, layer, pod, rank))",
+                ))
 
     return defs
 
@@ -307,13 +383,90 @@ def build_instant_defs(p: str, rate_win: str = RATE_WIN,
         defs.append((f"prefill_iteration_tokens_{label}",
                      hq(float(pct), "vllm:iteration_tokens_total_bucket", pp, rate_win)))
 
+    # -- Decode-specific latency histograms
+    for pct in ["0.5", "0.99"]:
+        label = {"0.5": "p50", "0.99": "p99"}[pct]
+        defs.append((f"decode_ttft_{label}",
+                     hq(float(pct), "vllm:time_to_first_token_seconds_bucket", pd, rate_win)))
+        defs.append((f"decode_prefill_time_{label}",
+                     hq(float(pct), "vllm:request_prefill_time_seconds_bucket", pd, rate_win)))
+        defs.append((f"decode_inference_time_{label}",
+                     hq(float(pct), "vllm:request_inference_time_seconds_bucket", pd, rate_win)))
+
+    # -- Prefill-specific latency histograms
+    for pct in ["0.5", "0.99"]:
+        label = {"0.5": "p50", "0.99": "p99"}[pct]
+        defs.append((f"prefill_ttft_{label}",
+                     hq(float(pct), "vllm:time_to_first_token_seconds_bucket", pp, rate_win)))
+        defs.append((f"prefill_prefill_time_{label}",
+                     hq(float(pct), "vllm:request_prefill_time_seconds_bucket", pp, rate_win)))
+        defs.append((f"prefill_inference_time_{label}",
+                     hq(float(pct), "vllm:request_inference_time_seconds_bucket", pp, rate_win)))
+
+    # -- Inference time (time in RUNNING phase) — global
+    for pct in ["0.5", "0.95", "0.99"]:
+        label = {"0.5": "p50", "0.95": "p95", "0.99": "p99"}[pct]
+        defs.append((f"inference_time_{label}",
+                     hq(float(pct), "vllm:request_inference_time_seconds_bucket", p, rate_win)))
+
+    # -- TPOT (mean time per output token per request) — global
+    for pct in ["0.5", "0.95", "0.99"]:
+        label = {"0.5": "p50", "0.95": "p95", "0.99": "p99"}[pct]
+        defs.append((f"tpot_{label}",
+                     hq(float(pct), "vllm:request_time_per_output_token_seconds_bucket", p, rate_win)))
+
+    # -- External prefix cache efficiency (NIXL-side KV reuse on decode)
+    defs.extend([
+        ("external_prefix_cache_queries_rate",
+         f"sum(rate(vllm:external_prefix_cache_queries_total{p}[{rate_win}]))"),
+        ("external_prefix_cache_hits_rate",
+         f"sum(rate(vllm:external_prefix_cache_hits_total{p}[{rate_win}]))"),
+    ])
+
+    # -- DeepEP dispatch/combine and MoE expert compute timing (global, summed across layers)
+    defs.extend([
+        ("deepep_dispatch_duration_rate",
+         f"sum(rate(vllm:deepep_dispatch_duration_seconds_sum{p}[{rate_win}]))"),
+        ("deepep_combine_duration_rate",
+         f"sum(rate(vllm:deepep_combine_duration_seconds_sum{p}[{rate_win}]))"),
+        ("moe_expert_compute_duration_rate",
+         f"sum(rate(vllm:moe_expert_compute_duration_seconds_sum{p}[{rate_win}]))"),
+    ])
+
+    # -- DeepEP/MoE timing (decode-only, summed across layers)
+    defs.extend([
+        ("decode_deepep_dispatch_duration_rate",
+         f"sum(rate(vllm:deepep_dispatch_duration_seconds_sum{pd}[{rate_win}]))"),
+        ("decode_deepep_combine_duration_rate",
+         f"sum(rate(vllm:deepep_combine_duration_seconds_sum{pd}[{rate_win}]))"),
+        ("decode_moe_expert_compute_duration_rate",
+         f"sum(rate(vllm:moe_expert_compute_duration_seconds_sum{pd}[{rate_win}]))"),
+    ])
+
+    # -- DeepEP/MoE timing (prefill-only, summed across layers)
+    defs.extend([
+        ("prefill_deepep_dispatch_duration_rate",
+         f"sum(rate(vllm:deepep_dispatch_duration_seconds_sum{pp}[{rate_win}]))"),
+        ("prefill_deepep_combine_duration_rate",
+         f"sum(rate(vllm:deepep_combine_duration_seconds_sum{pp}[{rate_win}]))"),
+        ("prefill_moe_expert_compute_duration_rate",
+         f"sum(rate(vllm:moe_expert_compute_duration_seconds_sum{pp}[{rate_win}]))"),
+    ])
+
     return defs
 
 
-def build_range_defs(p: str, nyann_p: str) -> list[tuple[str, str]]:
-    """Return (key, promql) pairs for range queries."""
+def build_range_defs(p: str, nyann_p: str,
+                     p_decode: str | None = None,
+                     p_prefill: str | None = None) -> list[tuple[str, str]]:
+    """Return (key, promql) pairs for range queries.
+
+    *p_decode* / *p_prefill* are role-specific pod selectors.  When provided,
+    the function emits additional ``decode_*_range`` and ``prefill_*_range``
+    series so that each side can be analyzed independently.
+    """
     rw = RANGE_RATE_WIN
-    return [
+    defs = [
         ("gen_tokens_per_sec_range", f"sum(rate(vllm:generation_tokens_total{p}[{rw}]))"),
         ("prompt_tokens_per_sec_range", f"sum(rate(vllm:prompt_tokens_total{p}[{rw}]))"),
         ("ttft_p99_range", hq(0.99, "vllm:time_to_first_token_seconds_bucket", p, rw)),
@@ -325,14 +478,121 @@ def build_range_defs(p: str, nyann_p: str) -> list[tuple[str, str]]:
         ("kv_cache_usage_range", f"avg(vllm:kv_cache_usage_perc{p})"),
         ("nyann_concurrency_range", f"avg(nyann_concurrency{nyann_p})"),
         ("nyann_stage_range", f"max(nyann_stage{nyann_p})"),
-        # Batch size per step over time
         ("iteration_tokens_p99_range", hq(0.99, "vllm:iteration_tokens_total_bucket", p, rw)),
-        # NIXL transfer throughput over time
         ("nixl_bytes_p99_range", hq(0.99, "vllm:nixl_bytes_transferred_bucket", p, rw)),
         ("nixl_xfer_time_p99_range", hq(0.99, "vllm:nixl_xfer_time_seconds_bucket", p, rw)),
-        # Preemption rate over time
         ("preemptions_range", f"sum(rate(vllm:num_preemptions_total{p}[{rw}]))"),
+        # Additional shared range queries
+        ("nixl_xfer_time_p50_range", hq(0.50, "vllm:nixl_xfer_time_seconds_bucket", p, rw)),
+        ("nixl_post_time_p99_range", hq(0.99, "vllm:nixl_post_time_seconds_bucket", p, rw)),
+        ("queue_time_p99_range", hq(0.99, "vllm:request_queue_time_seconds_bucket", p, rw)),
+        ("inference_time_p99_range", hq(0.99, "vllm:request_inference_time_seconds_bucket", p, rw)),
+        ("isl_p50_range", hq(0.50, "vllm:request_prompt_tokens_bucket", p, rw)),
+        ("isl_p99_range", hq(0.99, "vllm:request_prompt_tokens_bucket", p, rw)),
+        ("osl_p50_range", hq(0.50, "vllm:request_generation_tokens_bucket", p, rw)),
+        ("osl_p99_range", hq(0.99, "vllm:request_generation_tokens_bucket", p, rw)),
     ]
+
+    # -- Decode-specific range queries
+    pd = p_decode or p
+    pd_base = pd.rstrip("}")
+    defs.extend([
+        ("decode_gen_tokens_per_sec_range", f"sum(rate(vllm:generation_tokens_total{pd}[{rw}]))"),
+        ("decode_prompt_tokens_per_sec_range", f"sum(rate(vllm:prompt_tokens_total{pd}[{rw}]))"),
+        ("decode_requests_running_range", f"sum(vllm:num_requests_running{pd})"),
+        ("decode_requests_waiting_range", f"sum(vllm:num_requests_waiting{pd})"),
+        ("decode_kv_cache_usage_range", f"avg(vllm:kv_cache_usage_perc{pd})"),
+        ("decode_iteration_tokens_p99_range", hq(0.99, "vllm:iteration_tokens_total_bucket", pd, rw)),
+        ("decode_itl_p99_range", hq(0.99, "vllm:inter_token_latency_seconds_bucket", pd, rw)),
+        ("decode_decode_time_p99_range", hq(0.99, "vllm:request_decode_time_seconds_bucket", pd, rw)),
+        ("decode_osl_p50_range", hq(0.50, "vllm:request_generation_tokens_bucket", pd, rw)),
+        ("decode_osl_p99_range", hq(0.99, "vllm:request_generation_tokens_bucket", pd, rw)),
+    ])
+    for source in ["local_compute", "local_cache_hit", "external_kv_transfer"]:
+        defs.append((
+            f"decode_prompt_tokens_{source}_rate_range",
+            f'sum(rate(vllm:prompt_tokens_by_source_total{pd_base},source="{source}"' + '}' + f'[{rw}]))',
+        ))
+
+    # -- Prefill-specific range queries
+    pp = p_prefill or p
+    defs.extend([
+        ("prefill_prompt_tokens_per_sec_range", f"sum(rate(vllm:prompt_tokens_total{pp}[{rw}]))"),
+        ("prefill_gen_tokens_per_sec_range", f"sum(rate(vllm:generation_tokens_total{pp}[{rw}]))"),
+        ("prefill_requests_running_range", f"sum(vllm:num_requests_running{pp})"),
+        ("prefill_requests_waiting_range", f"sum(vllm:num_requests_waiting{pp})"),
+        ("prefill_kv_cache_usage_range", f"avg(vllm:kv_cache_usage_perc{pp})"),
+        ("prefill_iteration_tokens_p99_range", hq(0.99, "vllm:iteration_tokens_total_bucket", pp, rw)),
+        ("prefill_prefill_time_p99_range", hq(0.99, "vllm:request_prefill_time_seconds_bucket", pp, rw)),
+    ])
+
+    # -- DeepEP/MoE timing range queries (global, summed across layers)
+    defs.extend([
+        ("deepep_dispatch_duration_rate_range",
+         f"sum(rate(vllm:deepep_dispatch_duration_seconds_sum{p}[{rw}]))"),
+        ("deepep_combine_duration_rate_range",
+         f"sum(rate(vllm:deepep_combine_duration_seconds_sum{p}[{rw}]))"),
+        ("moe_expert_compute_duration_rate_range",
+         f"sum(rate(vllm:moe_expert_compute_duration_seconds_sum{p}[{rw}]))"),
+    ])
+
+    # -- DeepEP/MoE timing range queries (decode, summed across layers)
+    defs.extend([
+        ("decode_deepep_dispatch_duration_rate_range",
+         f"sum(rate(vllm:deepep_dispatch_duration_seconds_sum{pd}[{rw}]))"),
+        ("decode_deepep_combine_duration_rate_range",
+         f"sum(rate(vllm:deepep_combine_duration_seconds_sum{pd}[{rw}]))"),
+        ("decode_moe_expert_compute_duration_rate_range",
+         f"sum(rate(vllm:moe_expert_compute_duration_seconds_sum{pd}[{rw}]))"),
+    ])
+
+    # -- DeepEP/MoE timing range queries (prefill, summed across layers)
+    defs.extend([
+        ("prefill_deepep_dispatch_duration_rate_range",
+         f"sum(rate(vllm:deepep_dispatch_duration_seconds_sum{pp}[{rw}]))"),
+        ("prefill_deepep_combine_duration_rate_range",
+         f"sum(rate(vllm:deepep_combine_duration_seconds_sum{pp}[{rw}]))"),
+        ("prefill_moe_expert_compute_duration_rate_range",
+         f"sum(rate(vllm:moe_expert_compute_duration_seconds_sum{pp}[{rw}]))"),
+    ])
+
+    # -- DeepEP/MoE per-layer range queries (decode, one series per layer)
+    for metric, prefix in [
+        ("vllm:deepep_dispatch_duration_seconds_sum", "decode_deepep_dispatch"),
+        ("vllm:deepep_combine_duration_seconds_sum", "decode_deepep_combine"),
+        ("vllm:moe_expert_compute_duration_seconds_sum", "decode_moe_expert_compute"),
+    ]:
+        defs.append((
+            f"{prefix}_per_layer_range",
+            f"sum(rate({metric}{pd}[{rw}])) by (layer)",
+        ))
+
+    # -- DeepEP/MoE per-layer range queries (prefill, one series per layer)
+    for metric, prefix in [
+        ("vllm:deepep_dispatch_duration_seconds_sum", "prefill_deepep_dispatch"),
+        ("vllm:deepep_combine_duration_seconds_sum", "prefill_deepep_combine"),
+        ("vllm:moe_expert_compute_duration_seconds_sum", "prefill_moe_expert_compute"),
+    ]:
+        defs.append((
+            f"{prefix}_per_layer_range",
+            f"sum(rate({metric}{pp}[{rw}])) by (layer)",
+        ))
+
+    # -- DeepEP/MoE per-layer histogram_quantile p50/p99 (summed over ranks)
+    for role_sel, role_prefix in [(pd, "decode"), (pp, "prefill")]:
+        for metric, prefix in [
+            ("vllm:deepep_dispatch_duration_seconds_bucket", f"{role_prefix}_deepep_dispatch"),
+            ("vllm:deepep_combine_duration_seconds_bucket", f"{role_prefix}_deepep_combine"),
+            ("vllm:moe_expert_compute_duration_seconds_bucket", f"{role_prefix}_moe_expert_compute"),
+        ]:
+            for pct in ["0.5", "0.99"]:
+                label = {"0.5": "p50", "0.99": "p99"}[pct]
+                defs.append((
+                    f"{prefix}_{label}_per_layer_range",
+                    f"histogram_quantile({pct}, sum(rate({metric}{role_sel}[{rw}])) by (le, layer))",
+                ))
+
+    return defs
 
 
 # ---------------------------------------------------------------------------
@@ -412,48 +672,29 @@ def detect_stages(
     if prev_stage is not None and seg_start is not None:
         segments.append((prev_stage, seg_start, stage_vals[-1][0]))
 
-    # Trim everything before the last warmup→sweep boundary.
-    # nyann resets concurrency to near-zero between warmup and the first
-    # sweep step.  We look for the last dip that is followed by a recovery
-    # (not the final shutdown dip at the very end of the benchmark).
-    WARMUP_DIP_THRESHOLD = 100
-    last_dip_ts = None
-    for i, (ts, conc) in enumerate(conc_vals):
-        if conc < WARMUP_DIP_THRESHOLD:
-            has_recovery = any(c >= WARMUP_DIP_THRESHOLD
-                               for _, c in conc_vals[i + 1:])
-            if has_recovery:
-                last_dip_ts = ts
-    if last_dip_ts is not None:
-        # Find where concurrency first reaches SWEEP_MIN after the dip
-        # to skip the warmup ramp-up.
-        sweep_min = int(config.get("SWEEP_MIN", 0))
-        trim_ts = last_dip_ts
-        if sweep_min:
-            for ts, conc in conc_vals:
-                if ts > last_dip_ts and conc >= sweep_min:
-                    trim_ts = ts
+    # Trim warmup: find the last time concurrency reaches SWEEP_MIN and
+    # use that as the start of stage 0.  This handles both the warmup
+    # ramp-up and any stale data from previous benchmark runs.
+    sweep_min = int(config.get("SWEEP_MIN", 0))
+    if sweep_min and conc_vals:
+        # Walk backwards to find the last ramp-up to SWEEP_MIN — that's
+        # where the final benchmark's stage 0 actually begins.
+        sweep_start_ts = None
+        for i in range(len(conc_vals) - 1, -1, -1):
+            ts, conc = conc_vals[i]
+            if conc >= sweep_min:
+                # Check if the previous sample was below SWEEP_MIN (ramp-up crossing)
+                if i == 0 or conc_vals[i - 1][1] < sweep_min:
+                    sweep_start_ts = ts
                     break
-        before = len(segments)
-        segments = [(idx, max(s, trim_ts), e)
-                    for idx, s, e in segments if e > trim_ts]
-        if before != len(segments) or segments:
-            print(f"  Trimmed warmup/stale data: kept {len(segments)}/{before} segments "
-                  f"(dip at {last_dip_ts:.0f}, sweep start at {trim_ts:.0f})")
-    else:
-        # Fallback: trim a fixed warmup duration from stage 0 when no
-        # concurrency dip is detected (older benchmark runs).
-        # Only trim if stage 0 is much longer than subsequent stages,
-        # indicating it genuinely contains warmup ramp-up.
-        warmup_dur = int(config.get("WARMUP_DURATION", 300))
-        if len(segments) >= 2:
-            s0_dur = segments[0][2] - segments[0][1]
-            s1_dur = segments[1][2] - segments[1][1]
-            if s0_dur > s1_dur + warmup_dur:
-                s0 = segments[0]
-                segments[0] = (s0[0], s0[1] + warmup_dur, s0[2])
-                print(f"  Trimmed {warmup_dur}s warmup from stage 0 "
-                      f"({s0_dur:.0f}s -> {s0_dur - warmup_dur:.0f}s)")
+        if sweep_start_ts is not None:
+            before = len(segments)
+            segments = [(idx, max(s, sweep_start_ts), e)
+                        for idx, s, e in segments if e > sweep_start_ts]
+            trimmed = before - len(segments)
+            if trimmed or (segments and segments[0][1] == sweep_start_ts):
+                print(f"  Trimmed warmup: stage 0 starts at {sweep_start_ts:.0f} "
+                      f"(concurrency reaches {sweep_min})")
 
     # Deduplicate: merge consecutive segments with the same stage index
     if segments:
@@ -518,7 +759,18 @@ def main():
 
     now = int(time.time())
     end_ts = int(config.get("PROM_END_TS", now))
-    start_ts = int(config.get("PROM_START_TS", end_ts - 7200))
+    # Prefer BENCH_LAUNCHED_AT over PROM_START_TS (pod creation) to avoid
+    # picking up stale data from previous benchmark runs on the same pod.
+    bench_launched = config.get("BENCH_LAUNCHED_AT")
+    if bench_launched:
+        from datetime import datetime, timezone
+        try:
+            start_ts = int(datetime.fromisoformat(bench_launched).timestamp())
+            print(f"Using BENCH_LAUNCHED_AT ({bench_launched}) as query start")
+        except ValueError:
+            start_ts = int(config.get("PROM_START_TS", end_ts - 7200))
+    else:
+        start_ts = int(config.get("PROM_START_TS", end_ts - 7200))
     duration = end_ts - start_ts
 
     print(f"Deploy: {deploy}")
@@ -574,7 +826,8 @@ def main():
     tasks: list[tuple[str, Callable[[], dict]]] = []
 
     # Range queries
-    range_defs = build_range_defs(p, nyann_load_p)
+    range_defs = build_range_defs(p, nyann_load_p,
+                                  p_decode=p_decode, p_prefill=p_prefill)
     tasks.extend([
         (k, lambda q=v: prom_query_range(q, range_start, range_end))
         for k, v in range_defs
@@ -599,7 +852,8 @@ def main():
         ])
 
     # Per-rank range queries
-    per_rank_defs = build_per_rank_range_defs(p, p_prefill=p_prefill)
+    per_rank_defs = build_per_rank_range_defs(p, p_prefill=p_prefill,
+                                              p_decode=p_decode)
     tasks.extend([
         (k, lambda q=v: prom_query_range(q, range_start, range_end))
         for k, v in per_rank_defs

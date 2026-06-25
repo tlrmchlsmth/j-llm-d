@@ -200,6 +200,7 @@ VLLM_DEV_BRANCH := "main"
 VLLM_BUILD_JOBS := "16"
 
 VLLM_IMAGE := env("VLLM_IMAGE", "ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091")
+SIDECAR_IMAGE := env("SIDECAR_IMAGE", "ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf")
 FORK_REPO := env("FORK_REPO", "")
 FORK_BRANCH := env("FORK_BRANCH", "")
 
@@ -249,6 +250,8 @@ _render-manifests MODE DEV_VENV='':
   : "${EPLB_LOG_BALANCEDNESS:=true}"
   : "${EPLB_LOG_BALANCEDNESS_INTERVAL:=}"
   : "${EPLB_EXPERT_LOAD_DUMP_DIR=/mnt/lustre/{{NAME_PREFIX}}/eplb-dumps/{{DEPLOY_NAME}}}"
+  : "${DECODE_GPU_MEMORY_UTILIZATION:=0.75}"
+  : "${PREFILL_GPU_MEMORY_UTILIZATION:=0.85}"
   : "${PREFIX_CACHING:=true}"
   : "${PREFILL_EPLB_ENABLED:=false}"
   : "${PREFILL_EPLB_NUM_REDUNDANT_EXPERTS:=${EPLB_NUM_REDUNDANT_EXPERTS}}"
@@ -303,6 +306,8 @@ _render-manifests MODE DEV_VENV='':
           -e "s|EPLB_INITIAL_DELAY_PLACEHOLDER|\"${EPLB_INITIAL_DELAY}\"|g" \
           -e "s|EPLB_EXPERT_LOAD_DUMP_DIR_PLACEHOLDER|${EPLB_EXPERT_LOAD_DUMP_DIR:+${EPLB_EXPERT_LOAD_DUMP_DIR}/$DEPLOY_TS}|g" \
           -e "s|PREFIX_CACHING_PLACEHOLDER|\"${PREFIX_CACHING}\"|g" \
+          -e "s|DECODE_GPU_MEMORY_UTILIZATION_PLACEHOLDER|${DECODE_GPU_MEMORY_UTILIZATION}|g" \
+          -e "s|PREFILL_GPU_MEMORY_UTILIZATION_PLACEHOLDER|${PREFILL_GPU_MEMORY_UTILIZATION}|g" \
           -e "s|DECODE_VLLM_MOE_ROUTING_SIMULATION_STRATEGY_PLACEHOLDER|\"${DECODE_VLLM_MOE_ROUTING_SIMULATION_STRATEGY}\"|g" \
           -e "s|PREFILL_VLLM_MOE_ROUTING_SIMULATION_STRATEGY_PLACEHOLDER|\"${PREFILL_VLLM_MOE_ROUTING_SIMULATION_STRATEGY}\"|g" \
           -e "s|BUILD_DEEPEP_WHEEL_PLACEHOLDER|${BUILD_DEEPEP_WHEEL}|g" \
@@ -611,6 +616,21 @@ cache-model:
   {{KN}} rollout status daemonset/model-cache --timeout=30m
   echo "All nodes cached. Cleaning up DaemonSet..."
   {{KN}} delete daemonset model-cache
+
+preload-images:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{KN}} delete daemonset image-preload --ignore-not-found=true
+  export VLLM_IMAGE="{{VLLM_IMAGE}}"
+  export SIDECAR_IMAGE="{{SIDECAR_IMAGE}}"
+  envsubst '${VLLM_IMAGE} ${SIDECAR_IMAGE}' < {{GB200_DIR}}/image-preload-ds.yaml | {{KN}} apply -f -
+  echo "Pulling images (vllm={{VLLM_IMAGE}}, sidecar={{SIDECAR_IMAGE}})..."
+  {{KN}} rollout status daemonset/image-preload --timeout=30m
+  echo "All nodes have images cached."
+
+# Stop the image preload DaemonSet
+stop-preload-images:
+  {{KN}} delete daemonset image-preload --ignore-not-found=true
 
 # Flush vLLM/FlashInfer compile caches on Lustre (run after image or config changes)
 flush-cache:
@@ -940,7 +960,7 @@ SWEEP_STEPS := env("SWEEP_STEPS", "10")
 WARMUP_CONCURRENCY := env("WARMUP_CONCURRENCY", "128")
 
 # Collect benchmark results into benchmarks/eplb/<RUN_NAME>/
-eplb-collect RUN_NAME DATASET=BENCH_DATASET:
+eplb-collect RUN_NAME DATASET=BENCH_DATASET SIDECAR_LOGS='false':
   #!/usr/bin/env bash
   set -euo pipefail
   OUT_DIR="{{EPLB_RESULTS_DIR}}/{{RUN_NAME}}"
@@ -1077,14 +1097,34 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
     for ROLE in decode prefill; do
       ROLE_LOG_DIR="${LUSTRE_BASE}/${ROLE}"
       if {{KN}} exec "$LUSTRE_POD" $LUSTRE_CTR_FLAG -- test -d "$ROLE_LOG_DIR" 2>/dev/null; then
+        REMOTE_COUNT=$({{KN}} exec "$LUSTRE_POD" $LUSTRE_CTR_FLAG -- find "$ROLE_LOG_DIR" -name '*.log' 2>/dev/null | wc -l | tr -d ' ')
         mkdir -p "$OUT_DIR/eplb-logs/$ROLE"
         {{KN}} exec "$LUSTRE_POD" $LUSTRE_CTR_FLAG -- tar cf - -C "$LUSTRE_BASE" "$ROLE" 2>/dev/null \
           | tar xf - -C "$OUT_DIR/eplb-logs/$ROLE" --strip-components=1 2>/dev/null \
           || echo "Failed to copy $ROLE logs"
         FILE_COUNT=$(find "$OUT_DIR/eplb-logs/$ROLE" -name '*.log' 2>/dev/null | wc -l | tr -d ' ')
-        echo "Copied $FILE_COUNT $ROLE log(s)"
+        echo "Copied $FILE_COUNT / $REMOTE_COUNT $ROLE log(s)"
+        if [ "$FILE_COUNT" -gt 0 ] && [ "$FILE_COUNT" -eq "$REMOTE_COUNT" ]; then
+          {{KN}} exec "$LUSTRE_POD" $LUSTRE_CTR_FLAG -- find "$ROLE_LOG_DIR" -name '*.log' -delete 2>/dev/null \
+            && echo "Cleaned $ROLE logs from Lustre" \
+            || echo "WARNING: Failed to clean $ROLE logs from Lustre"
+        fi
       fi
     done
+
+    if [ "{{SIDECAR_LOGS}}" = "true" ]; then
+      echo "Collecting sidecar logs via kubectl logs..."
+      mkdir -p "$OUT_DIR/eplb-logs/sidecar"
+      for POD in $({{KN}} get pods -l llm-d.ai/role=decode -o name 2>/dev/null); do
+        POD_NAME=$(basename "$POD")
+        for RANK in 0 1 2 3; do
+          {{KN}} logs "$POD_NAME" -c "routing-proxy-rank${RANK}" \
+            > "$OUT_DIR/eplb-logs/sidecar/${POD_NAME}_rank${RANK}.log" 2>&1 || true
+        done
+      done
+      SIDECAR_COUNT=$(find "$OUT_DIR/eplb-logs/sidecar" -name '*.log' -size +0c 2>/dev/null | wc -l | tr -d ' ')
+      echo "Copied $SIDECAR_COUNT sidecar log(s)"
+    fi
 
     echo "[4/4] Copying expert load dumps from Lustre..."
     bash scripts/download-dumps.sh "$OUT_DIR" "$LUSTRE_POD" || echo "WARNING: Expert load dump download failed — re-run with: just eplb-collect-dumps {{RUN_NAME}}"
@@ -1096,7 +1136,7 @@ eplb-collect RUN_NAME DATASET=BENCH_DATASET:
   echo "=== Done. Results collected in $OUT_DIR/ ==="
   echo "  config.env       - deployment configuration"
   echo "  prometheus.json   - Prometheus metric snapshots"
-  echo "  eplb-logs/        - decode + prefill pod logs from Lustre"
+  echo "  eplb-logs/        - decode + prefill pod logs from Lustre, sidecar logs via kubectl"
   echo "  expert-load/      - expert load balance snapshots (JSON)"
 
 # Re-collect Prometheus metrics for an existing run (reads timestamps from config.env)

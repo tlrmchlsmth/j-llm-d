@@ -13,6 +13,7 @@ spec:
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
+    restartPolicy: None
     size: DECODE_LWS_SIZE_PLACEHOLDER
     workerTemplate:
       metadata:
@@ -27,6 +28,8 @@ spec:
         hostIPC: true
         hostPID: true
         terminationGracePeriodSeconds: 0
+        nodeSelector:
+          oci.oraclecloud.com/rack-name: oci-bth-aiaccelerator-prd005-hpc-rack-1
         volumes:
           - name: dshm
             emptyDir:
@@ -50,9 +53,9 @@ spec:
           - name: compute-domain-channel
             resourceClaimTemplateName: llm-d-dev-claim
         initContainers:
-          # Sidecar image from https://github.com/llm-d/llm-d-inference-scheduler/pull/746
-          # (hot-path perf optimizations: connection pooling, LRU cache, alloc reduction)
+          # Sidecar image: v0.8.0 + prefill retry (feat/sidecar-prefill-retry branch)
           - name: routing-proxy-rank0
+            # image: quay.io/rh-ee-imarkov/llm-d-routing-sidecar:prefill-retry
             image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
             imagePullPolicy: Always
             args:
@@ -60,6 +63,7 @@ spec:
               - --vllm-port=8200
               - --secure-proxy=false
               - --connector=nixlv2
+              # - --prefill-max-retries=2
             ports:
               - containerPort: 8000
                 name: proxy-rank0
@@ -69,6 +73,7 @@ spec:
             securityContext:
               allowPrivilegeEscalation: false
           - name: routing-proxy-rank1
+            # image: quay.io/rh-ee-imarkov/llm-d-routing-sidecar:prefill-retry
             image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
             imagePullPolicy: Always
             args:
@@ -76,6 +81,7 @@ spec:
               - --vllm-port=8201
               - --secure-proxy=false
               - --connector=nixlv2
+              # - --prefill-max-retries=2
             ports:
               - containerPort: 8001
                 name: proxy-rank1
@@ -85,6 +91,7 @@ spec:
             securityContext:
               allowPrivilegeEscalation: false
           - name: routing-proxy-rank2
+            # image: quay.io/rh-ee-imarkov/llm-d-routing-sidecar:prefill-retry
             image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
             imagePullPolicy: Always
             args:
@@ -92,6 +99,7 @@ spec:
               - --vllm-port=8202
               - --secure-proxy=false
               - --connector=nixlv2
+              # - --prefill-max-retries=2
             ports:
               - containerPort: 8002
                 name: proxy-rank2
@@ -101,6 +109,7 @@ spec:
             securityContext:
               allowPrivilegeEscalation: false
           - name: routing-proxy-rank3
+            # image: quay.io/rh-ee-imarkov/llm-d-routing-sidecar:prefill-retry
             image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
             imagePullPolicy: Always
             args:
@@ -108,6 +117,7 @@ spec:
               - --vllm-port=8203
               - --secure-proxy=false
               - --connector=nixlv2
+              # - --prefill-max-retries=2
             ports:
               - containerPort: 8003
                 name: proxy-rank3
@@ -260,6 +270,13 @@ spec:
                 env | sort
                 echo "=== END DECODE ENV ==="
 
+                # # Background memory monitor (logs to Lustre via tee)
+                # (while true; do
+                #   echo "=== MEM $(date -Iseconds) cgroup=$(cat /sys/fs/cgroup/memory.current 2>/dev/null || echo N/A) ==="
+                #   ps aux --sort=-%mem | head -15
+                #   sleep 30
+                # done) &
+
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
                   GPU_START=$((R * TP_SIZE))
                   GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
@@ -279,7 +296,7 @@ spec:
                     --data-parallel-rpc-port 5555 \
                     --trust-remote-code \
                     ${KV_TRANSFER_CONFIG:+--kv_transfer_config "$KV_TRANSFER_CONFIG"} \
-                    --gpu-memory-utilization 0.75 \
+                    --gpu-memory-utilization DECODE_GPU_MEMORY_UTILIZATION_PLACEHOLDER \
                     --max-num-batched-tokens $MAX_TOKENS \
                     --max-num-seqs $MAX_TOKENS \
                     --disable_cascade_attn \
@@ -288,15 +305,17 @@ spec:
                     --all2all-backend "${A2A_BACKEND}" \
                     --async-scheduling \
                     --api-server-count 4 \
-                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
                     $EPLB_ARGS ${EPLB_JSON:-} \
                     $PREFIX_CACHE_ARG \
                     --kv-cache-dtype fp8 \
+                    --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
                     --enable-sleep-mode \
                     --enable-force-include-usage &
                 done
                 
                     # --all2all-backend "flashinfer_nvlink_one_sided" \
+                    # --compilation_config '{"cudagraph_mode": "FULL_DECODE_ONLY"}' \
+                    # --enforce-eager \
 
                     #--all2all-backend "deepep_low_latency" \
                     ########
@@ -321,6 +340,9 @@ spec:
               - name: TQDM_DISABLE
                 value: "1"
 
+              # - name: VLLM_MOE_TIMING_ENABLED
+              #   value: "1"
+
               # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)
               - name: VLLM_DEV_VENV
                 value: VLLM_DEV_VENV_PLACEHOLDER
@@ -335,7 +357,8 @@ spec:
                 value: "0"
 
               - name: MAX_TOKENS
-                value: "1560"
+                # value: "1560"
+                value: "1024"
 
               # Startup profiling (set DECODE_ENABLE_PROFILING=1 to activate)
               - name: ENABLE_PROFILING
@@ -425,6 +448,11 @@ spec:
               - name: NVSHMEM_DISABLE_CUDA_VMM
                 value: "0"
 
+              # - name: NVSHMEM_DEBUG
+              #   value: "TRACE"
+              # - name: NVSHMEM_DEBUG_FILE
+              #   value: "LUSTRE_PREFIX_PLACEHOLDER/logs/decode/nvshmem_%p.log"
+
               # UCX configuration for NIXL - use only working InfiniBand devices
               # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
               - name: UCX_NET_DEVICES
@@ -447,13 +475,8 @@ spec:
               - name: VLLM_ENGINE_READY_TIMEOUT_S
                 value: "1800"
               
-              # Debug logging
               - name: VLLM_LOGGING_LEVEL
                 value: INFO
-              #- name: NCCL_DEBUG
-              #  value: "TRACE"
-              #- name: NVSHMEM_DEBUG
-              #  value: INFO
 
               # KV_TRANSFER_CONFIG and VLLM_NIXL_SIDE_CHANNEL_HOST are
               # added by overlays (pd vs decode-bench use different connectors)
@@ -524,9 +547,9 @@ spec:
             resources:
               requests:
                 cpu: 100m
-                memory: 256Mi
+                memory: 1Gi
               limits:
-                memory: 256Mi
+                memory: 1Gi
             securityContext:
               allowPrivilegeEscalation: false
           - name: node-exporter

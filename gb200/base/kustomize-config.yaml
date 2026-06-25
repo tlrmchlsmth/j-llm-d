@@ -4,3 +4,9 @@ nameReference:
   - kind: LeaderWorkerSet
     group: leaderworkerset.x-k8s.io
     path: spec/leaderWorkerTemplate/workerTemplate/spec/serviceAccountName
+- kind: ConfigMap
+  version: v1
+  fieldSpecs:
+  - kind: LeaderWorkerSet
+    group: leaderworkerset.x-k8s.io
+    path: spec/leaderWorkerTemplate/workerTemplate/spec/volumes/configMap/name

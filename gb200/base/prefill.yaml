@@ -13,6 +13,7 @@ spec:
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
+    restartPolicy: None
     size: PREFILL_LWS_SIZE_PLACEHOLDER
     workerTemplate:
       metadata:
@@ -27,6 +28,8 @@ spec:
         hostIPC: true
         hostPID: true
         terminationGracePeriodSeconds: 0
+        nodeSelector:
+          oci.oraclecloud.com/rack-name: oci-bth-aiaccelerator-prd005-hpc-rack-1
         volumes:
           - name: dshm
             emptyDir:
@@ -153,7 +156,7 @@ spec:
                   EPLB_DUMP_DIR="${EPLB_EXPERT_LOAD_DUMP_DIR:-}"
                   DUMP_DIR_JSON=""
                   if [ -n "$EPLB_DUMP_DIR" ]; then
-                    EPLB_DUMP_DIR="${EPLB_DUMP_DIR}/prefill"
+                    EPLB_DUMP_DIR="${EPLB_DUMP_DIR}/prefill/${LWS_LEADER_ADDRESS%%.*}"
                     mkdir -p "$EPLB_DUMP_DIR"
                     DUMP_DIR_JSON=",\"expert_load_dump_dir\":\"${EPLB_DUMP_DIR}\""
                   fi
@@ -170,9 +173,23 @@ spec:
                   PREFIX_CACHE_ARG="--no-prefix-caching"
                 fi
 
+                # DeepEP NUM_MAX_NVL_PEERS=8: internode_dispatch is used for >8 ranks
+                # and requires RDMA buffers, so disable FORCE_INTRA_NODE in that case
+                if [ "$VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE" = "1" ] && [ $DP_SIZE -gt 8 ]; then
+                  echo "WARNING: Disabling VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE because DP_SIZE=$DP_SIZE > 8 (DeepEP NUM_MAX_NVL_PEERS limit)"
+                  export VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE=0
+                fi
+
                 echo "=== PREFILL ENV ($(hostname)) ==="
                 env | sort
                 echo "=== END PREFILL ENV ==="
+
+                # # Background memory monitor (logs to Lustre via tee)
+                # (while true; do
+                #   echo "=== MEM $(date -Iseconds) cgroup=$(cat /sys/fs/cgroup/memory.current 2>/dev/null || echo N/A) ==="
+                #   ps aux --sort=-%mem | head -15
+                #   sleep 30
+                # done) &
 
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
                   GPU_START=$((R * TP_SIZE))
@@ -194,7 +211,7 @@ spec:
                     $DP_FLAGS $RANK_FLAGS \
                     --trust-remote-code \
                     ${KV_TRANSFER_CONFIG:+--kv_transfer_config "$KV_TRANSFER_CONFIG"} \
-                    --gpu-memory-utilization 0.85 \
+                    --gpu-memory-utilization PREFILL_GPU_MEMORY_UTILIZATION_PLACEHOLDER \
                     --max-num-batched-tokens 4096 \
                     --max-num-seqs 1024 \
                     --max-cudagraph-capture-size 4096 \
@@ -228,6 +245,8 @@ spec:
                 value: "1"
               - name: TQDM_DISABLE
                 value: "1"
+              # - name: VLLM_MOE_TIMING_ENABLED
+              #   value: "1"  
 
               # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)
               - name: VLLM_DEV_VENV
@@ -328,18 +347,20 @@ spec:
               #   value: "y"
               # - name: UCX_LOG_LEVEL
               #   value: "debug"
+              # - name: UCX_LOG_FILE
+              #   value: "LUSTRE_PREFIX_PLACEHOLDER/logs/prefill/ucx_%h_%p.log"
+
+
+              # Keep-alive timeout (default 5s; diagnostic: raised to 120s to test RST hypothesis)
+              - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+                value: "120"
 
               # Engine startup timeout (default 600s, increase for large models over network storage)
               - name: VLLM_ENGINE_READY_TIMEOUT_S
                 value: "1800"
 
-              # Debug logging
               - name: VLLM_LOGGING_LEVEL
                 value: INFO
-              #- name: NCCL_DEBUG
-              #  value: "TRACE"
-              #- name: NVSHMEM_DEBUG
-              #  value: INFO
 
               # KV_TRANSFER_CONFIG and VLLM_NIXL_SIDE_CHANNEL_HOST are
               # added by overlays (pd vs decode-bench use different connectors)
@@ -411,9 +432,9 @@ spec:
             resources:
               requests:
                 cpu: 100m
-                memory: 256Mi
+                memory: 1Gi
               limits:
-                memory: 256Mi
+                memory: 1Gi
             securityContext:
               allowPrivilegeEscalation: false
           - name: node-exporter

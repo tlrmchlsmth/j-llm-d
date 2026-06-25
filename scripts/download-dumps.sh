@@ -32,6 +32,23 @@ echo "Dump base:  $DUMP_BASE"
 echo "Dump TS:    $(basename "$DUMP_DIR")"
 echo
 
+# Flatten per-host subdirs (prefill/<hostname>/*.jsonl) into role dir with
+# hostname-prefixed filenames so eplb_analysis glob finds them.
+flatten_host_dump_dirs() {
+  local dst="$1"
+  local subdir host f base
+  for subdir in "$dst"/*/; do
+    [ -d "$subdir" ] || continue
+    host=$(basename "$subdir")
+    for f in "$subdir"*.json "$subdir"*.jsonl; do
+      [ -e "$f" ] || continue
+      base=$(basename "$f")
+      mv "$f" "$dst/${host}_${base}"
+    done
+    rmdir "$subdir" 2>/dev/null || true
+  done
+}
+
 for ROLE in decode prefill; do
   SRC="$DUMP_DIR/$ROLE"
   DST="$RUN_DIR/expert-load/$ROLE"
@@ -66,6 +83,7 @@ for ROLE in decode prefill; do
   echo "  Extracting..."
   tar xzf "$LOCAL_TGZ" -C "$DST"
   rm -f "$LOCAL_TGZ"
+  flatten_host_dump_dirs "$DST"
 
   kubectl -n "$NS" exec "$LUSTRE_POD" -- rm -f "$REMOTE_TGZ"
   echo "  $(find "$DST" -name '*.json*' | wc -l | tr -d ' ') file(s)"

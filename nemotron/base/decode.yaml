@@ -49,7 +49,7 @@ spec:
             resourceClaimTemplateName: llm-d-dev-claim
         initContainers:
           - name: routing-proxy
-            image: ghcr.io/tlrmchlsmth/llm-d-routing-sidecar:perf
+            image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.8.0
             imagePullPolicy: Always
             args:
               - --port=8000
@@ -61,7 +61,13 @@ spec:
                 name: proxy
                 protocol: TCP
             restartPolicy: Always
-            resources: {}
+            resources:
+              limits:
+                cpu: 8
+                memory: 16Gi
+              requests:
+                cpu: 8
+                memory: 16Gi
             securityContext:
               allowPrivilegeEscalation: false
         containers:
@@ -101,7 +107,7 @@ spec:
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
                   echo "Using dev venv at ${VLLM_DEV_VENV}"
                   source "${VLLM_DEV_VENV}/bin/activate"
-                else
+                elif [ -f /opt/vllm/bin/activate ]; then
                   source /opt/vllm/bin/activate
                 fi
 
@@ -118,7 +124,6 @@ spec:
 
                 vllm serve $PROFILER_ARGS \
                   nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 \
-                  --served-model-name NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 \
                   --disable-uvicorn-access-log \
                   --port 8200 \
                   --tensor-parallel-size $TP_SIZE \
@@ -135,12 +140,13 @@ spec:
                   --max-num-batched-tokens $MAX_TOKENS \
                   --max-num-seqs $MAX_TOKENS \
                   --async-scheduling \
-                  --mamba-backend flashinfer \
+                  --mamba-backend triton \
                   --mamba-ssm-cache-dtype float16 \
                   --enable-flashinfer-autotune \
                   --all2all-backend "flashinfer_nvlink_one_sided" \
-                  --kv-cache-dtype fp8 \
+                  --no-enable-prefix-caching \
                   --enable-force-include-usage \
+                  --kv-cache-dtype fp8 \
                   --reasoning-parser nemotron_v3
 
             env:
@@ -198,6 +204,8 @@ spec:
               - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
                 value: "1"
               - name: VLLM_USE_DEEP_GEMM
+                value: "1"
+              - name: VLLM_COMPUTE_NANS_IN_LOGITS
                 value: "1"
               - name: NVIDIA_GDRCOPY
                 value: enabled

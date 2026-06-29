@@ -19,6 +19,37 @@ MONITORING_DIR := "monitoring"
 default:
   just --list
 
+# Tear down the vLLM deployment and associated resources
+teardown:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "Tearing down {{DEPLOY_NAME}}..."
+
+  # Delete LWS (LeaderWorkerSet) pods
+  {{KN}} delete lws {{DEPLOY_NAME}}-decode --ignore-not-found=true --grace-period=0 --force &
+  {{KN}} delete lws {{DEPLOY_NAME}}-prefill --ignore-not-found=true --grace-period=0 --force &
+
+  # Delete gateway resources
+  {{KN}} delete httproute {{DEPLOY_NAME}}-route --ignore-not-found=true &
+  {{KN}} delete gateway {{DEPLOY_NAME}}-inference-gateway --ignore-not-found=true &
+  {{KN}} delete service {{DEPLOY_NAME}}-inference-gateway-istio --ignore-not-found=true &
+  {{KN}} delete configmap {{DEPLOY_NAME}}-gateway-options --ignore-not-found=true &
+  {{KN}} delete destinationrule {{DEPLOY_NAME}}-infpool-backend --ignore-not-found=true &
+
+  # Delete benchmark jobs
+  {{KN}} delete job -l app={{NAME_PREFIX}}-sharegpt-load --ignore-not-found=true &
+  {{KN}} delete job -l app={{NAME_PREFIX}}-nyann-eval --ignore-not-found=true &
+
+  # Delete InferencePool via helm
+  helm uninstall {{DEPLOY_NAME}}-infpool -n {{NAMESPACE}} 2>/dev/null || true &
+
+  wait
+
+  # Delete service account
+  {{KN}} delete sa {{DEPLOY_NAME}} --ignore-not-found=true
+
+  echo "Teardown complete."
+
 @print-gpus:
   kubectl get pods -A -o json | jq -r ' \
     .items \
@@ -628,13 +659,71 @@ stop-calibrate:
 sweep CONFIGS ISL='500' OSL='1500' CALIB_CONCURRENCY='256' CALIB_DURATION='180s' OUTPUT='kv-sweep-results.csv' *ARGS='':
   cd kv-sweep && go run . --configs "{{CONFIGS}}" --isl {{ISL}} --osl {{OSL}} --calibration-concurrency {{CALIB_CONCURRENCY}} --calibration-duration {{CALIB_DURATION}} --output "{{OUTPUT}}" --namespace {{NAMESPACE}} --deploy-name {{DEPLOY_NAME}} --name-prefix {{NAME_PREFIX}} --vllm-image "{{VLLM_IMAGE}}" --nyann-bench "{{NYANN_BENCH_DIR}}/nyann-bench" --eval-base-url "{{EVAL_BASE_URL}}" --lustre-data "{{LUSTRE_DATA}}" --nyann-image-tag "{{NYANN_IMAGE_TAG}}" {{ARGS}}
 
-# Build, copy, and run KV sweep on the poker pod (survives laptop disconnect)
+# Teardown + launch KV sweep on poker pod (survives laptop disconnect)
+# Example: just sweep-analyze "2,1,1,1;2,1,1,2" eplb-sweep
+sweep-analyze CONFIGS NAME ISL='500' OSL='1500' CALIB_CONCURRENCY='256' CALIB_DURATION='180s' *ARGS='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  echo "=== Cleaning up any leftover deployment ==="
+  just teardown || true
+
+  echo "=== Running sweep → {{NAME}}.csv ==="
+  just sweep-remote "{{CONFIGS}}" {{ISL}} {{OSL}} {{CALIB_CONCURRENCY}} {{CALIB_DURATION}} "{{NAME}}.csv" {{ARGS}}
+
+  echo ""
+  echo "When complete, analyze with:"
+  echo "  just analyze {{NAME}}"
+
+# Analyze on poker pod + copy results + plot locally
+# Example: just analyze eplb-sweep
+analyze NAME:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  SWEEP_CSV="{{NAME}}.csv"
+  ANALYSIS_CSV="{{NAME}}-analysis.csv"
+  POD=$(kubectl get pods -n {{NAMESPACE}} -l app=poker -o name | head -1 | cut -d/ -f2)
+
+  echo "=== Building kv-sweep on poker pod ==="
+  (cd kv-sweep && tar -cf - go.mod *.go) | {{KN}} exec -i $POD -- tar -xf - -C /tmp/sweep/kv-sweep-src
+  {{KN}} exec $POD -- bash -c 'cd /tmp/sweep/kv-sweep-src && CGO_ENABLED=0 go build -o /tmp/sweep/kv-sweep .'
+
+  echo "=== Analyzing $SWEEP_CSV on poker pod ==="
+  {{KN}} exec $POD -- /tmp/sweep/kv-sweep \
+    --analyze /tmp/sweep/$SWEEP_CSV \
+    --analyze-output /tmp/sweep/$ANALYSIS_CSV \
+    --prometheus-url http://prometheus-server.{{NAMESPACE}}.svc.cluster.local:80 \
+    --deploy-name {{DEPLOY_NAME}}
+
+  echo "=== Copying results ==="
+  kubectl cp {{NAMESPACE}}/$POD:/tmp/sweep/$ANALYSIS_CSV ./kv-sweep/$ANALYSIS_CSV
+
+  echo "=== Plotting ==="
+  (cd kv-sweep && python3 plot_pareto.py ./$ANALYSIS_CSV)
+
+  echo "=== Done: kv-sweep/$ANALYSIS_CSV ==="
+
+# Re-plot from existing analysis CSV (no Prometheus needed)
+# Example: just plot eplb-sweep
+plot NAME:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  ANALYSIS_CSV="{{NAME}}-analysis.csv"
+  if [[ ! -f "kv-sweep/$ANALYSIS_CSV" ]]; then
+    echo "kv-sweep/$ANALYSIS_CSV not found — run 'just analyze {{NAME}}' first"
+    exit 1
+  fi
+  (cd kv-sweep && python3 plot_pareto.py ./$ANALYSIS_CSV)
+  echo "=== Done: kv-sweep/pareto.html ==="
+
 # Example: just sweep-remote "2,1,1,1;2,1,1,2;2,1,1,4" 500 1500 256 180s
 sweep-remote CONFIGS ISL='500' OSL='1500' CALIB_CONCURRENCY='256' CALIB_DURATION='180s' OUTPUT='kv-sweep-results.csv' *ARGS='':
   #!/usr/bin/env bash
   set -euo pipefail
 
   echo "=== Pre-rendering kustomize manifests ==="
+  mkdir -p kv-sweep/manifests
   printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamePrefix: NAME_PREFIX_PLACEHOLDER-\nresources:\n  - overlays/pd-custom\n' > {{NEMOTRON_DIR}}/kustomization.yaml
   kubectl kustomize {{NEMOTRON_DIR}}/ > kv-sweep/manifests/lws.yaml
   rm {{NEMOTRON_DIR}}/kustomization.yaml

@@ -20,6 +20,19 @@ gb200/kustomization.yaml
 results-*/
 guide-llm-results/
 traces/
+kv-sweep-results*.csv
+kv-sweep-analysis*.csv
+
+# Generated plots
+*.png
+*.svg
+
+# Go binaries
+kv-sweep/kv-sweep
+kv-sweep/kv-sweep-linux
+
+# Pre-rendered manifests (generated at runtime by Justfile)
+kv-sweep/manifests/
 
 # Python
 __pycache__/
@@ -45,3 +58,4 @@ logs/
 
 # Local scripts (may contain IPs, credentials, etc.)
 local/
+imgui.ini

@@ -1,11 +1,10 @@
-# InferencePool for GB200 P/D (Prefill/Decode disaggregated)
-# Full P/D routing with prefix-cache, active-request, and queue scoring
-
 inferenceExtension:
   replicas: 1
   image:
-    name: llm-d-inference-scheduler
     hub: ghcr.io/llm-d
+    name: llm-d-inference-scheduler
+    registry: ghcr.io
+    repository: llm-d/llm-d-inference-scheduler
     tag: v0.8.0
   extProcPort: 9002
   monitoring:
@@ -20,6 +19,8 @@ inferenceExtension:
           - key: kubernetes.io/arch
             operator: In
             values: ["amd64"]
+  flags:
+    v: 0
   resources:
     requests:
       cpu: "8"
@@ -33,10 +34,10 @@ inferenceExtension:
       apiVersion: inference.networking.x-k8s.io/v1alpha1
       kind: EndpointPickerConfig
       plugins:
-      - type: passthrough-parser
       - type: disagg-headers-handler
       - type: prefill-filter
       - type: decode-filter
+      - type: prefix-cache-scorer
       - type: active-request-scorer
       - type: queue-scorer
       - type: always-disagg-pd-decider
@@ -57,6 +58,8 @@ inferenceExtension:
       - name: prefill
         plugins:
         - pluginRef: prefill-filter
+        - pluginRef: prefix-cache-scorer
+          weight: 3
         - pluginRef: active-request-scorer
           weight: 2
         - pluginRef: queue-scorer
@@ -68,8 +71,6 @@ inferenceExtension:
         - pluginRef: active-request-scorer
           weight: 2
         - pluginRef: decode-picker
-      parser:
-        pluginRef: passthrough-parser
 
 inferencePool:
   name: ${DEPLOY_NAME}-infpool
@@ -81,6 +82,7 @@ inferencePool:
       llm-d.ai/model: NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
       llm-d.ai/deployment: pd
       llm-d.ai/owner: ${OWNER}
+
 provider:
   name: istio
   istio:
@@ -88,8 +90,8 @@ provider:
       host: ${DEPLOY_NAME}-infpool-epp
       trafficPolicy:
         tls:
-          mode: SIMPLE
           insecureSkipVerify: true
+          mode: SIMPLE
         connectionPool:
           http:
             http1MaxPendingRequests: 256000

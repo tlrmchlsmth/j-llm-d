@@ -41,6 +41,9 @@ def test_dp_ports_feed_container_readiness_and_inferencepool():
     assert "localhost:8000" in readiness
     assert "localhost:8003" in readiness
     assert [p["number"] for p in infpool["spec"]["targetPorts"]] == [8000, 8001, 8002, 8003]
+    script = container["args"][0]
+    assert "DP_SIZE=16" in script
+    assert "DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))" not in script
 
 
 def test_no_dp_qwen_uses_single_port_and_no_dp_flags():

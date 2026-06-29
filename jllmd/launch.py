@@ -63,7 +63,7 @@ def build_launch_script(
     if role.data_parallel.enabled:
         lines += [
             f"DP_SIZE_LOCAL={layout.dp_local_size}",
-            "DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))",
+            f"DP_SIZE={layout.dp_world_size}",
             "START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))",
         ]
     else:

@@ -82,20 +82,9 @@ class RoleSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_parallelism(self) -> "RoleSpec":
-        if self.tensor_parallel_size <= self.gpus_per_pod:
-            local_tp_size = self.tensor_parallel_size
-        else:
-            if self.tensor_parallel_size % self.lws.size != 0:
-                raise ValueError("tensor_parallel_size must divide evenly across LWS nodes")
-            local_tp_size = self.tensor_parallel_size // self.lws.size
-        if local_tp_size < 1 or local_tp_size > self.gpus_per_pod:
-            raise ValueError("derived local TP size must fit within gpus_per_pod")
-        if self.gpus_per_pod % local_tp_size != 0:
-            raise ValueError("gpus_per_pod must be divisible by derived local TP size")
-        if self.data_parallel.enabled:
-            assert self.data_parallel.local_size is not None
-            if self.data_parallel.local_size * local_tp_size != self.gpus_per_pod:
-                raise ValueError("data_parallel.local_size * local_tp_size must equal gpus_per_pod")
+        from .parallelism import parallel_layout
+
+        parallel_layout(self)
         return self
 
 

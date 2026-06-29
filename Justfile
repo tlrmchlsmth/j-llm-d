@@ -15,26 +15,25 @@ DEV_POD_NAME := NAME_PREFIX + "-vllm-dev"
 GB200_DIR := "gb200"
 DEV_DIR := "dev"
 MONITORING_DIR := "monitoring"
-SPEC_DEFAULT := "configs/deepseek-r1-gb200-pd.yaml"
 
 default:
   just --list
 
 # === v2 spec-based renderer ===
 
-render SPEC=SPEC_DEFAULT:
+render SPEC:
   uv run j-llm-d render {{SPEC}} --user {{NAME_PREFIX}}
 
-render-routing SPEC=SPEC_DEFAULT:
+render-routing SPEC:
   uv run j-llm-d render-routing {{SPEC}} --user {{NAME_PREFIX}}
 
-start SPEC=SPEC_DEFAULT:
+start SPEC:
   uv run j-llm-d render {{SPEC}} --user {{NAME_PREFIX}} | {{KN}} apply -f -
 
-deploy-routing SPEC=SPEC_DEFAULT:
+deploy-routing SPEC:
   uv run j-llm-d render-routing {{SPEC}} --user {{NAME_PREFIX}} | {{KN}} apply -f -
 
-stop SPEC=SPEC_DEFAULT NOW='false':
+stop SPEC NOW='false':
   #!/usr/bin/env bash
   set -euo pipefail
   FORCE=""
@@ -43,7 +42,7 @@ stop SPEC=SPEC_DEFAULT NOW='false':
   fi
   uv run j-llm-d render {{SPEC}} --user {{NAME_PREFIX}} | {{KN}} delete -f - --ignore-not-found=true $FORCE
 
-restart SPEC=SPEC_DEFAULT:
+restart SPEC:
   #!/usr/bin/env bash
   set -euo pipefail
   INSTANCE=$(uv run j-llm-d instance-id {{SPEC}} --user {{NAME_PREFIX}})
@@ -54,7 +53,7 @@ restart SPEC=SPEC_DEFAULT:
   just start {{SPEC}}
 
 # Wait for the v2-rendered stack to be ready.
-ready SPEC=SPEC_DEFAULT:
+ready SPEC:
   #!/usr/bin/env bash
   set -euo pipefail
   INSTANCE=$(uv run j-llm-d instance-id {{SPEC}} --user {{NAME_PREFIX}})
@@ -72,7 +71,7 @@ ready SPEC=SPEC_DEFAULT:
   done
   echo "Ready."
 
-flush-cache SPEC=SPEC_DEFAULT:
+flush-cache SPEC:
   #!/usr/bin/env bash
   set -euo pipefail
   CACHE_PATH=$(uv run j-llm-d cache-path {{SPEC}} --user {{NAME_PREFIX}})

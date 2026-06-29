@@ -30,6 +30,7 @@ inferenceExtension:
       cpu: "8"
       memory: 16Gi
     limits:
+      cpu: "8"
       memory: 16Gi
   pluginsConfigFile: "pd-config.yaml"
   pluginsCustomConfig:

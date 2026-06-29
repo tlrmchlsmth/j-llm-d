@@ -1,4 +1,4 @@
-# InferencePool for GB200 pure decode benchmark
+# InferencePool for GB200 aggregated inference (no P/D disaggregation)
 # Random routing (no load-aware scoring)
 
 inferenceExtension:
@@ -52,7 +52,7 @@ inferencePool:
     matchLabels:
       llm-d.ai/inferenceServing: "true"
       llm-d.ai/model: DeepSeek-V4-Pro
-      llm-d.ai/deployment: decode-bench
+      llm-d.ai/deployment: agg
       llm-d.ai/owner: ${OWNER}
 
 provider:

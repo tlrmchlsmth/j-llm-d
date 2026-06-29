@@ -1,5 +1,5 @@
-# InferencePool for GB200 pure decode benchmark
-# Random routing (no load-aware scoring)
+# InferencePool for GB200 aggregated inference (no P/D disaggregation)
+# Load-aware routing via active-request + queue scoring
 
 inferenceExtension:
   replicas: 1
@@ -22,6 +22,8 @@ inferenceExtension:
           - key: kubernetes.io/arch
             operator: In
             values: ["amd64"]
+  flags:
+    v: 0
   resources:
     requests:
       cpu: "8"
@@ -35,10 +37,18 @@ inferenceExtension:
       apiVersion: inference.networking.x-k8s.io/v1alpha1
       kind: EndpointPickerConfig
       plugins:
+      - type: active-request-scorer
+      - type: queue-scorer
       - type: weighted-random-picker
+        parameters:
+          threshold: 0.1
       schedulingProfiles:
       - name: default
         plugins:
+        - pluginRef: active-request-scorer
+          weight: 2
+        - pluginRef: queue-scorer
+          weight: 2
         - pluginRef: weighted-random-picker
 
 inferencePool:
@@ -52,7 +62,7 @@ inferencePool:
     matchLabels:
       llm-d.ai/inferenceServing: "true"
       llm-d.ai/model: DeepSeek-V4-Pro
-      llm-d.ai/deployment: decode-bench
+      llm-d.ai/deployment: agg
       llm-d.ai/owner: ${OWNER}
 
 provider:

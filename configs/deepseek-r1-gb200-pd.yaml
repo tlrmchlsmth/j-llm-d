@@ -1,12 +1,12 @@
 release: wide-ep
 cluster: gb200
+topology: pd
 
 model:
   id: deepseek-ai/DeepSeek-V4-Pro
   label: DeepSeek-V4-Pro
   image: quay.io/tms/vllm-deepseekv4-custom-deepep:latest
 
-topology: pd
 routing: {kind: pd, target_role: decode}
 runtime: {sidecars: [dcgm-exporter, node-exporter]}
 

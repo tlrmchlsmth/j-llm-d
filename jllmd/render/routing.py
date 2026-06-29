@@ -106,7 +106,7 @@ def render_routing(spec: DeploymentSpec, instance: Instance, cluster: Cluster) -
             "kind": "InferencePool",
             "metadata": {"name": infpool_name, "labels": instance.labels("routing")},
             "spec": {
-                "targetPorts": [{"number": port} for port in ports.public],
+                "targetPortNumber": ports.public[0],
                 "selector": selector,
                 "extensionRef": {"name": epp_name},
             },

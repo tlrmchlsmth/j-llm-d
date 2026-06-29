@@ -77,6 +77,8 @@ def _plugin_config(kind: RoutingKind) -> str:
 
 
 def render_routing(spec: DeploymentSpec, instance: Instance) -> list[dict]:
+    assert spec.routing.kind is not None
+    assert spec.routing.target_role is not None
     if spec.routing.kind == RoutingKind.DISABLED:
         return []
 

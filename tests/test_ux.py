@@ -3,7 +3,7 @@ from pathlib import Path
 from jllmd.cluster import get_cluster
 from jllmd.instance import Instance
 from jllmd.resolve import resolve_role
-from jllmd.spec import DpLoadBalancing, load_spec
+from jllmd.spec import DpLoadBalancing, RoutingKind, load_spec
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +45,8 @@ def test_pd_topology_adds_decode_routing_proxy_defaults():
     spec = load_spec(ROOT / "configs" / "deepseek-r1-gb200-pd.yaml")
     role = spec.role("decode")
 
+    assert spec.routing.kind == RoutingKind.PD
+    assert spec.routing.target_role == "decode"
     assert role.routing_sidecar is True
     assert role.serving_port_base == 8000
     assert role.backend_port_base == 8200

@@ -7,13 +7,20 @@ import sys
 from .render import render, render_to_yaml
 from .instance import Instance
 from .spec import load_spec
+from .warnings import collect_warnings
 
 
 def _render(args: argparse.Namespace, *, routing_only: bool = False) -> int:
     user = args.user or os.environ.get("USER") or "dev"
     spec = load_spec(args.spec)
+    _print_warnings(spec)
     sys.stdout.write(render_to_yaml(render(spec, user=user, routing_only=routing_only)))
     return 0
+
+
+def _print_warnings(spec) -> None:
+    for warning in collect_warnings(spec):
+        print(f"warning[{warning.code}]: {warning.message}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:

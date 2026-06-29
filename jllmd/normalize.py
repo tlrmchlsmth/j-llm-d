@@ -43,9 +43,9 @@ def _apply_parallelism_alias(role: dict[str, Any]) -> None:
         role.setdefault("data_parallel", {"enabled": False, "local_size": None})
     elif isinstance(dp, int):
         nodes = role.get("lws", {}).get("nodes", role.get("lws", {}).get("size", 1))
-        if dp % nodes != 0:
-            raise ValueError("parallelism.dp must divide evenly across LWS nodes")
-        role.setdefault("data_parallel", {"enabled": dp > 1, "local_size": dp // nodes if dp > 1 else None})
+        local_size = max(1, dp // nodes) if dp > 1 else None
+        role.setdefault("data_parallel", {"enabled": dp > 1, "local_size": local_size})
+        role.setdefault("vars", {})["dp_world_requested"] = dp
 
     if isinstance(parallelism.get("ep"), bool):
         role.setdefault("expert_parallel", {"enabled": parallelism["ep"]})

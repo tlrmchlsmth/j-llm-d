@@ -36,8 +36,6 @@ class DataParallelSpec(BaseModel):
     def validate_local_size(self) -> "DataParallelSpec":
         if self.enabled and (self.local_size is None or self.local_size < 1):
             raise ValueError("data_parallel.local_size is required when data_parallel.enabled is true")
-        if not self.enabled and self.local_size not in (None, 1):
-            raise ValueError("data_parallel.local_size must be omitted or 1 when DP is disabled")
         return self
 
 
@@ -88,13 +86,8 @@ class RoleSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_parallelism(self) -> "RoleSpec":
-        from .parallelism import parallel_layout
-
-        parallel_layout(self)
         if self.routing_sidecar and self.backend_port_base is None:
             self.backend_port_base = 8200
-        if self.routing_sidecar and self.dp_load_balancing != DpLoadBalancing.EXTERNAL:
-            raise ValueError("routing_sidecar requires dp_load_balancing: external")
         return self
 
 
@@ -120,10 +113,10 @@ class RuntimeSpec(BaseModel):
 
 
 class RoutingSpec(BaseModel):
-    kind: RoutingKind = RoutingKind.LOAD_AWARE
+    kind: RoutingKind | None = None
     epp_image: str = "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0"
     replicas: int = Field(1, ge=1)
-    target_role: str = "decode"
+    target_role: str | None = None
 
 
 class CacheSpec(BaseModel):
@@ -156,6 +149,10 @@ class DeploymentSpec(BaseModel):
 
     @model_validator(mode="after")
     def apply_topology_defaults(self) -> "DeploymentSpec":
+        if self.routing.kind is None:
+            self.routing.kind = RoutingKind.PD if self.topology == TopologyKind.PD else RoutingKind.LOAD_AWARE
+        if self.routing.target_role is None:
+            self.routing.target_role = "decode"
         if self.topology == TopologyKind.PD:
             decode = self.role("decode")
             decode.dp_load_balancing = DpLoadBalancing.EXTERNAL

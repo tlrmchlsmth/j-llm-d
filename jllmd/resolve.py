@@ -14,8 +14,9 @@ from .spec import DeploymentSpec, RoleSpec
 @dataclass(frozen=True)
 class ResolvedRole:
     ports: RolePorts
-    lustre_prefix: str
+    user_root: str
     cache_prefix: str
+    dev_source: str
     fabric_profile: str
     env: dict[str, str]
     vllm_args: dict[str, Any]
@@ -40,14 +41,17 @@ def resolve_role(spec: DeploymentSpec, instance: Instance, cluster: Cluster, rol
         expert_parallel=role.expert_parallel.enabled,
     )
 
-    cache_prefix = instance.lustre_path(
-        "jit-cache",
-        spec.cache.gpu_arch,
-        spec.cache.cuda,
-        spec.cache.vllm_version,
-        spec.release,
+    cache_prefix = cluster.cache_root(
+        user=instance.user_slug,
+        release=instance.release_slug,
+        gpu_arch=spec.cache.gpu_arch,
+        cuda=spec.cache.cuda,
+        vllm_version=spec.cache.vllm_version,
     )
-    env = _base_env(spec, instance, cache_prefix)
+    dev_venv = spec.runtime.dev_venv or (
+        cluster.dev_venv(user=instance.user_slug, release=instance.release_slug) if spec.runtime.dev else ""
+    )
+    env = _base_env(spec, cache_prefix, dev_venv=dev_venv)
     env |= cluster.fabric_env(fabric_profile, context)
     env |= spec.runtime.env
     env |= role.env
@@ -55,8 +59,9 @@ def resolve_role(spec: DeploymentSpec, instance: Instance, cluster: Cluster, rol
 
     return ResolvedRole(
         ports=ports,
-        lustre_prefix=instance.lustre_path(),
+        user_root=cluster.user_root(user=instance.user_slug, release=instance.release_slug),
         cache_prefix=cache_prefix,
+        dev_source=cluster.dev_source(user=instance.user_slug, release=instance.release_slug),
         fabric_profile=fabric_profile,
         env=env,
         vllm_args=role.vllm_args | computed_vllm_args,
@@ -82,10 +87,10 @@ def _variable_context(spec: DeploymentSpec, role: RoleSpec) -> dict[str, Any]:
     }
 
 
-def _base_env(spec: DeploymentSpec, instance: Instance, cache_prefix: str) -> dict[str, str]:
+def _base_env(spec: DeploymentSpec, cache_prefix: str, *, dev_venv: str) -> dict[str, str]:
     return {
         "HF_HOME": spec.model.hf_home,
-        "VLLM_DEV_VENV": spec.runtime.dev_venv or (instance.lustre_path("vllm-venv") if spec.runtime.dev else ""),
+        "VLLM_DEV_VENV": dev_venv,
         "VLLM_NO_USAGE_STATS": "1",
         "TQDM_DISABLE": "1",
         "VLLM_LOGGING_LEVEL": "INFO",

@@ -15,26 +15,26 @@ DEV_POD_NAME := NAME_PREFIX + "-vllm-dev"
 GB200_DIR := "gb200"
 DEV_DIR := "dev"
 MONITORING_DIR := "monitoring"
-CLUSTER_DEFAULT := "clusters/oci-gb200-osaka.yaml"
+CLUSTER := env("JLLMD_CLUSTER", "clusters/oci-gb200-osaka.yaml")
 
 default:
   just --list
 
 # === v2 spec-based renderer ===
 
-render SPEC CLUSTER=CLUSTER_DEFAULT:
-  uv run j-llm-d render {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}}
+render SPEC *ARGS='':
+  uv run j-llm-d render {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}} {{ARGS}}
 
-render-routing SPEC CLUSTER=CLUSTER_DEFAULT:
-  uv run j-llm-d render-routing {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}}
+render-routing SPEC *ARGS='':
+  uv run j-llm-d render-routing {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}} {{ARGS}}
 
-start SPEC CLUSTER=CLUSTER_DEFAULT:
-  uv run j-llm-d render {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}} | {{KN}} apply -f -
+start SPEC *ARGS='':
+  uv run j-llm-d render {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}} {{ARGS}} | {{KN}} apply -f -
 
-deploy-routing SPEC CLUSTER=CLUSTER_DEFAULT:
-  uv run j-llm-d render-routing {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}} | {{KN}} apply -f -
+deploy-routing SPEC *ARGS='':
+  uv run j-llm-d render-routing {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}} {{ARGS}} | {{KN}} apply -f -
 
-stop SPEC CLUSTER=CLUSTER_DEFAULT NOW='false':
+stop SPEC NOW='false':
   #!/usr/bin/env bash
   set -euo pipefail
   FORCE=""
@@ -43,7 +43,7 @@ stop SPEC CLUSTER=CLUSTER_DEFAULT NOW='false':
   fi
   uv run j-llm-d render {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}} | {{KN}} delete -f - --ignore-not-found=true $FORCE
 
-restart SPEC CLUSTER=CLUSTER_DEFAULT:
+restart SPEC *ARGS='':
   #!/usr/bin/env bash
   set -euo pipefail
   INSTANCE=$(uv run j-llm-d instance-id {{SPEC}} --user {{NAME_PREFIX}})
@@ -51,7 +51,7 @@ restart SPEC CLUSTER=CLUSTER_DEFAULT:
   {{KN}} delete pod -l app.kubernetes.io/instance=$INSTANCE --ignore-not-found=true --grace-period=0 --force &
   wait
   {{KN}} wait --for=delete pod -l app.kubernetes.io/instance=$INSTANCE --timeout=60s 2>/dev/null || true
-  just start {{SPEC}} {{CLUSTER}}
+  just start {{SPEC}} {{ARGS}}
 
 # Wait for the v2-rendered stack to be ready.
 ready SPEC:
@@ -72,10 +72,10 @@ ready SPEC:
   done
   echo "Ready."
 
-flush-cache SPEC CLUSTER=CLUSTER_DEFAULT:
+flush-cache SPEC *ARGS='':
   #!/usr/bin/env bash
   set -euo pipefail
-  CACHE_PATH=$(uv run j-llm-d cache-path {{SPEC}} --user {{NAME_PREFIX}})
+  CACHE_PATH=$(uv run j-llm-d cache-path {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}} {{ARGS}})
   {{KN}} exec {{DEV_POD_NAME}} -- bash -c "rm -rf '$CACHE_PATH' && echo 'Compile cache flushed: $CACHE_PATH'"
 
 @print-gpus:

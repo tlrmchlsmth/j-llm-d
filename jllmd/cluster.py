@@ -15,6 +15,10 @@ class Cluster:
     shm_size: str
     ucx_net_devices: str
     imex_resource_claim_template: str | None = None
+    user_root_template: str = "/mnt/lustre/{user}"
+    cache_root_template: str = "/mnt/lustre/{user}/jit-cache/{gpu_arch}/{cuda}/{vllm_version}/{release}"
+    dev_venv_template: str = "/mnt/lustre/{user}/vllm-venv"
+    dev_source_template: str = "/mnt/lustre/{user}/vllm-dev"
 
     def base_volumes(self) -> list[dict]:
         return [
@@ -31,6 +35,50 @@ class Cluster:
             {"name": "lustre", "mountPath": "/mnt/lustre"},
             {"name": "local-nvme", "mountPath": "/mnt/local"},
         ]
+
+    def user_root(self, *, user: str, release: str) -> str:
+        return self._format_path(self.user_root_template, user=user, release=release)
+
+    def cache_root(self, *, user: str, release: str, gpu_arch: str, cuda: str, vllm_version: str) -> str:
+        return self._format_path(
+            self.cache_root_template,
+            user=user,
+            release=release,
+            gpu_arch=gpu_arch,
+            cuda=cuda,
+            vllm_version=vllm_version,
+        )
+
+    def dev_venv(self, *, user: str, release: str) -> str:
+        return self._format_path(self.dev_venv_template, user=user, release=release)
+
+    def dev_source(self, *, user: str, release: str) -> str:
+        return self._format_path(self.dev_source_template, user=user, release=release)
+
+    def with_path_overrides(
+        self,
+        *,
+        user_root: str | None = None,
+        cache_root: str | None = None,
+        dev_venv: str | None = None,
+        dev_source: str | None = None,
+    ) -> "Cluster":
+        return Cluster(
+            name=self.name,
+            gpus_per_node=self.gpus_per_node,
+            lustre_pvc=self.lustre_pvc,
+            local_nvme_path=self.local_nvme_path,
+            shm_size=self.shm_size,
+            ucx_net_devices=self.ucx_net_devices,
+            imex_resource_claim_template=self.imex_resource_claim_template,
+            user_root_template=user_root or self.user_root_template,
+            cache_root_template=cache_root or self.cache_root_template,
+            dev_venv_template=dev_venv or self.dev_venv_template,
+            dev_source_template=dev_source or self.dev_source_template,
+        )
+
+    def _format_path(self, template: str, **values: str) -> str:
+        return template.format(**values)
 
     def fabric_profile_for(self, *, topology: str, role_name: str, expert_parallel: bool) -> str:
         if not expert_parallel:
@@ -76,6 +124,8 @@ class Cluster:
 def load_cluster(path: str | Path) -> Cluster:
     with Path(path).open("r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
+    paths = data.get("paths", {})
+    dev = data.get("dev", {})
     return Cluster(
         name=data["name"],
         gpus_per_node=int(data.get("gpus_per_node", 4)),
@@ -84,4 +134,11 @@ def load_cluster(path: str | Path) -> Cluster:
         shm_size=data.get("pod_defaults", {}).get("shm_size", "2Gi"),
         ucx_net_devices=data["fabric"]["ucx_net_devices"],
         imex_resource_claim_template=data["fabric"].get("imex_resource_claim_template"),
+        user_root_template=paths.get("user_root", "/mnt/lustre/{user}"),
+        cache_root_template=paths.get(
+            "cache_root",
+            "/mnt/lustre/{user}/jit-cache/{gpu_arch}/{cuda}/{vllm_version}/{release}",
+        ),
+        dev_venv_template=dev.get("venv", "/mnt/lustre/{user}/vllm-venv"),
+        dev_source_template=dev.get("source", "/mnt/lustre/{user}/vllm-dev"),
     )

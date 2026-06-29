@@ -27,13 +27,14 @@ def build_launch_script(
     role: RoleSpec,
     ports: RolePorts,
     *,
-    lustre_prefix: str,
+    user_root: str,
+    dev_source: str,
     vllm_args: dict[str, Any] | None = None,
 ) -> str:
     layout = parallel_layout(role)
     lines = [
         "set -euo pipefail",
-        f"LOG_DIR={shlex.quote(lustre_prefix + '/logs/' + role.name)}",
+        f"LOG_DIR={shlex.quote(user_root + '/logs/' + role.name)}",
         'mkdir -p "$LOG_DIR"',
         'LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"',
         'exec > >(tee -a "$LOG_FILE") 2>&1',
@@ -49,16 +50,22 @@ def build_launch_script(
         "  cd -",
         "fi",
         "",
-        f"find {shlex.quote(lustre_prefix + '/vllm-dev/vllm')} -name __pycache__ -type d -exec rm -rf {{}} + 2>/dev/null || true",
+        f"find {shlex.quote(dev_source + '/vllm')} -name __pycache__ -type d -exec rm -rf {{}} + 2>/dev/null || true",
         'if [ -n "${VLLM_DEV_VENV:-}" ] && [ -d "${VLLM_DEV_VENV}" ]; then',
         '  echo "Using dev venv at ${VLLM_DEV_VENV}"',
         '  source "${VLLM_DEV_VENV}/bin/activate"',
-        f"  export LD_LIBRARY_PATH=\"${{VLLM_DEV_VENV}}/lib/python3.12/site-packages/nvidia/nccl/lib:{lustre_prefix}/ucx-lib:${{VLLM_DEV_VENV}}/lib/python3.12/site-packages/nixl_cu13.libs:${{LD_LIBRARY_PATH:-}}\"",
         "elif [ -f /opt/vllm/bin/activate ]; then",
         "  source /opt/vllm/bin/activate",
         "fi",
         "",
     ]
+    hooks = [*spec.runtime.pre_launch, *role.pre_launch]
+    if hooks:
+        lines += [
+            "echo '=== Running pre-launch hooks ==='",
+            *hooks,
+            "",
+        ]
 
     if role.data_parallel.enabled:
         lines += [

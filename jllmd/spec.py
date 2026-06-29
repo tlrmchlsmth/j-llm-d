@@ -75,6 +75,7 @@ class RoleSpec(BaseModel):
     kv_transfer_config: dict[str, Any] | None = None
     vllm_args: dict[str, Any] = Field(default_factory=dict)
     env: dict[str, str] = Field(default_factory=dict)
+    pre_launch: list[str] = Field(default_factory=list)
     vars: dict[str, Any] = Field(default_factory=dict)
     computed: dict[str, dict[str, Any]] = Field(default_factory=dict)
     resources: ResourceSpec = Field(default_factory=ResourceSpec)
@@ -110,6 +111,7 @@ class RuntimeSpec(BaseModel):
     fork_repo: str = ""
     fork_branch: str = ""
     env: dict[str, str] = Field(default_factory=dict)
+    pre_launch: list[str] = Field(default_factory=list)
     sidecars: list[str] = Field(default_factory=lambda: ["dcgm-exporter", "node-exporter"])
 
 

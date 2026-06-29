@@ -8,6 +8,14 @@ storage:
 pod_defaults:
   shm_size: 2Gi
 
+paths:
+  user_root: /mnt/lustre/{user}
+  cache_root: /mnt/lustre/{user}/jit-cache/{gpu_arch}/{cuda}/{vllm_version}/{release}
+
+dev:
+  venv: /mnt/lustre/{user}/vllm-venv
+  source: /mnt/lustre/{user}/vllm-dev
+
 fabric:
   ucx_net_devices: mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1
   imex_resource_claim_template: llm-d-dev-claim

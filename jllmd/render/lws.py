@@ -66,7 +66,8 @@ def render_lws(spec: DeploymentSpec, instance: Instance, cluster: Cluster, role:
                 spec,
                 role,
                 resolved.ports,
-                lustre_prefix=resolved.lustre_prefix,
+                user_root=resolved.user_root,
+                dev_source=resolved.dev_source,
                 vllm_args=resolved.vllm_args,
             )
         ],

@@ -13,11 +13,29 @@ from .warnings import collect_warnings
 
 def _render(args: argparse.Namespace, *, routing_only: bool = False) -> int:
     user = args.user or os.environ.get("USER") or "dev"
-    cluster = load_cluster(args.cluster)
+    cluster = _load_cluster(args)
     spec = load_spec(args.spec, cluster)
+    _apply_runtime_overrides(spec, args)
     _print_warnings(spec)
     sys.stdout.write(render_to_yaml(render(spec, user=user, cluster=cluster, routing_only=routing_only)))
     return 0
+
+
+def _load_cluster(args: argparse.Namespace):
+    return load_cluster(args.cluster).with_path_overrides(
+        user_root=getattr(args, "user_root", None),
+        cache_root=getattr(args, "cache_root", None),
+        dev_venv=getattr(args, "dev_venv", None),
+        dev_source=getattr(args, "dev_source", None),
+    )
+
+
+def _apply_runtime_overrides(spec, args: argparse.Namespace) -> None:
+    if getattr(args, "dev", False):
+        spec.runtime.dev = True
+    if getattr(args, "dev_venv", None):
+        spec.runtime.dev_venv = args.dev_venv
+    spec.runtime.pre_launch.extend(getattr(args, "pre_launch", None) or [])
 
 
 def _print_warnings(spec) -> None:
@@ -25,20 +43,28 @@ def _print_warnings(spec) -> None:
         print(f"warning[{warning.code}]: {warning.message}", file=sys.stderr)
 
 
+def _add_render_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("spec")
+    parser.add_argument("--cluster", required=True)
+    parser.add_argument("--user")
+    parser.add_argument("--dev", action="store_true")
+    parser.add_argument("--user-root")
+    parser.add_argument("--cache-root")
+    parser.add_argument("--dev-venv")
+    parser.add_argument("--dev-source")
+    parser.add_argument("--pre-launch", action="append", default=[])
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="j-llm-d")
     sub = parser.add_subparsers(dest="command", required=True)
 
     render_parser = sub.add_parser("render")
-    render_parser.add_argument("spec")
-    render_parser.add_argument("--cluster", required=True)
-    render_parser.add_argument("--user")
+    _add_render_args(render_parser)
     render_parser.set_defaults(func=lambda args: _render(args, routing_only=False))
 
     routing_parser = sub.add_parser("render-routing")
-    routing_parser.add_argument("spec")
-    routing_parser.add_argument("--cluster", required=True)
-    routing_parser.add_argument("--user")
+    _add_render_args(routing_parser)
     routing_parser.set_defaults(func=lambda args: _render(args, routing_only=True))
 
     instance_parser = sub.add_parser("instance-id")
@@ -54,7 +80,12 @@ def main(argv: list[str] | None = None) -> int:
 
     cache_parser = sub.add_parser("cache-path")
     cache_parser.add_argument("spec")
+    cache_parser.add_argument("--cluster", required=True)
     cache_parser.add_argument("--user")
+    cache_parser.add_argument("--user-root")
+    cache_parser.add_argument("--cache-root")
+    cache_parser.add_argument("--dev-venv")
+    cache_parser.add_argument("--dev-source")
     cache_parser.set_defaults(func=_cache_path)
 
     args = parser.parse_args(argv)
@@ -77,9 +108,18 @@ def _name(args: argparse.Namespace) -> int:
 
 def _cache_path(args: argparse.Namespace) -> int:
     user = args.user or os.environ.get("USER") or "dev"
+    cluster = _load_cluster(args)
     spec = load_spec(args.spec)
     instance = Instance(user=user, release=spec.release)
-    print(instance.lustre_path("jit-cache", spec.cache.gpu_arch, spec.cache.cuda, spec.cache.vllm_version, spec.release))
+    print(
+        cluster.cache_root(
+            user=instance.user_slug,
+            release=instance.release_slug,
+            gpu_arch=spec.cache.gpu_arch,
+            cuda=spec.cache.cuda,
+            vllm_version=spec.cache.vllm_version,
+        )
+    )
     return 0
 
 

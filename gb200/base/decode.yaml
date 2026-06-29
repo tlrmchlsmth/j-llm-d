@@ -138,43 +138,16 @@ spec:
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
 
-                PROFILER_ARGS=""
-                NSYS_BASE_ARGS=""
-                NVTX_TRACING_ARG=""
-                if [ "${ENABLE_PROFILING:-0}" = "1" ]; then
-                  echo "Profiling enabled (type=${PROFILER_TYPE:-nsys})..."
-                  TRACE_DIR="${NSYS_TRACE_DIR:-LUSTRE_PREFIX_PLACEHOLDER/traces/nsys}"
-                  mkdir -p "$TRACE_DIR"
-                  if [ "${PROFILER_TYPE:-nsys}" = "nsys" ]; then
-                    uv pip install nvtx
-                    if ! command -v nsys &>/dev/null; then
-                      CUDA_MAJ=$(nvcc --version 2>/dev/null | grep -oP 'V\K[0-9]+' | head -1)
-                      apt-get update -qq && apt-get install -y --no-install-recommends "cuda-nsight-systems-${CUDA_MAJ:-13}-0" || \
-                      (echo "ERROR: Could not install nsys. Add nsight-systems to your container image." && exit 1)
-                    fi
-                    NSYS_BASE_ARGS="--capture-range=cudaProfilerApi --capture-range-end=stop --cuda-graph-trace=node --trace=cuda,nvtx"
-                    PROFILER_ARGS="--profiler-config {\"profiler\":\"cuda\",\"delay_iterations\":${PROFILER_DELAY_ITERS:-5},\"max_iterations\":${PROFILER_MAX_ITERS:-3}}"
-                    NVTX_TRACING_ARG="--enable-layerwise-nvtx-tracing"
-                  else
-                    PROFILER_ARGS="--profiler-config {\"profiler\":\"torch\",\"ignore_frontend\":true,\"torch_profiler_with_stack\":true,\"delay_iterations\":${PROFILER_DELAY_ITERS:-200},\"max_iterations\":${PROFILER_MAX_ITERS:-50},\"torch_profiler_dir\":\"/traces\"}"
-                  fi
-                fi
-
                 for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
                   GPU_START=$((R * TP_SIZE))
                   GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
                   RANK=$((START_RANK + R))
 
-                  NSYS_PREFIX=""
-                  if [ -n "$NSYS_BASE_ARGS" ]; then
-                    NSYS_PREFIX="nsys profile --session-new=rank_${RANK} $NSYS_BASE_ARGS -o $TRACE_DIR/decode_rank_${RANK}"
-                  fi
-
                   VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank${RANK} \
                   FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank${RANK} \
                   FLASH_ATTENTION_CUTE_DSL_CACHE_DIR=${FLASH_ATTENTION_CUTE_DSL_CACHE_DIR}/decode_rank${RANK} \
                   TILELANG_CACHE_DIR=${TILELANG_CACHE_DIR}/decode_rank${RANK} \
-                  $NSYS_PREFIX vllm serve $PROFILER_ARGS $NVTX_TRACING_ARG \
+                  vllm serve \
                     deepseek-ai/DeepSeek-V4-Pro \
                     --device-ids $GPUS \
                     --load-format auto \
@@ -211,29 +184,6 @@ spec:
                     --kernel-config '{"enable_flashinfer_autotune":false}' \
                     --all2all-backend "deepep_v2" &
                 done
-                    #--moe-backend flashinfer_trtllm \
-                   
-                    # For speeding up compilation -
-                    #--kernel-config '{"enable_flashinfer_autotune":false}' \
-                    
-
-                    
-                    #--compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}' \
-                    #--all2all-backend "flashinfer_nvlink_one_sided" \
-                    ########
-                    # TODO: try
-                    #--speculative-config '{"method":"mtp","num_speculative_tokens":1}' \
-                    #--compilation_config '{"cudagraph_mode": "FULL_AND_PIECEWISE"}' \
-                    ########
-                    
-                    # --attention_backend "CUTLASS_MLA" \
-                    #--profiler-config '{"profiler": "torch",
-                    #                    "torch_profiler_dir": "/traces",
-                    #                    "ignore_frontend": "true",
-                    #                    "delay_iterations": 5,
-                    #                    "max_iterations": 3}' \
-                    #
-                    #
 
                 # If any process exits, kill all and restart pod
                 wait -n
@@ -250,9 +200,6 @@ spec:
               - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
                 value: "120"
 
-              - name: VLLM_DP_SYNC_BACKEND
-                value: "ucx"
-
               - name: ACTIVATION_V2_GRID_Y
                 value: "512"
               - name: VLLM_NO_USAGE_STATS
@@ -267,27 +214,11 @@ spec:
               - name: VLLM_DEV_VENV
                 value: VLLM_DEV_VENV_PLACEHOLDER
 
-              #- name: VLLM_DEEPEPLL_NVFP4_DISPATCH
-              #  value: "1"
-              #- name: VLLM_FLASHINFER_MOE_BACKEND
-              #  value: "masked_gemm"
               - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
                 value: "1"
 
-              #- name: VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD
-              #  value: "0"
-
               - name: MAX_TOKENS
                 value: "1024"
-
-              - name: ENABLE_PROFILING
-                value: "1"
-              - name: PROFILER_TYPE
-                value: "torch"
-              - name: PROFILER_DELAY_ITERS
-                value: "0"
-              - name: PROFILER_MAX_ITERS
-                value: "3"
 
               # HuggingFace token and cache location
               - name: HF_TOKEN

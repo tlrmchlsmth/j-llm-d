@@ -61,3 +61,13 @@ def test_inferencepool_selector_is_instance_scoped():
 
     assert infpool["spec"]["selector"]["app.kubernetes.io/instance"] == "tester-wide-ep"
     assert infpool["spec"]["selector"]["llm-d.ai/role"] == "decode"
+
+
+def test_prefill_launch_uses_global_tp_and_local_gpu_span():
+    objects = _objects("deepseek-r1-gb200-pd.yaml")
+    lws = _find(objects, "LeaderWorkerSet", "prefill")
+    container = lws["spec"]["leaderWorkerTemplate"]["workerTemplate"]["spec"]["containers"][0]
+    script = container["args"][0]
+
+    assert "--tensor-parallel-size 8" in script
+    assert "GPU_START=$((R * 4))" in script

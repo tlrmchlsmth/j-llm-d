@@ -61,7 +61,7 @@ roles:
 
   - name: prefill
     lws: {nodes: 2, replicas: 1}
-    parallelism: {gpus: 4, tp: 4, dp: 1, ep: true}
+    parallelism: {gpus: 4, tp: 8, dp: false, ep: true}
     kv_transfer_config:
       kv_connector: NixlConnector
       kv_role: kv_both

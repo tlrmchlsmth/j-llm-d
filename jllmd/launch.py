@@ -5,6 +5,7 @@ import shlex
 from typing import Any
 
 from .ports import RolePorts
+from .parallelism import parallel_layout
 from .spec import DeploymentSpec, RoleSpec
 
 
@@ -29,6 +30,7 @@ def build_launch_script(
     lustre_prefix: str,
     vllm_args: dict[str, Any] | None = None,
 ) -> str:
+    layout = parallel_layout(role)
     lines = [
         "set -euo pipefail",
         f"LOG_DIR={shlex.quote(lustre_prefix + '/logs/' + role.name)}",
@@ -60,7 +62,7 @@ def build_launch_script(
 
     if role.data_parallel.enabled:
         lines += [
-            f"DP_SIZE_LOCAL={role.data_parallel.local_size}",
+            f"DP_SIZE_LOCAL={layout.dp_local_size}",
             "DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))",
             "START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))",
         ]
@@ -70,8 +72,8 @@ def build_launch_script(
     lines += [
         "",
         "for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do",
-        f"  GPU_START=$((R * {role.tensor_parallel_size}))",
-        f"  GPUS=$(seq -s, $GPU_START $((GPU_START + {role.tensor_parallel_size} - 1)))",
+        f"  GPU_START=$((R * {layout.tp_local_size}))",
+        f"  GPUS=$(seq -s, $GPU_START $((GPU_START + {layout.tp_local_size} - 1)))",
         "  RANK=$((START_RANK + R))",
         f"  PORTS=({' '.join(str(port) for port in ports.backend)})",
         "  PORT=${PORTS[$R]}",
@@ -86,7 +88,7 @@ def build_launch_script(
         "--port",
         "$PORT",
         "--tensor-parallel-size",
-        str(role.tensor_parallel_size),
+        str(layout.tp_world_size),
     ]
     if role.expert_parallel.enabled:
         base_args.append("--enable-expert-parallel")

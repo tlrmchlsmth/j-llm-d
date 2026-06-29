@@ -7,6 +7,7 @@ from .cluster import Cluster
 from .equations import render_mapping
 from .instance import Instance
 from .ports import RolePorts, derive_ports
+from .parallelism import parallel_layout
 from .spec import DeploymentSpec, RoleSpec
 
 
@@ -64,17 +65,18 @@ def resolve_role(spec: DeploymentSpec, instance: Instance, cluster: Cluster, rol
 
 
 def _variable_context(spec: DeploymentSpec, role: RoleSpec) -> dict[str, Any]:
-    dp_local_size = role.data_parallel.local_size if role.data_parallel.enabled else 1
-    dp_world_size = role.lws.size * dp_local_size if role.data_parallel.enabled else 1
+    layout = parallel_layout(role)
 
     return {
         **spec.vars,
         **role.vars,
         "gpus_per_pod": role.gpus_per_pod,
-        "tp": role.tensor_parallel_size,
+        "tp": layout.tp_world_size,
+        "tp_world_size": layout.tp_world_size,
+        "tp_local_size": layout.tp_local_size,
         "dp_enabled": role.data_parallel.enabled,
-        "dp_local_size": dp_local_size,
-        "dp_world_size": dp_world_size,
+        "dp_local_size": layout.dp_local_size,
+        "dp_world_size": layout.dp_world_size,
         "lws_size": role.lws.size,
         "lws_replicas": role.lws.replicas,
     }

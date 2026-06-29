@@ -38,3 +38,13 @@ def test_equations_get_explicit_dp_scopes():
 
     assert resolved.env["DP_LOCAL"] == "4"
     assert resolved.env["DP_WORLD"] == "16"
+
+
+def test_prefill_tp_spans_lws_nodes():
+    spec = load_spec(ROOT / "configs" / "deepseek-r1-gb200-pd.yaml")
+    role = spec.role("prefill")
+    resolved = resolve_role(spec, Instance("tester", spec.release), get_cluster(spec.cluster), role)
+
+    assert role.tensor_parallel_size == 8
+    assert role.data_parallel.enabled is False
+    assert resolved.vllm_args["trust_remote_code"] is True

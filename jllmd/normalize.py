@@ -49,6 +49,8 @@ def _apply_parallelism_alias(role: dict[str, Any]) -> None:
 
     if isinstance(parallelism.get("ep"), bool):
         role.setdefault("expert_parallel", {"enabled": parallelism["ep"]})
+    if parallelism.get("dp_load_balancing") is not None:
+        role.setdefault("dp_load_balancing", parallelism["dp_load_balancing"])
 
 
 def _apply_port_alias(role: dict[str, Any]) -> None:

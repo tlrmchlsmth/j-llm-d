@@ -23,6 +23,11 @@ class RoutingKind(StrEnum):
     DISABLED = "disabled"
 
 
+class DpLoadBalancing(StrEnum):
+    INTERNAL = "internal"
+    EXTERNAL = "external"
+
+
 class DataParallelSpec(BaseModel):
     enabled: bool = False
     local_size: int | None = None
@@ -67,6 +72,7 @@ class RoleSpec(BaseModel):
     serving_port_base: int = 8000
     backend_port_base: int | None = None
     routing_sidecar: bool = False
+    dp_load_balancing: DpLoadBalancing = DpLoadBalancing.INTERNAL
     kv_transfer_config: dict[str, Any] | None = None
     vllm_args: dict[str, Any] = Field(default_factory=dict)
     env: dict[str, str] = Field(default_factory=dict)
@@ -87,6 +93,8 @@ class RoleSpec(BaseModel):
         parallel_layout(self)
         if self.routing_sidecar and self.backend_port_base is None:
             self.backend_port_base = 8200
+        if self.routing_sidecar and self.dp_load_balancing != DpLoadBalancing.EXTERNAL:
+            raise ValueError("routing_sidecar requires dp_load_balancing: external")
         return self
 
 
@@ -145,6 +153,16 @@ class DeploymentSpec(BaseModel):
         if len(names) != len(set(names)):
             raise ValueError("role names must be unique")
         return roles
+
+    @model_validator(mode="after")
+    def apply_topology_defaults(self) -> "DeploymentSpec":
+        if self.topology == TopologyKind.PD:
+            decode = self.role("decode")
+            decode.dp_load_balancing = DpLoadBalancing.EXTERNAL
+            decode.routing_sidecar = True
+            decode.serving_port_base = 8000
+            decode.backend_port_base = 8200
+        return self
 
     def role(self, name: str) -> RoleSpec:
         for role in self.roles:

@@ -3,7 +3,7 @@ from pathlib import Path
 from jllmd.cluster import get_cluster
 from jllmd.instance import Instance
 from jllmd.resolve import resolve_role
-from jllmd.spec import load_spec
+from jllmd.spec import DpLoadBalancing, load_spec
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +19,7 @@ def test_compact_parallelism_and_equations_resolve_to_runtime_values():
     assert role.data_parallel.enabled is True
     assert role.data_parallel.local_size == 4
     assert role.expert_parallel.enabled is True
+    assert role.dp_load_balancing == DpLoadBalancing.EXTERNAL
 
     assert resolved.env["MAX_TOKENS"] == "1024"
     assert resolved.env["NVSHMEM_QP_DEPTH"] == "2050"
@@ -38,6 +39,15 @@ def test_dp_is_global_and_local_dp_is_derived_from_lws_nodes():
     assert role.serving_port_base == 8000
     assert role.backend_port_base == 8200
     assert resolved.env["MAX_TOKENS"] == "1024"
+
+
+def test_pd_topology_adds_decode_routing_proxy_defaults():
+    spec = load_spec(ROOT / "configs" / "deepseek-r1-gb200-pd.yaml")
+    role = spec.role("decode")
+
+    assert role.routing_sidecar is True
+    assert role.serving_port_base == 8000
+    assert role.backend_port_base == 8200
 
 
 def test_equations_get_explicit_dp_scopes():

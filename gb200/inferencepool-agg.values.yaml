@@ -1,17 +1,17 @@
 # InferencePool for GB200 aggregated inference (no P/D disaggregation)
-# Load-aware routing via active-request scoring
+# Load-aware routing via active-request + queue scoring
 
 inferenceExtension:
   replicas: 1
   image:
-    name: llm-d-inference-scheduler
     hub: ghcr.io/llm-d
-    tag: v0.5.0
+    name: llm-d-inference-scheduler
+    registry: ghcr.io
+    repository: llm-d/llm-d-inference-scheduler
+    tag: v0.8.0
   extProcPort: 9002
   monitoring:
     interval: "10s"
-    secret:
-      name: ${DEPLOY_NAME}-sa-metrics-reader-secret
     prometheus:
       enabled: false
   affinity:
@@ -22,6 +22,8 @@ inferenceExtension:
           - key: kubernetes.io/arch
             operator: In
             values: ["amd64"]
+  flags:
+    v: 0
   resources:
     requests:
       cpu: "8"
@@ -35,10 +37,8 @@ inferenceExtension:
       apiVersion: inference.networking.x-k8s.io/v1alpha1
       kind: EndpointPickerConfig
       plugins:
-      - type: data-parallel-profile-handler
-        parameters:
-          primaryPort: 8000
       - type: active-request-scorer
+      - type: queue-scorer
       - type: weighted-random-picker
         parameters:
           threshold: 0.1
@@ -46,7 +46,9 @@ inferenceExtension:
       - name: default
         plugins:
         - pluginRef: active-request-scorer
-          weight: 1
+          weight: 2
+        - pluginRef: queue-scorer
+          weight: 2
         - pluginRef: weighted-random-picker
 
 inferencePool:
@@ -59,7 +61,7 @@ inferencePool:
   modelServers:
     matchLabels:
       llm-d.ai/inferenceServing: "true"
-      llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+      llm-d.ai/model: DeepSeek-V4-Pro
       llm-d.ai/deployment: agg
       llm-d.ai/owner: ${OWNER}
 

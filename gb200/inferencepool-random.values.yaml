@@ -3,22 +3,17 @@
 
 inferenceExtension:
   replicas: 1
-  flags:
-    kv-cache-usage-percentage-metric: "vllm:kv_cache_usage_perc"
-    v: 1
   image:
-    name: llm-d-inference-scheduler
     hub: ghcr.io/llm-d
-    tag: v0.5.0
+    name: llm-d-inference-scheduler
+    registry: ghcr.io
+    repository: llm-d/llm-d-inference-scheduler
+    tag: v0.8.0
   extProcPort: 9002
   monitoring:
     interval: "10s"
-    secret:
-      name: ${DEPLOY_NAME}-sa-metrics-reader-secret
     prometheus:
       enabled: false
-    gke:
-      enable: false
   affinity:
     nodeAffinity:
       requiredDuringSchedulingIgnoredDuringExecution:
@@ -40,16 +35,11 @@ inferenceExtension:
       apiVersion: inference.networking.x-k8s.io/v1alpha1
       kind: EndpointPickerConfig
       plugins:
-      - type: data-parallel-profile-handler
-        parameters:
-          primaryPort: 8000
-      - type: random-picker
-        parameters:
-          maxNumOfEndpoints: 1
+      - type: weighted-random-picker
       schedulingProfiles:
       - name: default
         plugins:
-        - pluginRef: random-picker
+        - pluginRef: weighted-random-picker
 
 inferencePool:
   name: ${DEPLOY_NAME}-infpool
@@ -61,7 +51,7 @@ inferencePool:
   modelServers:
     matchLabels:
       llm-d.ai/inferenceServing: "true"
-      llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+      llm-d.ai/model: DeepSeek-V4-Pro
       llm-d.ai/deployment: decode-bench
       llm-d.ai/owner: ${OWNER}
 

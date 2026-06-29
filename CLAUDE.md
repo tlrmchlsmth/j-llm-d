@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Use `podman` instead of `docker` for container builds
 - Prefer `just` commands when available — never run `kubectl apply` directly if a Justfile recipe exists for it (e.g. `just start`, `just restart`). Direct applies bypass `$USER` namespacing and other setup.
+- **Restarting the stack**: Always use `just restart pd load-aware true` (not `just restart` alone or `just restart decode-bench`). The `true` flag mounts the dev vLLM build from Lustre (`/mnt/lustre/tms/vllm-venv`), which is where iterative code changes live. Without it, pods use the container's stock vLLM and won't pick up patches applied to the Lustre checkout. Similarly for `just start` — use `just start pd load-aware true`.
 
 ## Repository Overview
 

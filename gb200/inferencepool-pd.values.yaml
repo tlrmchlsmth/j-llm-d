@@ -1,12 +1,15 @@
 # InferencePool for GB200 P/D (Prefill/Decode disaggregated)
-# Full P/D routing with prefix-cache, active-request, and queue scoring
+# Aligned with upstream llm-d guides/recipes/scheduler/pd.values.yaml (v0.8.0)
+# Uses active-request-scorer for decode routing, always-disagg for P/D decision
 
 inferenceExtension:
   replicas: 1
   image:
-    name: llm-d-inference-scheduler
     hub: ghcr.io/llm-d
-    tag: v0.6.0
+    name: llm-d-inference-scheduler
+    registry: ghcr.io
+    repository: llm-d/llm-d-inference-scheduler
+    tag: v0.8.0
   extProcPort: 9002
   monitoring:
     interval: "10s"
@@ -20,6 +23,8 @@ inferenceExtension:
           - key: kubernetes.io/arch
             operator: In
             values: ["amd64"]
+  flags:
+    v: 0
   resources:
     requests:
       cpu: "8"
@@ -27,23 +32,23 @@ inferenceExtension:
     limits:
       cpu: "8"
       memory: 16Gi
-  pluginsConfigFile: "custom-plugins.yaml"
+  pluginsConfigFile: "pd-config.yaml"
   pluginsCustomConfig:
-    custom-plugins.yaml: |
+    pd-config.yaml: |
       apiVersion: inference.networking.x-k8s.io/v1alpha1
       kind: EndpointPickerConfig
       plugins:
-      - type: prefill-header-handler
+      - type: disagg-headers-handler
       - type: prefill-filter
       - type: decode-filter
       - type: prefix-cache-scorer
       - type: active-request-scorer
       - type: queue-scorer
       - type: always-disagg-pd-decider
-      - type: pd-profile-handler
+      - type: disagg-profile-handler
         parameters:
-          threshold: 0
-          hashBlockSize: 5
+          deciders:
+            prefill: always-disagg-pd-decider
       - type: weighted-random-picker
         name: prefill-picker
         parameters:
@@ -81,7 +86,7 @@ inferencePool:
   modelServers:
     matchLabels:
       llm-d.ai/inferenceServing: "true"
-      llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+      llm-d.ai/model: DeepSeek-V4-Pro
       llm-d.ai/deployment: pd
       llm-d.ai/owner: ${OWNER}
 

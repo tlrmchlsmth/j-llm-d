@@ -561,7 +561,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 27
+        "y": 35
       },
       "id": 5,
       "options": {
@@ -662,7 +662,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 35
+        "y": 43
       },
       "id": 4,
       "options": {
@@ -763,7 +763,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 35
+        "y": 51
       },
       "id": 9,
       "options": {
@@ -874,7 +874,7 @@
         "h": 8,
         "w": 12,
         "x": 6,
-        "y": 43
+        "y": 59
       },
       "id": 11,
       "options": {
@@ -913,12 +913,207 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$DS_PROMETHEUS"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 67
+      },
+      "id": 805,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Prefill Corrupted Requests (NaN in Logits)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$DS_PROMETHEUS"
+          },
+          "expr": "increase(vllm:corrupted_requests_total{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[5m]) or 0 * vllm:num_requests_running{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}",
+          "legendFormat": "{{pod}} rank{{rank}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$DS_PROMETHEUS"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 75
+      },
+      "id": 806,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Prefill Preemptions & Aborts",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$DS_PROMETHEUS"
+          },
+          "expr": "rate(vllm:num_preemptions_total{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[$__rate_interval])",
+          "legendFormat": "preemptions {{pod}} rank{{rank}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$DS_PROMETHEUS"
+          },
+          "expr": "rate(vllm:request_success_total{job=\"vllm-prefill\", pod=~\"${deployment}-.*\", finished_reason=\"abort\"}[$__rate_interval])",
+          "legendFormat": "aborted {{pod}} rank{{rank}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 51
+        "y": 83
       },
       "id": 300,
       "panels": [],
@@ -989,7 +1184,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 52
+        "y": 84
       },
       "id": 13,
       "options": {
@@ -1127,7 +1322,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 52
+        "y": 92
       },
       "id": 7,
       "options": {
@@ -1228,7 +1423,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 60
+        "y": 100
       },
       "id": 6,
       "options": {
@@ -1329,7 +1524,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 60
+        "y": 108
       },
       "id": 10,
       "options": {
@@ -1440,7 +1635,7 @@
         "h": 8,
         "w": 12,
         "x": 6,
-        "y": 68
+        "y": 116
       },
       "id": 12,
       "options": {
@@ -1541,7 +1736,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 76
+        "y": 124
       },
       "id": 301,
       "options": {
@@ -1642,7 +1837,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 76
+        "y": 132
       },
       "id": 302,
       "options": {
@@ -1680,12 +1875,207 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$DS_PROMETHEUS"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 140
+      },
+      "id": 807,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Decode Corrupted Requests (NaN in Logits)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$DS_PROMETHEUS"
+          },
+          "expr": "increase(vllm:corrupted_requests_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[5m]) or 0 * vllm:num_requests_running{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}",
+          "legendFormat": "{{pod}} rank{{rank}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$DS_PROMETHEUS"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 148
+      },
+      "id": 808,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "title": "Decode Preemptions & Aborts",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$DS_PROMETHEUS"
+          },
+          "expr": "rate(vllm:num_preemptions_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[$__rate_interval])",
+          "legendFormat": "preemptions {{pod}} rank{{rank}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$DS_PROMETHEUS"
+          },
+          "expr": "rate(vllm:request_success_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\", finished_reason=\"abort\"}[$__rate_interval])",
+          "legendFormat": "aborted {{pod}} rank{{rank}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
       "collapsed": true,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 84
+        "y": 156
       },
       "id": 350,
       "panels": [
@@ -2455,7 +2845,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 101
+        "y": 157
       },
       "id": 400,
       "panels": [
@@ -3020,7 +3410,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 77
+        "y": 158
       },
       "id": 605,
       "panels": [],
@@ -3091,7 +3481,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 78
+        "y": 159
       },
       "id": 501,
       "options": {
@@ -3221,7 +3611,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 78
+        "y": 167
       },
       "id": 502,
       "options": {
@@ -3331,7 +3721,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 78
+        "y": 175
       },
       "id": 503,
       "options": {
@@ -3443,7 +3833,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 86
+        "y": 183
       },
       "id": 504,
       "options": {
@@ -3568,7 +3958,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 86
+        "y": 191
       },
       "id": 505,
       "options": {
@@ -3692,7 +4082,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 94
+        "y": 199
       },
       "id": 506,
       "options": {
@@ -3746,7 +4136,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 102
+        "y": 207
       },
       "id": 600,
       "panels": [],
@@ -3817,7 +4207,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 103
+        "y": 208
       },
       "id": 601,
       "options": {
@@ -3955,7 +4345,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 103
+        "y": 216
       },
       "id": 602,
       "options": {
@@ -4110,7 +4500,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 111
+        "y": 224
       },
       "id": 603,
       "options": {
@@ -4270,7 +4660,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 111
+        "y": 232
       },
       "id": 604,
       "options": {
@@ -4338,7 +4728,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 119
+        "y": 240
       },
       "id": 700,
       "panels": [],
@@ -4381,7 +4771,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 120
+        "y": 241
       },
       "id": 701,
       "options": {
@@ -4452,7 +4842,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 120
+        "y": 245
       },
       "id": 702,
       "options": {
@@ -4521,7 +4911,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 120
+        "y": 249
       },
       "id": 703,
       "options": {
@@ -4594,7 +4984,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 120
+        "y": 253
       },
       "id": 704,
       "options": {
@@ -4663,7 +5053,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 120
+        "y": 257
       },
       "id": 705,
       "options": {
@@ -4726,7 +5116,7 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 120
+        "y": 261
       },
       "id": 706,
       "options": {
@@ -4821,7 +5211,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 124
+        "y": 265
       },
       "id": 707,
       "options": {
@@ -4951,7 +5341,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 124
+        "y": 273
       },
       "id": 708,
       "options": {
@@ -5058,7 +5448,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 132
+        "y": 281
       },
       "id": 709,
       "options": {
@@ -5165,7 +5555,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 132
+        "y": 289
       },
       "id": 710,
       "options": {
@@ -5263,7 +5653,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 132
+        "y": 297
       },
       "id": 711,
       "options": {
@@ -5302,7 +5692,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 140
+        "y": 305
       },
       "id": 800,
       "panels": [],
@@ -5373,7 +5763,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 141
+        "y": 306
       },
       "id": 801,
       "options": {
@@ -5487,7 +5877,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 141
+        "y": 314
       },
       "id": 802,
       "options": {
@@ -5601,7 +5991,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 149
+        "y": 322
       },
       "id": 803,
       "options": {
@@ -5703,7 +6093,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 149
+        "y": 330
       },
       "id": 804,
       "options": {

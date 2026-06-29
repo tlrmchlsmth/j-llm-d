@@ -65,3 +65,21 @@ def test_global_dp_must_match_local_gpu_partition():
                 }
             )
         )
+
+
+def test_routing_proxy_sets_default_port_bases():
+    spec = DeploymentSpec.model_validate(
+        _spec_with_role(
+            {
+                "name": "decode",
+                "lws": {"nodes": 4},
+                "parallelism": {"gpus": 4, "tp": 1, "dp": 16, "ep": True},
+                "routing_proxy": True,
+            }
+        )
+    )
+
+    role = spec.role("decode")
+    assert role.routing_sidecar is True
+    assert role.serving_port_base == 8000
+    assert role.backend_port_base == 8200

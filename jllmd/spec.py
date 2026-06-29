@@ -85,6 +85,8 @@ class RoleSpec(BaseModel):
         from .parallelism import parallel_layout
 
         parallel_layout(self)
+        if self.routing_sidecar and self.backend_port_base is None:
+            self.backend_port_base = 8200
         return self
 
 

@@ -18,7 +18,7 @@ roles:
   - name: decode
     lws: {nodes: 4, replicas: 1}
     parallelism: {gpus: 4, tp: 1, dp: 16, ep: true}
-    ports: {public: 8000, backend: 8200, sidecar: true}
+    routing_proxy: true
     kv_transfer_config:
       kv_connector: NixlConnector
       kv_role: kv_both

@@ -19,6 +19,7 @@ def normalize_role(data: Any) -> Any:
     normalized = dict(data)
     _apply_parallelism_alias(normalized)
     _apply_port_alias(normalized)
+    _apply_routing_proxy_alias(normalized)
     _apply_concurrency_alias(normalized)
     _apply_vllm_alias(normalized)
 
@@ -58,6 +59,16 @@ def _apply_port_alias(role: dict[str, Any]) -> None:
     role.setdefault("serving_port_base", ports.get("public", ports.get("serving", 8000)))
     role.setdefault("backend_port_base", ports.get("backend"))
     role.setdefault("routing_sidecar", ports.get("sidecar", False))
+
+
+def _apply_routing_proxy_alias(role: dict[str, Any]) -> None:
+    if "routing_proxy" not in role:
+        return
+    enabled = bool(role.pop("routing_proxy"))
+    role.setdefault("routing_sidecar", enabled)
+    if enabled:
+        role.setdefault("serving_port_base", 8000)
+        role.setdefault("backend_port_base", 8200)
 
 
 def _apply_concurrency_alias(role: dict[str, Any]) -> None:

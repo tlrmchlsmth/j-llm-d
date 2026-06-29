@@ -34,6 +34,9 @@ def test_dp_is_global_and_local_dp_is_derived_from_lws_nodes():
 
     assert role.lws.size == 4
     assert role.data_parallel.local_size == 4
+    assert role.routing_sidecar is True
+    assert role.serving_port_base == 8000
+    assert role.backend_port_base == 8200
     assert resolved.env["MAX_TOKENS"] == "1024"
 
 

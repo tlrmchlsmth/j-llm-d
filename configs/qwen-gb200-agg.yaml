@@ -14,7 +14,6 @@ roles:
   - name: decode
     lws: {nodes: 1}
     parallelism: {gpus: 1, tp: 1, dp: false, ep: false}
-    ports: {public: 8000}
     resources: {cpu: "8", memory: 64Gi, gpus: 1, ephemeral_storage: 64Gi}
     vllm:
       trust_remote_code: true

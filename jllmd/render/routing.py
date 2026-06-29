@@ -3,7 +3,8 @@ from __future__ import annotations
 import yaml
 
 from ..instance import Instance
-from ..ports import derive_ports
+from ..cluster import get_cluster
+from ..resolve import resolve_role
 from ..spec import DeploymentSpec, RoutingKind
 
 
@@ -80,12 +81,7 @@ def render_routing(spec: DeploymentSpec, instance: Instance) -> list[dict]:
         return []
 
     role = spec.role(spec.routing.target_role)
-    ports = derive_ports(
-        data_parallel_enabled=role.data_parallel.enabled,
-        data_parallel_local_size=role.data_parallel.local_size,
-        public_base=role.serving_port_base,
-        backend_base=role.backend_port_base,
-    )
+    ports = resolve_role(spec, instance, get_cluster(spec.cluster), role).ports
     infpool_name = instance.name("infpool")
     epp_name = instance.name("infpool-epp")
     gateway_name = instance.name("inference-gateway")

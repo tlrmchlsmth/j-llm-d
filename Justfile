@@ -240,10 +240,7 @@ stop NOW='false':
   {{KN}} delete job parallel-guidellm --ignore-not-found=true $FORCE &
   {{KN}} delete job inference-perf --ignore-not-found=true $FORCE &
   {{KN}} delete configmap inference-perf-config --ignore-not-found=true &
-  {{KN}} delete jobset -l app={{NAME_PREFIX}}-sharegpt-load --ignore-not-found=true $FORCE &
-  {{KN}} delete jobset -l app={{NAME_PREFIX}}-nyann-eval --ignore-not-found=true $FORCE &
-  {{KN}} delete jobset -l app={{NAME_PREFIX}}-eval-gsm8k --ignore-not-found=true $FORCE &
-  {{KN}} delete jobset -l app={{NAME_PREFIX}}-eval-gpqa --ignore-not-found=true $FORCE &
+  just stop-nyann &
   wait
   {{KN}} delete sa {{DEPLOY_NAME}} --ignore-not-found=true
 

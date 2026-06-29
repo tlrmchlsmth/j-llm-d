@@ -87,7 +87,7 @@ spec:
                 fi
 
                 # Clear stale .pyc caches from Lustre (clock skew can cause Python to use outdated bytecode)
-                find /mnt/lustre/tms/vllm-dev/vllm -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+                find LUSTRE_PREFIX_PLACEHOLDER/vllm-dev/vllm -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
                 # DEV mode: use persistent Lustre venv; image venv if present; else system python
                 if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then

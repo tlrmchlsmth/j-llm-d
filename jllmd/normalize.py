@@ -33,8 +33,9 @@ def _apply_parallelism_alias(role: dict[str, Any]) -> None:
     if not isinstance(parallelism, dict):
         return
 
-    if parallelism.get("gpus") is not None:
-        role.setdefault("gpus_per_pod", parallelism["gpus"])
+    gpus_per_node = parallelism.get("gpus_per_node", parallelism.get("gpus"))
+    if gpus_per_node is not None:
+        role.setdefault("gpus_per_pod", gpus_per_node)
     if parallelism.get("tp") is not None:
         role.setdefault("tensor_parallel_size", parallelism["tp"])
 

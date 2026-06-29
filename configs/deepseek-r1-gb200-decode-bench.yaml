@@ -13,8 +13,8 @@ vars: {max_concurrency: 1024, mtp_size: 1}
 
 roles:
   - name: decode
-    lws: {nodes: 4}
-    parallelism: {gpus: 4, tp: 1, dp: 16, ep: true}
+    lws: {size: 4}
+    parallelism: {gpus_per_node: 4, tp: 1, dp: 16, ep: true}
     dp_load_balancing: external
     routing_proxy: true
     kv_transfer_config:

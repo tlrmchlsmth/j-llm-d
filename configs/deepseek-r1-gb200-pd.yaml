@@ -15,8 +15,8 @@ vars:
 
 roles:
   - name: decode
-    lws: {nodes: 4, replicas: 1}
-    parallelism: {gpus: 4, tp: 1, dp: 16, ep: true}
+    lws: {size: 4, replicas: 1}
+    parallelism: {gpus_per_node: 4, tp: 1, dp: 16, ep: true}
     kv_transfer_config:
       kv_connector: NixlConnector
       kv_role: kv_both
@@ -32,13 +32,10 @@ roles:
     env:
       VLLM_USE_V2_MODEL_RUNNER: "1"
       VLLM_USE_BREAKABLE_CUDAGRAPH: "1"
-      DEEPEP_METRICS_ENABLED: "1"
     vllm:
-      load_format: auto
       disable_uvicorn_access_log: true
       trust_remote_code: true
       gpu_memory_utilization: "0.85"
-      api_server_count: 4
       kv_cache_dtype: fp8
       block_size: 256
       no_disable_hybrid_kv_cache_manager: true
@@ -58,8 +55,8 @@ roles:
       all2all_backend: deepep_v2
 
   - name: prefill
-    lws: {nodes: 2, replicas: 1}
-    parallelism: {gpus: 4, tp: 8, dp: false, ep: true}
+    lws: {size: 2, replicas: 1}
+    parallelism: {gpus_per_node: 4, tp: 8, dp: false, ep: true}
     kv_transfer_config:
       kv_connector: NixlConnector
       kv_role: kv_both
@@ -71,7 +68,6 @@ roles:
       trust_remote_code: true
       moe_backend: deep_gemm_mega_moe
       gpu_memory_utilization: "0.85"
-      api_server_count: 4
       kv_cache_dtype: fp8
       block_size: 256
       no_disable_hybrid_kv_cache_manager: true

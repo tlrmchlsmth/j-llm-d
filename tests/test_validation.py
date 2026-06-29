@@ -18,8 +18,8 @@ def test_global_dp_mismatch_warns():
         _spec_with_role(
             {
                 "name": "decode",
-                "lws": {"nodes": 4},
-                "parallelism": {"gpus": 4, "tp": 1, "dp": 10, "ep": True},
+                "lws": {"size": 4},
+                "parallelism": {"gpus_per_node": 4, "tp": 1, "dp": 10, "ep": True},
             }
         )
     )
@@ -32,8 +32,8 @@ def test_global_tp_mismatch_warns():
         _spec_with_role(
             {
                 "name": "prefill",
-                "lws": {"nodes": 3},
-                "parallelism": {"gpus": 4, "tp": 10, "dp": False, "ep": True},
+                "lws": {"size": 3},
+                "parallelism": {"gpus_per_node": 4, "tp": 10, "dp": False, "ep": True},
             }
         )
     )
@@ -46,8 +46,8 @@ def test_no_dp_multiple_rank_slots_warns():
         _spec_with_role(
             {
                 "name": "prefill",
-                "lws": {"nodes": 1},
-                "parallelism": {"gpus": 4, "tp": 2, "dp": False, "ep": True},
+                "lws": {"size": 1},
+                "parallelism": {"gpus_per_node": 4, "tp": 2, "dp": False, "ep": True},
             }
         )
     )
@@ -60,8 +60,8 @@ def test_global_dp_local_partition_warns():
         _spec_with_role(
             {
                 "name": "decode",
-                "lws": {"nodes": 4},
-                "parallelism": {"gpus": 4, "tp": 2, "dp": 4, "ep": True},
+                "lws": {"size": 4},
+                "parallelism": {"gpus_per_node": 4, "tp": 2, "dp": 4, "ep": True},
             }
         )
     )
@@ -74,8 +74,8 @@ def test_routing_proxy_sets_default_port_bases():
         _spec_with_role(
             {
                 "name": "decode",
-                "lws": {"nodes": 4},
-                "parallelism": {"gpus": 4, "tp": 1, "dp": 16, "ep": True},
+                "lws": {"size": 4},
+                "parallelism": {"gpus_per_node": 4, "tp": 1, "dp": 16, "ep": True},
                 "dp_load_balancing": "external",
                 "routing_proxy": True,
             }
@@ -93,8 +93,8 @@ def test_routing_proxy_with_internal_dp_warns():
         _spec_with_role(
             {
                 "name": "decode",
-                "lws": {"nodes": 4},
-                "parallelism": {"gpus": 4, "tp": 1, "dp": 16, "ep": True},
+                "lws": {"size": 4},
+                "parallelism": {"gpus_per_node": 4, "tp": 1, "dp": 16, "ep": True},
                 "routing_proxy": True,
             }
         )
@@ -108,8 +108,8 @@ def test_external_dp_with_multiple_api_servers_warns():
         _spec_with_role(
             {
                 "name": "decode",
-                "lws": {"nodes": 4},
-                "parallelism": {"gpus": 4, "tp": 1, "dp": 16, "ep": True},
+                "lws": {"size": 4},
+                "parallelism": {"gpus_per_node": 4, "tp": 1, "dp": 16, "ep": True},
                 "dp_load_balancing": "external",
                 "vllm": {"api_server_count": 4},
             }
@@ -129,13 +129,13 @@ def test_pd_topology_sets_decode_proxy_without_role_flag():
             "roles": [
                 {
                     "name": "decode",
-                    "lws": {"nodes": 4},
-                    "parallelism": {"gpus": 4, "tp": 1, "dp": 16, "ep": True},
+                    "lws": {"size": 4},
+                    "parallelism": {"gpus_per_node": 4, "tp": 1, "dp": 16, "ep": True},
                 },
                 {
                     "name": "prefill",
-                    "lws": {"nodes": 2},
-                    "parallelism": {"gpus": 4, "tp": 8, "dp": False, "ep": True},
+                    "lws": {"size": 2},
+                    "parallelism": {"gpus_per_node": 4, "tp": 8, "dp": False, "ep": True},
                 },
             ],
         }
@@ -145,3 +145,19 @@ def test_pd_topology_sets_decode_proxy_without_role_flag():
     assert spec.role("decode").dp_load_balancing == "external"
     assert spec.role("decode").backend_port_base == 8200
     assert spec.role("prefill").routing_sidecar is False
+
+
+def test_legacy_lws_nodes_and_gpus_aliases_still_parse():
+    spec = DeploymentSpec.model_validate(
+        _spec_with_role(
+            {
+                "name": "decode",
+                "lws": {"nodes": 4},
+                "parallelism": {"gpus": 4, "tp": 1, "dp": 16, "ep": True},
+            }
+        )
+    )
+
+    role = spec.role("decode")
+    assert role.lws.size == 4
+    assert role.gpus_per_pod == 4

@@ -12,8 +12,8 @@ runtime: {sidecars: []}
 
 roles:
   - name: decode
-    lws: {nodes: 1}
-    parallelism: {gpus: 1, tp: 1, dp: false, ep: false}
+    lws: {size: 1}
+    parallelism: {gpus_per_node: 1, tp: 1, dp: false, ep: false}
     resources: {cpu: "8", memory: 64Gi, gpus: 1, ephemeral_storage: 64Gi}
     vllm:
       trust_remote_code: true

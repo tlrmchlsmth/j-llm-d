@@ -16,6 +16,8 @@ GB200_DIR := "gb200"
 DEV_DIR := "dev"
 MONITORING_DIR := "monitoring"
 CLUSTER := env("JLLMD_CLUSTER", "clusters/oci-gb200-osaka.yaml")
+RENDER_OUT := env("JLLMD_RENDER_OUT", "/tmp/" + NAME_PREFIX + "-jllmd.yaml")
+EDITOR := env("EDITOR", "vi")
 
 default:
   just --list
@@ -24,6 +26,33 @@ default:
 
 render SPEC *ARGS='':
   uv run j-llm-d render {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}} {{ARGS}}
+
+render-file SPEC *ARGS='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  uv run j-llm-d render {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}} {{ARGS}} > "{{RENDER_OUT}}"
+  echo "{{RENDER_OUT}}"
+
+edit-file SPEC *ARGS='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  just render-file {{SPEC}} {{ARGS}}
+  "{{EDITOR}}" "{{RENDER_OUT}}"
+
+diff-file FILE=RENDER_OUT:
+  {{KN}} diff -f "{{FILE}}"
+
+apply-file FILE=RENDER_OUT:
+  {{KN}} apply -f "{{FILE}}"
+
+delete-file FILE=RENDER_OUT NOW='false':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  FORCE=""
+  if [ "{{NOW}}" = "true" ]; then
+    FORCE="--grace-period=0 --force"
+  fi
+  {{KN}} delete -f "{{FILE}}" --ignore-not-found=true $FORCE
 
 render-routing SPEC *ARGS='':
   uv run j-llm-d render-routing {{SPEC}} --cluster {{CLUSTER}} --user {{NAME_PREFIX}} {{ARGS}}

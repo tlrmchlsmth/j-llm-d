@@ -29,12 +29,14 @@ def parallel_layout(role: RoleSpec) -> ParallelLayout:
     if role.data_parallel.enabled:
         assert role.data_parallel.local_size is not None
         dp_local_size = role.data_parallel.local_size
+        dp_world_size = role.lws.size * dp_local_size
     else:
         dp_local_size = role.gpus_per_pod // tp_local_size
+        dp_world_size = 1
 
     return ParallelLayout(
         tp_world_size=role.tensor_parallel_size,
         tp_local_size=tp_local_size,
         dp_local_size=dp_local_size,
-        dp_world_size=role.lws.size * dp_local_size if role.data_parallel.enabled else 1,
+        dp_world_size=dp_world_size,
     )

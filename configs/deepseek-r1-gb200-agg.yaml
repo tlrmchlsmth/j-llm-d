@@ -14,7 +14,7 @@ vars: {max_concurrency: 1024, mtp_size: 1}
 roles:
   - name: decode
     lws: {nodes: 4}
-    parallelism: {gpus: 4, tp: 1, dp: 4, ep: true}
+    parallelism: {gpus: 4, tp: 1, dp: 16, ep: true}
     ports: {public: 8000, backend: 8200, sidecar: true}
     computed:
       env: {MAX_TOKENS: max_concurrency}

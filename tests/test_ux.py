@@ -27,6 +27,16 @@ def test_compact_parallelism_and_equations_resolve_to_runtime_values():
     assert resolved.vllm_args["max_cudagraph_capture_size"] == 1024
 
 
+def test_dp_is_global_and_local_dp_is_derived_from_lws_nodes():
+    spec = load_spec(ROOT / "configs" / "deepseek-r1-gb200-pd.yaml")
+    role = spec.role("decode")
+    resolved = resolve_role(spec, Instance("tester", spec.release), get_cluster(spec.cluster), role)
+
+    assert role.lws.size == 4
+    assert role.data_parallel.local_size == 4
+    assert resolved.env["MAX_TOKENS"] == "1024"
+
+
 def test_equations_get_explicit_dp_scopes():
     spec = load_spec(ROOT / "configs" / "deepseek-r1-gb200-pd.yaml")
     role = spec.role("decode")

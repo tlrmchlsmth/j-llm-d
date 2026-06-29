@@ -38,10 +38,13 @@ def _apply_parallelism_alias(role: dict[str, Any]) -> None:
         role.setdefault("tensor_parallel_size", parallelism["tp"])
 
     dp = parallelism.get("dp")
-    if isinstance(dp, bool):
-        role.setdefault("data_parallel", {"enabled": dp, "local_size": role.get("gpus_per_pod") if dp else None})
+    if dp is False:
+        role.setdefault("data_parallel", {"enabled": False, "local_size": None})
     elif isinstance(dp, int):
-        role.setdefault("data_parallel", {"enabled": dp > 1, "local_size": dp if dp > 1 else None})
+        nodes = role.get("lws", {}).get("nodes", role.get("lws", {}).get("size", 1))
+        if dp % nodes != 0:
+            raise ValueError("parallelism.dp must divide evenly across LWS nodes")
+        role.setdefault("data_parallel", {"enabled": dp > 1, "local_size": dp // nodes if dp > 1 else None})
 
     if isinstance(parallelism.get("ep"), bool):
         role.setdefault("expert_parallel", {"enabled": parallelism["ep"]})

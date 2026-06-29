@@ -1,0 +1,81 @@
+release: wide-ep
+cluster: gb200
+
+model:
+  id: deepseek-ai/DeepSeek-V4-Pro
+  label: DeepSeek-V4-Pro
+  image: quay.io/tms/vllm-deepseekv4-custom-deepep:latest
+
+topology: pd
+routing: {kind: pd, target_role: decode}
+runtime: {sidecars: [dcgm-exporter, node-exporter]}
+
+vars:
+  max_concurrency: 1024
+  mtp_size: 1
+
+roles:
+  - name: decode
+    lws: {nodes: 4, replicas: 1}
+    parallelism: {gpus: 4, tp: 1, dp: 4, ep: true}
+    ports: {public: 8000, backend: 8200, sidecar: true}
+    kv_transfer_config:
+      kv_connector: NixlConnector
+      kv_role: kv_both
+      kv_buffer_device: cuda
+      kv_load_failure_policy: fail
+    computed:
+      env:
+        MAX_TOKENS: max_concurrency
+      vllm:
+        max_num_batched_tokens: max_concurrency * mtp_size
+        max_num_seqs: max_concurrency
+        max_cudagraph_capture_size: max_concurrency
+    env:
+      VLLM_USE_V2_MODEL_RUNNER: "1"
+      VLLM_USE_BREAKABLE_CUDAGRAPH: "1"
+      DEEPEP_METRICS_ENABLED: "1"
+    vllm:
+      load_format: auto
+      disable_uvicorn_access_log: true
+      trust_remote_code: true
+      gpu_memory_utilization: "0.85"
+      api_server_count: 4
+      kv_cache_dtype: fp8
+      block_size: 256
+      no_disable_hybrid_kv_cache_manager: true
+      attention_config.use_fp4_indexer_cache: "True"
+      compilation_config: {cudagraph_mode: FULL_DECODE_ONLY, custom_ops: [all]}
+      enable_force_include_usage: true
+      enable_eplb: true
+      eplb_config:
+        window_size: "100"
+        step_interval: "3000"
+        num_redundant_experts: "32"
+        log_balancedness: "False"
+        use_async: "True"
+        communicator: nixl
+        log_balancedness_interval: "1000"
+      kernel_config: {enable_flashinfer_autotune: false}
+      all2all_backend: deepep_v2
+
+  - name: prefill
+    lws: {nodes: 2, replicas: 1}
+    parallelism: {gpus: 4, tp: 4, dp: 1, ep: true}
+    kv_transfer_config:
+      kv_connector: NixlConnector
+      kv_role: kv_both
+      kv_buffer_device: cuda
+      kv_load_failure_policy: fail
+    vllm:
+      load_format: auto
+      disable_uvicorn_access_log: true
+      trust_remote_code: true
+      moe_backend: deep_gemm_mega_moe
+      gpu_memory_utilization: "0.85"
+      api_server_count: 4
+      kv_cache_dtype: fp8
+      block_size: 256
+      no_disable_hybrid_kv_cache_manager: true
+      attention_config.use_fp4_indexer_cache: "True"
+      enable_force_include_usage: true

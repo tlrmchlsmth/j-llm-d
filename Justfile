@@ -15,9 +15,68 @@ DEV_POD_NAME := NAME_PREFIX + "-vllm-dev"
 GB200_DIR := "gb200"
 DEV_DIR := "dev"
 MONITORING_DIR := "monitoring"
+SPEC_DEFAULT := "configs/deepseek-r1-gb200-pd.yaml"
 
 default:
   just --list
+
+# === v2 spec-based renderer ===
+
+render SPEC=SPEC_DEFAULT:
+  uv run j-llm-d render {{SPEC}} --user {{NAME_PREFIX}}
+
+render-routing SPEC=SPEC_DEFAULT:
+  uv run j-llm-d render-routing {{SPEC}} --user {{NAME_PREFIX}}
+
+start SPEC=SPEC_DEFAULT:
+  uv run j-llm-d render {{SPEC}} --user {{NAME_PREFIX}} | {{KN}} apply -f -
+
+deploy-routing SPEC=SPEC_DEFAULT:
+  uv run j-llm-d render-routing {{SPEC}} --user {{NAME_PREFIX}} | {{KN}} apply -f -
+
+stop SPEC=SPEC_DEFAULT NOW='false':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  FORCE=""
+  if [ "{{NOW}}" = "true" ]; then
+    FORCE="--grace-period=0 --force"
+  fi
+  uv run j-llm-d render {{SPEC}} --user {{NAME_PREFIX}} | {{KN}} delete -f - --ignore-not-found=true $FORCE
+
+restart SPEC=SPEC_DEFAULT:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  INSTANCE=$(uv run j-llm-d instance-id {{SPEC}} --user {{NAME_PREFIX}})
+  {{KN}} delete lws -l app.kubernetes.io/instance=$INSTANCE --ignore-not-found=true --grace-period=0 --force &
+  {{KN}} delete pod -l app.kubernetes.io/instance=$INSTANCE --ignore-not-found=true --grace-period=0 --force &
+  wait
+  {{KN}} wait --for=delete pod -l app.kubernetes.io/instance=$INSTANCE --timeout=60s 2>/dev/null || true
+  just start {{SPEC}}
+
+# Wait for the v2-rendered stack to be ready.
+ready SPEC=SPEC_DEFAULT:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  INSTANCE=$(uv run j-llm-d instance-id {{SPEC}} --user {{NAME_PREFIX}})
+  EPP=$(uv run j-llm-d name {{SPEC}} infpool-epp --user {{NAME_PREFIX}})
+  GATEWAY_SVC=$(uv run j-llm-d name {{SPEC}} inference-gateway-istio --user {{NAME_PREFIX}})
+  {{KN}} wait --for=condition=Ready pod -l app.kubernetes.io/instance=$INSTANCE,llm-d.ai/role=decode --timeout=1200s &
+  ({{KN}} wait --for=condition=Ready pod -l app.kubernetes.io/instance=$INSTANCE,llm-d.ai/role=prefill --timeout=1200s 2>/dev/null || true) &
+  {{KN}} wait --for=condition=Available deploy/$EPP --timeout=120s &
+  echo "Waiting for v2 model pods and EPP..."
+  wait
+  echo "Checking gateway..."
+  until {{KN}} exec deploy/$EPP -- curl -sf --max-time 5 http://$GATEWAY_SVC:80/v1/models 2>/dev/null | grep -q '"id"'
+  do
+    sleep 2
+  done
+  echo "Ready."
+
+flush-cache SPEC=SPEC_DEFAULT:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  CACHE_PATH=$(uv run j-llm-d cache-path {{SPEC}} --user {{NAME_PREFIX}})
+  {{KN}} exec {{DEV_POD_NAME}} -- bash -c "rm -rf '$CACHE_PATH' && echo 'Compile cache flushed: $CACHE_PATH'"
 
 @print-gpus:
   kubectl get pods -A -o json | jq -r ' \
@@ -180,7 +239,7 @@ VLLM_IMAGE := env("VLLM_IMAGE", "quay.io/tms/vllm-deepseekv4-custom-deepep:lates
 FORK_REPO := env("FORK_REPO", "")
 FORK_BRANCH := env("FORK_BRANCH", "")
 
-start MODE='pd' ROUTING='load-aware' DEV='false':
+v1-start MODE='pd' ROUTING='load-aware' DEV='false':
   #!/usr/bin/env bash
   set -euo pipefail
   export DEPLOY_NAME="{{DEPLOY_NAME}}"
@@ -221,7 +280,7 @@ start MODE='pd' ROUTING='load-aware' DEV='false':
   envsubst '${DEPLOY_NAME}' < {{GB200_DIR}}/httproute.yaml | {{KN}} apply -f -
   echo "Deployed $DEPLOY_TS"
 
-stop NOW='false':
+v1-stop NOW='false':
   #!/usr/bin/env bash
   set -euo pipefail
   FORCE=""
@@ -244,7 +303,7 @@ stop NOW='false':
   wait
   {{KN}} delete sa {{DEPLOY_NAME}} --ignore-not-found=true
 
-restart MODE='pd' ROUTING='load-aware' DEV='false':
+v1-restart MODE='pd' ROUTING='load-aware' DEV='false':
   #!/usr/bin/env bash
   set -euo pipefail
   # Force-delete LWS to kill pods immediately, then re-apply the full stack.
@@ -258,10 +317,10 @@ restart MODE='pd' ROUTING='load-aware' DEV='false':
   # Wait for everything to be fully gone
   {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-decode --timeout=60s 2>/dev/null || true
   {{KN}} wait --for=delete pod -l leaderworkerset.sigs.k8s.io/name={{DEPLOY_NAME}}-prefill --timeout=60s 2>/dev/null || true
-  just start {{MODE}} {{ROUTING}} {{DEV}}
+  just v1-start {{MODE}} {{ROUTING}} {{DEV}}
 
-# Wait for the full stack to be ready (pods + gateway serving)
-ready:
+# Wait for the v1 stack to be ready (pods + gateway serving)
+v1-ready:
   #!/usr/bin/env bash
   set -euo pipefail
   {{KN}} wait --for=condition=Ready pod -l llm-d.ai/role=decode,llm-d.ai/owner={{NAME_PREFIX}} --timeout=1200s &
@@ -442,7 +501,7 @@ cache-model:
   {{KN}} delete daemonset model-cache
 
 # Flush vLLM/FlashInfer compile caches on Lustre (run after image or config changes)
-flush-cache:
+v1-flush-cache:
   {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/{{NAME_PREFIX}}/vllm_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/flashinfer_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/fa_cute_dsl_cache /mnt/lustre/{{NAME_PREFIX}}/tilelang_cache /mnt/lustre/{{NAME_PREFIX}}/flashinfer_workspace && echo "Compile caches flushed"'
 
 NYANN_BENCH_DIR := env("NYANN_BENCH_DIR", "")

@@ -1,0 +1,273 @@
+from __future__ import annotations
+
+import yaml
+
+from ..instance import Instance
+from ..ports import derive_ports
+from ..spec import DeploymentSpec, RoutingKind
+
+
+def _plugin_config(kind: RoutingKind) -> str:
+    if kind == RoutingKind.RANDOM:
+        config = {
+            "apiVersion": "inference.networking.x-k8s.io/v1alpha1",
+            "kind": "EndpointPickerConfig",
+            "plugins": [{"type": "weighted-random-picker"}],
+            "schedulingProfiles": [{"name": "default", "plugins": [{"pluginRef": "weighted-random-picker"}]}],
+        }
+    elif kind == RoutingKind.PD:
+        config = {
+            "apiVersion": "inference.networking.x-k8s.io/v1alpha1",
+            "kind": "EndpointPickerConfig",
+            "plugins": [
+                {"type": "disagg-headers-handler"},
+                {"type": "prefill-filter"},
+                {"type": "decode-filter"},
+                {"type": "prefix-cache-scorer"},
+                {"type": "active-request-scorer"},
+                {"type": "queue-scorer"},
+                {"type": "always-disagg-pd-decider"},
+                {"type": "disagg-profile-handler", "parameters": {"deciders": {"prefill": "always-disagg-pd-decider"}}},
+                {"type": "weighted-random-picker", "name": "prefill-picker", "parameters": {"threshold": 0.1, "hashBlockSize": 5}},
+                {"type": "weighted-random-picker", "name": "decode-picker", "parameters": {"threshold": 0.1}},
+            ],
+            "schedulingProfiles": [
+                {
+                    "name": "prefill",
+                    "plugins": [
+                        {"pluginRef": "prefill-filter"},
+                        {"pluginRef": "prefix-cache-scorer", "weight": 3},
+                        {"pluginRef": "active-request-scorer", "weight": 2},
+                        {"pluginRef": "queue-scorer", "weight": 2},
+                        {"pluginRef": "prefill-picker"},
+                    ],
+                },
+                {
+                    "name": "decode",
+                    "plugins": [
+                        {"pluginRef": "decode-filter"},
+                        {"pluginRef": "active-request-scorer", "weight": 2},
+                        {"pluginRef": "decode-picker"},
+                    ],
+                },
+            ],
+        }
+    else:
+        config = {
+            "apiVersion": "inference.networking.x-k8s.io/v1alpha1",
+            "kind": "EndpointPickerConfig",
+            "plugins": [
+                {"type": "active-request-scorer"},
+                {"type": "queue-scorer"},
+                {"type": "weighted-random-picker", "parameters": {"threshold": 0.1}},
+            ],
+            "schedulingProfiles": [
+                {
+                    "name": "default",
+                    "plugins": [
+                        {"pluginRef": "active-request-scorer", "weight": 2},
+                        {"pluginRef": "queue-scorer", "weight": 2},
+                        {"pluginRef": "weighted-random-picker"},
+                    ],
+                }
+            ],
+        }
+    return yaml.safe_dump(config, sort_keys=False)
+
+
+def render_routing(spec: DeploymentSpec, instance: Instance) -> list[dict]:
+    if spec.routing.kind == RoutingKind.DISABLED:
+        return []
+
+    role = spec.role(spec.routing.target_role)
+    ports = derive_ports(
+        data_parallel_enabled=role.data_parallel.enabled,
+        data_parallel_local_size=role.data_parallel.local_size,
+        public_base=role.serving_port_base,
+        backend_base=role.backend_port_base,
+    )
+    infpool_name = instance.name("infpool")
+    epp_name = instance.name("infpool-epp")
+    gateway_name = instance.name("inference-gateway")
+    gateway_service = instance.name("inference-gateway-istio")
+
+    selector = instance.pod_selector(spec.routing.target_role) | {
+        "llm-d.ai/inferenceServing": "true",
+        "llm-d.ai/deployment": spec.topology.value,
+    }
+
+    return [
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": instance.name("epp-config"), "labels": instance.labels("routing")},
+            "data": {"plugins.yaml": _plugin_config(spec.routing.kind)},
+        },
+        {
+            "apiVersion": "inference.networking.x-k8s.io/v1alpha2",
+            "kind": "InferencePool",
+            "metadata": {"name": infpool_name, "labels": instance.labels("routing")},
+            "spec": {
+                "targetPorts": [{"number": port} for port in ports.public],
+                "selector": selector,
+                "extensionRef": {"name": epp_name},
+            },
+        },
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {"name": epp_name, "labels": instance.labels("epp")},
+            "spec": {
+                "replicas": spec.routing.replicas,
+                "selector": {"matchLabels": instance.labels("epp")},
+                "template": {
+                    "metadata": {"labels": instance.labels("epp") | {"inferencepool": epp_name}},
+                    "spec": {
+                        "affinity": {
+                            "nodeAffinity": {
+                                "requiredDuringSchedulingIgnoredDuringExecution": {
+                                    "nodeSelectorTerms": [
+                                        {
+                                            "matchExpressions": [
+                                                {
+                                                    "key": "kubernetes.io/arch",
+                                                    "operator": "In",
+                                                    "values": ["amd64"],
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                }
+                            }
+                        },
+                        "containers": [
+                            {
+                                "name": "epp",
+                                "image": spec.routing.epp_image,
+                                "imagePullPolicy": "Always",
+                                "args": ["--plugins-config-file=/etc/epp/plugins.yaml", "--grpc-port=9002"],
+                                "ports": [{"containerPort": 9002, "name": "grpc"}],
+                                "volumeMounts": [
+                                    {"name": "config", "mountPath": "/etc/epp/plugins.yaml", "subPath": "plugins.yaml"}
+                                ],
+                                "resources": {
+                                    "requests": {"cpu": "8", "memory": "16Gi"},
+                                    "limits": {"cpu": "8", "memory": "16Gi"},
+                                },
+                            }
+                        ],
+                        "volumes": [{"name": "config", "configMap": {"name": instance.name("epp-config")}}],
+                    },
+                },
+            },
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": instance.name("gateway-options"), "labels": instance.labels("gateway")},
+            "data": {
+                "deployment": yaml.safe_dump(
+                    {
+                        "spec": {
+                            "template": {
+                                "spec": {
+                                    "containers": [
+                                        {
+                                            "name": "istio-proxy",
+                                            "resources": {
+                                                "requests": {"cpu": "8", "memory": "64Gi"},
+                                                "limits": {"cpu": "8", "memory": "64Gi"},
+                                            },
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    sort_keys=False,
+                )
+            },
+        },
+        {
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "Gateway",
+            "metadata": {
+                "name": gateway_name,
+                "labels": instance.labels("gateway") | {"istio.io/enable-inference-extproc": "true"},
+            },
+            "spec": {
+                "infrastructure": {
+                    "parametersRef": {
+                        "group": "",
+                        "kind": "ConfigMap",
+                        "name": instance.name("gateway-options"),
+                    }
+                },
+                "gatewayClassName": "istio",
+                "listeners": [
+                    {
+                        "name": "default",
+                        "port": 80,
+                        "protocol": "HTTP",
+                        "allowedRoutes": {"namespaces": {"from": "Same"}},
+                    }
+                ],
+            },
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": gateway_service,
+                "labels": {
+                    **instance.labels("gateway"),
+                    "gateway.networking.k8s.io/gateway-name": gateway_name,
+                    "istio.io/enable-inference-extproc": "true",
+                },
+            },
+            "spec": {
+                "selector": {"gateway.networking.k8s.io/gateway-name": gateway_name},
+                "ports": [
+                    {"name": "status-port", "port": 15021, "protocol": "TCP", "targetPort": 15021},
+                    {"name": "http", "port": 80, "protocol": "TCP", "targetPort": 8080},
+                ],
+            },
+        },
+        {
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": instance.name("route"), "labels": instance.labels("route")},
+            "spec": {
+                "parentRefs": [{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": gateway_name}],
+                "rules": [
+                    {
+                        "backendRefs": [
+                            {
+                                "group": "inference.networking.k8s.io",
+                                "kind": "InferencePool",
+                                "name": infpool_name,
+                                "port": ports.public[0],
+                                "weight": 1,
+                            }
+                        ],
+                        "matches": [{"path": {"type": "PathPrefix", "value": "/"}}],
+                        "timeouts": {"backendRequest": "0s", "request": "0s"},
+                    }
+                ],
+            },
+        },
+        {
+            "apiVersion": "networking.istio.io/v1",
+            "kind": "DestinationRule",
+            "metadata": {"name": instance.name("infpool-backend"), "labels": instance.labels("routing")},
+            "spec": {
+                "host": f"{infpool_name}-ip",
+                "trafficPolicy": {
+                    "connectionPool": {
+                        "tcp": {"maxConnections": 256000},
+                        "http": {"idleTimeout": "300s"},
+                    }
+                },
+            },
+        },
+    ]

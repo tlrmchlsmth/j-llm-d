@@ -1,0 +1,20 @@
+release: qwen
+cluster: gb200
+topology: aggregated
+
+model:
+  id: Qwen/Qwen3.6-35B-A3B
+  label: Qwen3.6-35B-A3B
+  image: quay.io/tms/vllm-deepseekv4-custom-deepep:latest
+
+routing: {kind: load_aware, target_role: decode}
+runtime: {sidecars: []}
+
+roles:
+  - name: decode
+    lws: {nodes: 1}
+    parallelism: {gpus: 1, tp: 1, dp: false, ep: false}
+    ports: {public: 8000}
+    resources: {cpu: "8", memory: 64Gi, gpus: 1, ephemeral_storage: 64Gi}
+    vllm:
+      trust_remote_code: true

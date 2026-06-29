@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from .cluster import Cluster
+from .equations import render_mapping
+from .instance import Instance
+from .ports import RolePorts, derive_ports
+from .spec import DeploymentSpec, RoleSpec
+
+
+@dataclass(frozen=True)
+class ResolvedRole:
+    ports: RolePorts
+    lustre_prefix: str
+    cache_prefix: str
+    fabric_profile: str
+    env: dict[str, str]
+    vllm_args: dict[str, Any]
+    resource_claims: list[dict[str, str]]
+
+
+def resolve_role(spec: DeploymentSpec, instance: Instance, cluster: Cluster, role: RoleSpec) -> ResolvedRole:
+    ports = derive_ports(
+        data_parallel_enabled=role.data_parallel.enabled,
+        data_parallel_local_size=role.data_parallel.local_size,
+        public_base=role.serving_port_base,
+        backend_base=role.backend_port_base,
+    )
+    context = _variable_context(spec, role)
+    computed_env = render_mapping(role.computed.get("env", {}), context)
+    context |= computed_env
+    computed_vllm_args = render_mapping(role.computed.get("vllm", role.computed.get("vllm_args", {})), context)
+
+    fabric_profile = cluster.fabric_profile_for(
+        topology=spec.topology.value,
+        role_name=role.name,
+        expert_parallel=role.expert_parallel.enabled,
+    )
+
+    cache_prefix = instance.lustre_path(
+        "jit-cache",
+        spec.cache.gpu_arch,
+        spec.cache.cuda,
+        spec.cache.vllm_version,
+        spec.release,
+    )
+    env = _base_env(spec, instance, cache_prefix)
+    env |= cluster.fabric_env(fabric_profile, context)
+    env |= spec.runtime.env
+    env |= role.env
+    env |= {key: str(value) for key, value in computed_env.items()}
+
+    return ResolvedRole(
+        ports=ports,
+        lustre_prefix=instance.lustre_path(),
+        cache_prefix=cache_prefix,
+        fabric_profile=fabric_profile,
+        env=env,
+        vllm_args=role.vllm_args | computed_vllm_args,
+        resource_claims=_resource_claims(cluster, fabric_profile),
+    )
+
+
+def _variable_context(spec: DeploymentSpec, role: RoleSpec) -> dict[str, Any]:
+    dp_local_size = role.data_parallel.local_size if role.data_parallel.enabled else 1
+    dp_world_size = role.lws.size * dp_local_size if role.data_parallel.enabled else 1
+
+    return {
+        **spec.vars,
+        **role.vars,
+        "gpus_per_pod": role.gpus_per_pod,
+        "tp": role.tensor_parallel_size,
+        "dp_enabled": role.data_parallel.enabled,
+        "dp_local_size": dp_local_size,
+        "dp_world_size": dp_world_size,
+        "lws_size": role.lws.size,
+        "lws_replicas": role.lws.replicas,
+    }
+
+
+def _base_env(spec: DeploymentSpec, instance: Instance, cache_prefix: str) -> dict[str, str]:
+    return {
+        "HF_HOME": spec.model.hf_home,
+        "VLLM_DEV_VENV": spec.runtime.dev_venv or (instance.lustre_path("vllm-venv") if spec.runtime.dev else ""),
+        "VLLM_NO_USAGE_STATS": "1",
+        "TQDM_DISABLE": "1",
+        "VLLM_LOGGING_LEVEL": "INFO",
+        "VLLM_CACHE_ROOT": f"{cache_prefix}/vllm",
+        "FLASHINFER_CACHE_DIR": f"{cache_prefix}/flashinfer",
+        "FLASHINFER_WORKSPACE_BASE": f"{cache_prefix}/flashinfer-workspace",
+        "FLASH_ATTENTION_CUTE_DSL_CACHE_ENABLED": "1",
+        "FLASH_ATTENTION_CUTE_DSL_CACHE_DIR": f"{cache_prefix}/fa-cute-dsl",
+        "TILELANG_CACHE_DIR": f"{cache_prefix}/tilelang",
+    }
+
+
+def _resource_claims(cluster: Cluster, fabric_profile: str) -> list[dict[str, str]]:
+    if cluster.imex_resource_claim_template and fabric_profile.startswith("deepep"):
+        return [
+            {
+                "name": "compute-domain-channel",
+                "resourceClaimTemplateName": cluster.imex_resource_claim_template,
+            }
+        ]
+    return []

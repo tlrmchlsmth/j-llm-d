@@ -119,7 +119,7 @@ create-secrets:
   && kubectl create secret generic gh-token-secret --from-literal=GH_TOKEN={{GH_TOKEN}} -n {{NAMESPACE}}
 
 start-poker:
-    POKER_NAME={{POKER_NAME}} envsubst '${POKER_NAME}' < poker/poker.yaml | {{KN}} apply -f -
+  POKER_NAME={{POKER_NAME}} envsubst '${POKER_NAME}' < poker/poker.yaml | {{KN}} apply -f -
 
 # Fetch decode pod names and IPs and cache them
 get-decode-pods:
@@ -158,33 +158,6 @@ parallel-guidellm CONCURRENT_PER_WORKER='4000' REQUESTS_PER_WORKER='4000' INPUT_
     OUTPUT_PATH="parallel-guidellm-$(date +%Y%m%d-%H%M%S)" \
     envsubst '${N_WORKERS} ${MAX_CONCURRENCY} ${NUM_REQUESTS} ${INPUT_LEN} ${OUTPUT_LEN} ${OUTPUT_PATH} ${DEPLOY_NAME} ${NAMESPACE}' \
       < parallel-guidellm.yaml | {{KN}} apply -f -
-
-# Run inference-perf benchmark (kubernetes-sigs/inference-perf)
-# Uses concurrent load type: each worker maintains WORKER_MAX_CONCURRENCY in-flight requests
-inference-perf NUM_REQUESTS='25000' INPUT_LEN='500' OUTPUT_LEN='1500' NUM_WORKERS='2' WORKER_MAX_CONCURRENCY='2048' WARMUP_CONCURRENCY='64' WARMUP_REQUESTS='256':
-  #!/usr/bin/env bash
-  set -euo pipefail
-  INPUT_MEAN={{INPUT_LEN}}
-  OUTPUT_MEAN={{OUTPUT_LEN}}
-  export NUM_REQUESTS={{NUM_REQUESTS}}
-  export NUM_WORKERS={{NUM_WORKERS}}
-  export WORKER_MAX_CONCURRENCY={{WORKER_MAX_CONCURRENCY}}
-  export CONCURRENCY=$((NUM_WORKERS * WORKER_MAX_CONCURRENCY))
-  export WARMUP_CONCURRENCY={{WARMUP_CONCURRENCY}}
-  export WARMUP_REQUESTS={{WARMUP_REQUESTS}}
-  export DEPLOY_NAME="{{DEPLOY_NAME}}"
-  export INPUT_MEAN INPUT_MIN=$((INPUT_MEAN - INPUT_MEAN/5)) INPUT_MAX=$((INPUT_MEAN + INPUT_MEAN/5)) INPUT_STD=$((INPUT_MEAN/10))
-  export OUTPUT_MEAN OUTPUT_MIN=$((OUTPUT_MEAN - OUTPUT_MEAN/5)) OUTPUT_MAX=$((OUTPUT_MEAN + OUTPUT_MEAN/5)) OUTPUT_STD=$((OUTPUT_MEAN/10))
-  {{KN}} delete job inference-perf --ignore-not-found=true
-  {{KN}} delete configmap inference-perf-config --ignore-not-found=true
-  envsubst '${DEPLOY_NAME} ${NUM_REQUESTS} ${NUM_WORKERS} ${WORKER_MAX_CONCURRENCY} ${CONCURRENCY} ${WARMUP_CONCURRENCY} ${WARMUP_REQUESTS} ${INPUT_MEAN} ${INPUT_MIN} ${INPUT_MAX} ${INPUT_STD} ${OUTPUT_MEAN} ${OUTPUT_MIN} ${OUTPUT_MAX} ${OUTPUT_STD}' \
-    < inference-perf-job.yaml | {{KN}} apply -f -
-  echo "inference-perf job submitted (concurrent, workers=${NUM_WORKERS} concurrency=${CONCURRENCY} warmup=${WARMUP_CONCURRENCY}x${WARMUP_REQUESTS} requests=${NUM_REQUESTS} input=${INPUT_MEAN} output=${OUTPUT_MEAN})"
-  echo "  kubectl -n {{NAMESPACE}} logs -f job/inference-perf"
-
-# Get inference-perf results
-inference-perf-logs:
-  {{KN}} logs -f job/inference-perf
 
 deploy_inferencepool ROUTING='load-aware':
   #!/usr/bin/env bash
@@ -297,8 +270,6 @@ v1-stop NOW='false':
   {{KN}} delete configmap {{DEPLOY_NAME}}-gateway-options --ignore-not-found=true &
   {{KN}} delete destinationrule {{DEPLOY_NAME}}-infpool-backend --ignore-not-found=true &
   {{KN}} delete job parallel-guidellm --ignore-not-found=true $FORCE &
-  {{KN}} delete job inference-perf --ignore-not-found=true $FORCE &
-  {{KN}} delete configmap inference-perf-config --ignore-not-found=true &
   just stop-nyann &
   wait
   {{KN}} delete sa {{DEPLOY_NAME}} --ignore-not-found=true
@@ -378,10 +349,6 @@ logs-clean ROLE='decode' KEEP='5':
 
 # === Dev Environment ===
 
-# Note: tmp command, don't commit
-update-dev-env:
-  kubectl exec tms-vllm-dev -- bash -c "cd /mnt/lustre/tms/vllm-dev && git fetch tms && git reset --hard tms/cutedsl-moe-nvfp4 && find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null"
-
 # Deploy the persistent dev pod (CPU-only, for editing/compiling vLLM on Lustre)
 dev-start:
   envsubst < {{DEV_DIR}}/dev-pod.yaml | {{KN}} apply -f -
@@ -443,51 +410,6 @@ dev-build-log:
 # Delete the dev pod
 dev-stop:
   envsubst < {{DEV_DIR}}/dev-pod.yaml | {{KN}} delete -f - --ignore-not-found=true
-
-# Show the root cause of the most recent pod crash from Lustre logs
-# Usage: just crashlog          (checks both decode and prefill)
-#        just crashlog decode   (checks decode only)
-#        just crashlog prefill  (checks prefill only)
-crashlog ROLE='':
-  #!/usr/bin/env bash
-  set -euo pipefail
-  ROLES="${1:-decode prefill}"
-  {{KN}} exec {{DEV_POD_NAME}} -- bash -c '
-  for role in '"$ROLES"'; do
-    LUSTRE="/mnt/lustre/{{NAME_PREFIX}}/logs/$role"
-    [ -d "$LUSTRE" ] || continue
-    LOGS=($(ls -t "$LUSTRE"/{{DEPLOY_NAME}}-${role}-0_*.log 2>/dev/null))
-    [ ${#LOGS[@]} -lt 2 ] && continue
-
-    # Log churn = crashloop indicator
-    RECENT=$(ls -t "$LUSTRE"/{{DEPLOY_NAME}}-${role}-0_*.log | head -5 | wc -l)
-    LATEST_SIZE=$(wc -c < "${LOGS[0]}")
-    echo "=== $role: ${RECENT} recent logs, latest ${LATEST_SIZE} bytes ==="
-
-    # Find the crash log (2nd+ most recent with content)
-    for i in 1 2 3 4; do
-      F="${LOGS[$i]:-}"
-      [ -z "$F" ] && break
-      SIZE=$(wc -c < "$F" 2>/dev/null || echo 0)
-      if [ "$SIZE" -gt 5000 ]; then
-        echo "Crash log: $(basename $F) ($SIZE bytes)"
-        ERRORS=$(grep "Worker failed\|RuntimeError:\|CUDA error:\|AssertionError\|ValueError:\|TypeError:\|illegal\|not implemented" "$F" \
-          | grep -v "Traceback\|File\|^^^^\|resource_tracker\|DeprecationWarning\|Failed core proc" \
-          | sort -u)
-        if [ -n "$ERRORS" ]; then
-          echo "$ERRORS" | head -5
-        else
-          echo "  (no obvious errors found)"
-          echo "  tail:"
-          tail -5 "$F"
-        fi
-        echo ""
-        break
-      fi
-    done
-  done
-  '
-
 
 # Download model weights to local NVMe on all GPU nodes (apply, wait, cleanup)
 cache-model:
@@ -638,59 +560,3 @@ load-dashboards:
       {{KN}} apply -f -
   done
   echo "Dashboards loaded. Grafana will auto-discover them within 30 seconds."
-
-# === KV Cache Sweep ===
-
-KV_SWEEP_IMAGE := "quay.io/tms/llm-d-cuda-dev:ef2c4f7"
-KV_SWEEP_MODEL := "deepseek-ai/DeepSeek-V4-Pro"
-KV_SWEEP_PRIORITY := "low-priority"
-KV_SWEEP_GPU_MEM_UTIL := "0.75"
-KV_SWEEP_MAX_TOKENS := "1024"
-
-# (internal) Render KV sweep Job YAML for a single DP size
-_kv-sweep-job-yaml DP_SIZE:
-  #!/usr/bin/env bash
-  echo "---"
-  env \
-    JOB_NAME="{{NAME_PREFIX}}-kv-sweep-dp{{DP_SIZE}}" \
-    MODEL="{{KV_SWEEP_MODEL}}" \
-    VLLM_IMAGE="{{KV_SWEEP_IMAGE}}" \
-    DP_SIZE={{DP_SIZE}} \
-    GPU_MEM_UTIL={{KV_SWEEP_GPU_MEM_UTIL}} \
-    MAX_TOKENS={{KV_SWEEP_MAX_TOKENS}} \
-    LUSTRE_PREFIX="/mnt/lustre/{{NAME_PREFIX}}" \
-    PRIORITY_CLASS="{{KV_SWEEP_PRIORITY}}" \
-    envsubst '${JOB_NAME} ${MODEL} ${VLLM_IMAGE} ${DP_SIZE} ${GPU_MEM_UTIL} ${MAX_TOKENS} ${LUSTRE_PREFIX} ${PRIORITY_CLASS}' \
-      < kv-sweep-job.yaml
-
-# Sweep KV cache capacity across DP sizes (DP=1,2,4 on 4 GPUs with pure EP)
-kv-sweep DP_SIZES='1 2 4':
-  #!/usr/bin/env bash
-  set -euo pipefail
-  YAML=""
-  for DP in {{DP_SIZES}}; do
-    YAML+="$(just _kv-sweep-job-yaml $DP)"$'\n'
-  done
-  echo "$YAML" | {{KN}} replace --force -f -
-  echo "KV sweep jobs launched for DP sizes: {{DP_SIZES}}"
-
-# Show status of KV sweep jobs
-kv-sweep-status:
-  {{KN}} get jobs -l app=kv-sweep -o wide
-
-# Collect KV cache results from sweep job logs
-kv-sweep-collect:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  for job in $({{KN}} get jobs -l app=kv-sweep -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-    RESULT=$({{KN}} logs "job/$job" 2>/dev/null | grep '^KV_RESULT:' || true)
-    if [ -n "$RESULT" ]; then
-      echo "$RESULT"
-    else
-      echo "# $job: pending ({{KN}} logs job/$job)"
-    fi
-  done
-
-# Clean up KV sweep jobs
-kv-sweep-clean:
-  {{KN}} delete jobs -l app=kv-sweep --ignore-not-found=true

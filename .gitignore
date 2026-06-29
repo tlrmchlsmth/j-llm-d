@@ -37,7 +37,10 @@ build/
 *.swp
 *.swo
 *~
-.claude/
+
+# Claude Code (track skills only)
+.claude/*
+!.claude/skills/
 
 # Logs
 *.log

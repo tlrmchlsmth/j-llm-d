@@ -11,7 +11,7 @@ CLUSTER = load_cluster(ROOT / "clusters" / "oci-gb200-osaka.yaml")
 
 
 def test_compact_parallelism_and_equations_resolve_to_runtime_values():
-    spec = load_spec(ROOT / "models" / "deepseek-r1" / "pd.yaml", CLUSTER)
+    spec = load_spec(ROOT / "models" / "deepseek-v4-gb200" / "pd.yaml", CLUSTER)
     role = spec.role("decode")
     resolved = resolve_role(spec, Instance("tester", spec.release), CLUSTER, role)
 
@@ -30,7 +30,7 @@ def test_compact_parallelism_and_equations_resolve_to_runtime_values():
 
 
 def test_dp_is_global_and_local_dp_is_derived_from_lws_nodes():
-    spec = load_spec(ROOT / "models" / "deepseek-r1" / "pd.yaml", CLUSTER)
+    spec = load_spec(ROOT / "models" / "deepseek-v4-gb200" / "pd.yaml", CLUSTER)
     role = spec.role("decode")
     resolved = resolve_role(spec, Instance("tester", spec.release), CLUSTER, role)
 
@@ -43,7 +43,7 @@ def test_dp_is_global_and_local_dp_is_derived_from_lws_nodes():
 
 
 def test_pd_topology_adds_decode_routing_proxy_defaults():
-    spec = load_spec(ROOT / "models" / "deepseek-r1" / "pd.yaml", CLUSTER)
+    spec = load_spec(ROOT / "models" / "deepseek-v4-gb200" / "pd.yaml", CLUSTER)
     role = spec.role("decode")
 
     assert spec.routing.kind == RoutingKind.PD
@@ -54,7 +54,7 @@ def test_pd_topology_adds_decode_routing_proxy_defaults():
 
 
 def test_equations_get_explicit_dp_scopes():
-    spec = load_spec(ROOT / "models" / "deepseek-r1" / "pd.yaml", CLUSTER)
+    spec = load_spec(ROOT / "models" / "deepseek-v4-gb200" / "pd.yaml", CLUSTER)
     role = spec.role("decode")
     role.computed["env"] = {
         "DP_LOCAL": "dp_local_size",
@@ -67,7 +67,7 @@ def test_equations_get_explicit_dp_scopes():
 
 
 def test_prefill_tp_spans_lws_nodes():
-    spec = load_spec(ROOT / "models" / "deepseek-r1" / "pd.yaml", CLUSTER)
+    spec = load_spec(ROOT / "models" / "deepseek-v4-gb200" / "pd.yaml", CLUSTER)
     role = spec.role("prefill")
     resolved = resolve_role(spec, Instance("tester", spec.release), CLUSTER, role)
 

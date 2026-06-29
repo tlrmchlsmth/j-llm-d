@@ -26,14 +26,14 @@ def _find(objects: list[dict], kind: str, name_suffix: str | None = None) -> dic
 
 
 def test_rendered_yaml_parses():
-    objects = _objects("deepseek-r1/pd.yaml")
+    objects = _objects("deepseek-v4-gb200/pd.yaml")
     parsed = list(yaml.safe_load_all(render_to_yaml(objects)))
 
     assert len(parsed) == len(objects)
 
 
 def test_dp_ports_feed_container_readiness_and_inferencepool():
-    objects = _objects("deepseek-r1/pd.yaml")
+    objects = _objects("deepseek-v4-gb200/pd.yaml")
     lws = _find(objects, "LeaderWorkerSet", "decode")
     container = lws["spec"]["leaderWorkerTemplate"]["workerTemplate"]["spec"]["containers"][0]
     infpool = _find(objects, "InferencePool")
@@ -61,7 +61,7 @@ def test_no_dp_qwen_uses_single_port_and_no_dp_flags():
 
 
 def test_inferencepool_selector_is_instance_scoped():
-    objects = _objects("deepseek-r1/pd.yaml")
+    objects = _objects("deepseek-v4-gb200/pd.yaml")
     infpool = _find(objects, "InferencePool")
 
     assert infpool["spec"]["selector"]["app.kubernetes.io/instance"] == "tester-wide-ep"
@@ -69,7 +69,7 @@ def test_inferencepool_selector_is_instance_scoped():
 
 
 def test_prefill_launch_uses_global_tp_and_local_gpu_span():
-    objects = _objects("deepseek-r1/pd.yaml")
+    objects = _objects("deepseek-v4-gb200/pd.yaml")
     lws = _find(objects, "LeaderWorkerSet", "prefill")
     container = lws["spec"]["leaderWorkerTemplate"]["workerTemplate"]["spec"]["containers"][0]
     script = container["args"][0]

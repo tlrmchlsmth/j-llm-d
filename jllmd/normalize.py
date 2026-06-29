@@ -91,3 +91,42 @@ def _apply_concurrency_alias(role: dict[str, Any]) -> None:
 def _apply_vllm_alias(role: dict[str, Any]) -> None:
     if "vllm" in role and "vllm_args" not in role:
         role["vllm_args"] = role.pop("vllm")
+
+
+def apply_cluster_defaults(data: dict[str, Any], *, gpus_per_node: int) -> dict[str, Any]:
+    normalized = dict(data)
+    roles = []
+    for role in normalized.get("roles", []):
+        role_data = dict(role)
+        if not _has_gpu_override(role_data):
+            role_data["gpus_per_pod"] = _infer_gpus_per_pod(role_data, cluster_gpus_per_node=gpus_per_node)
+        roles.append(role_data)
+    normalized["roles"] = roles
+    normalized.pop("cluster", None)
+    return normalized
+
+
+def _has_gpu_override(role: dict[str, Any]) -> bool:
+    if any(key in role for key in ("gpus_per_pod", "gpus_per_node", "gpus")):
+        return True
+    parallelism = role.get("parallelism", {})
+    return isinstance(parallelism, dict) and any(key in parallelism for key in ("gpus_per_node", "gpus"))
+
+
+def _infer_gpus_per_pod(role: dict[str, Any], *, cluster_gpus_per_node: int) -> int:
+    parallelism = role.get("parallelism", {})
+    lws = role.get("lws", {})
+    lws_size = int(lws.get("size", lws.get("nodes", 1)))
+    tp_world = int(parallelism.get("tp", 1))
+    if tp_world > cluster_gpus_per_node:
+        tp_local = max(1, tp_world // lws_size)
+    else:
+        tp_local = tp_world
+
+    dp = parallelism.get("dp")
+    if isinstance(dp, int) and dp > 1:
+        dp_local = max(1, dp // lws_size)
+        return tp_local * dp_local
+    if dp is False:
+        return tp_local
+    return cluster_gpus_per_node

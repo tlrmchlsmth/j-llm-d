@@ -7,7 +7,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .normalize import normalize_lws, normalize_role
+from .cluster import Cluster
+from .normalize import apply_cluster_defaults, normalize_lws, normalize_role
 
 
 class TopologyKind(StrEnum):
@@ -130,7 +131,6 @@ class DeploymentSpec(BaseModel):
 
     release: str
     namespace: str = "vllm"
-    cluster: Literal["gb200"] = "gb200"
     topology: TopologyKind
     model: ModelSpec
     roles: list[RoleSpec]
@@ -168,7 +168,9 @@ class DeploymentSpec(BaseModel):
         raise KeyError(f"unknown role: {name}")
 
 
-def load_spec(path: str | Path) -> DeploymentSpec:
+def load_spec(path: str | Path, cluster: Cluster | None = None) -> DeploymentSpec:
     with Path(path).open("r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
+    if cluster is not None:
+        data = apply_cluster_defaults(data, gpus_per_node=cluster.gpus_per_node)
     return DeploymentSpec.model_validate(data)

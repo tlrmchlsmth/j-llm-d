@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
 
 
 @dataclass(frozen=True)
 class Cluster:
     name: str
+    gpus_per_node: int
     lustre_pvc: str
     local_nvme_path: str
     shm_size: str
@@ -69,17 +73,15 @@ class Cluster:
         return env
 
 
-GB200 = Cluster(
-    name="gb200",
-    lustre_pvc="lustre-pvc-vllm",
-    local_nvme_path="/mnt/numa0",
-    shm_size="2Gi",
-    ucx_net_devices="mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1",
-    imex_resource_claim_template="llm-d-dev-claim",
-)
-
-
-def get_cluster(name: str) -> Cluster:
-    if name == "gb200":
-        return GB200
-    raise ValueError(f"unknown cluster: {name}")
+def load_cluster(path: str | Path) -> Cluster:
+    with Path(path).open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    return Cluster(
+        name=data["name"],
+        gpus_per_node=int(data.get("gpus_per_node", 4)),
+        lustre_pvc=data["storage"]["lustre_pvc"],
+        local_nvme_path=data["storage"].get("local_nvme_path", "/mnt/numa0"),
+        shm_size=data.get("pod_defaults", {}).get("shm_size", "2Gi"),
+        ucx_net_devices=data["fabric"]["ucx_net_devices"],
+        imex_resource_claim_template=data["fabric"].get("imex_resource_claim_template"),
+    )

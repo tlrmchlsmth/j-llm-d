@@ -3,7 +3,7 @@ from __future__ import annotations
 import yaml
 
 from ..instance import Instance
-from ..cluster import get_cluster
+from ..cluster import Cluster
 from ..resolve import resolve_role
 from ..spec import DeploymentSpec, RoutingKind
 
@@ -76,14 +76,14 @@ def _plugin_config(kind: RoutingKind) -> str:
     return yaml.safe_dump(config, sort_keys=False)
 
 
-def render_routing(spec: DeploymentSpec, instance: Instance) -> list[dict]:
+def render_routing(spec: DeploymentSpec, instance: Instance, cluster: Cluster) -> list[dict]:
     assert spec.routing.kind is not None
     assert spec.routing.target_role is not None
     if spec.routing.kind == RoutingKind.DISABLED:
         return []
 
     role = spec.role(spec.routing.target_role)
-    ports = resolve_role(spec, instance, get_cluster(spec.cluster), role).ports
+    ports = resolve_role(spec, instance, cluster, role).ports
     infpool_name = instance.name("infpool")
     epp_name = instance.name("infpool-epp")
     gateway_name = instance.name("inference-gateway")

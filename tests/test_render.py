@@ -2,16 +2,18 @@ from pathlib import Path
 
 import yaml
 
+from jllmd.cluster import load_cluster
 from jllmd.render import render, render_to_yaml
 from jllmd.spec import load_spec
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CLUSTER = load_cluster(ROOT / "clusters" / "oci-gb200-osaka.yaml")
 
 
 def _objects(config: str) -> list[dict]:
-    spec = load_spec(ROOT / "configs" / config)
-    return render(spec, user="tester")
+    spec = load_spec(ROOT / "configs" / config, CLUSTER)
+    return render(spec, user="tester", cluster=CLUSTER)
 
 
 def _find(objects: list[dict], kind: str, name_suffix: str | None = None) -> dict:

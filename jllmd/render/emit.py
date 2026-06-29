@@ -6,16 +6,15 @@ import yaml
 
 from .lws import render_lws
 from .routing import render_routing
-from ..cluster import get_cluster
+from ..cluster import Cluster
 from ..instance import Instance
 from ..spec import DeploymentSpec
 
 
-def render(spec: DeploymentSpec, *, user: str, routing_only: bool = False) -> list[dict]:
+def render(spec: DeploymentSpec, *, user: str, cluster: Cluster, routing_only: bool = False) -> list[dict]:
     instance = Instance(user=user, release=spec.release)
-    cluster = get_cluster(spec.cluster)
     if routing_only:
-        return render_routing(spec, instance)
+        return render_routing(spec, instance, cluster)
 
     objects = [
         {
@@ -45,7 +44,7 @@ def render(spec: DeploymentSpec, *, user: str, routing_only: bool = False) -> li
         )
     for role in spec.roles:
         objects.append(render_lws(spec, instance, cluster, role))
-    objects.extend(render_routing(spec, instance))
+    objects.extend(render_routing(spec, instance, cluster))
     return objects
 
 

@@ -5,7 +5,6 @@ from jllmd.warnings import collect_warnings
 def _spec_with_role(role: dict) -> dict:
     return {
         "release": "bad",
-        "cluster": "gb200",
         "topology": "aggregated",
         "model": {"id": "model", "image": "image"},
         "routing": {"kind": "disabled"},
@@ -123,7 +122,6 @@ def test_pd_topology_sets_decode_proxy_without_role_flag():
     spec = DeploymentSpec.model_validate(
         {
             "release": "pd",
-            "cluster": "gb200",
             "topology": "pd",
             "model": {"id": "model", "image": "image"},
             "roles": [

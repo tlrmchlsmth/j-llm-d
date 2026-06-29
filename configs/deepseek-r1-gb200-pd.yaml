@@ -1,5 +1,4 @@
 release: wide-ep
-cluster: gb200
 topology: pd
 
 model:
@@ -16,7 +15,7 @@ vars:
 roles:
   - name: decode
     lws: {size: 4, replicas: 1}
-    parallelism: {gpus_per_node: 4, tp: 1, dp: 16, ep: true}
+    parallelism: {tp: 1, dp: 16, ep: true}
     kv_transfer_config:
       kv_connector: NixlConnector
       kv_role: kv_both
@@ -56,7 +55,7 @@ roles:
 
   - name: prefill
     lws: {size: 2, replicas: 1}
-    parallelism: {gpus_per_node: 4, tp: 8, dp: false, ep: true}
+    parallelism: {tp: 8, dp: false, ep: true}
     kv_transfer_config:
       kv_connector: NixlConnector
       kv_role: kv_both

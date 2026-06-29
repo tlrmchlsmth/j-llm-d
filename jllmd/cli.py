@@ -6,15 +6,17 @@ import sys
 
 from .render import render, render_to_yaml
 from .instance import Instance
+from .cluster import load_cluster
 from .spec import load_spec
 from .warnings import collect_warnings
 
 
 def _render(args: argparse.Namespace, *, routing_only: bool = False) -> int:
     user = args.user or os.environ.get("USER") or "dev"
-    spec = load_spec(args.spec)
+    cluster = load_cluster(args.cluster)
+    spec = load_spec(args.spec, cluster)
     _print_warnings(spec)
-    sys.stdout.write(render_to_yaml(render(spec, user=user, routing_only=routing_only)))
+    sys.stdout.write(render_to_yaml(render(spec, user=user, cluster=cluster, routing_only=routing_only)))
     return 0
 
 
@@ -29,11 +31,13 @@ def main(argv: list[str] | None = None) -> int:
 
     render_parser = sub.add_parser("render")
     render_parser.add_argument("spec")
+    render_parser.add_argument("--cluster", required=True)
     render_parser.add_argument("--user")
     render_parser.set_defaults(func=lambda args: _render(args, routing_only=False))
 
     routing_parser = sub.add_parser("render-routing")
     routing_parser.add_argument("spec")
+    routing_parser.add_argument("--cluster", required=True)
     routing_parser.add_argument("--user")
     routing_parser.set_defaults(func=lambda args: _render(args, routing_only=True))
 

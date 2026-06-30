@@ -68,6 +68,17 @@ def test_inferencepool_selector_is_instance_scoped():
     assert infpool["spec"]["selector"]["llm-d.ai/role"] == "decode"
 
 
+def test_epp_uses_current_config_file_flag():
+    objects = _objects("deepseek-v4-gb200/pd.yaml")
+    deployment = _find(objects, "Deployment", "infpool-epp")
+    args = deployment["spec"]["template"]["spec"]["containers"][0]["args"]
+
+    assert "--config-file=/etc/epp/plugins.yaml" in args
+    assert "--pool-name=tester-wide-ep-infpool" in args
+    assert "--pool-namespace=vllm" in args
+    assert not any(arg.startswith("--plugins-config-file") for arg in args)
+
+
 def test_prefill_launch_uses_global_tp_and_local_gpu_span():
     objects = _objects("deepseek-v4-gb200/pd.yaml")
     lws = _find(objects, "LeaderWorkerSet", "prefill")

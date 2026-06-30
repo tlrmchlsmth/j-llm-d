@@ -143,7 +143,12 @@ def render_routing(spec: DeploymentSpec, instance: Instance, cluster: Cluster) -
                                 "name": "epp",
                                 "image": spec.routing.epp_image,
                                 "imagePullPolicy": "Always",
-                                "args": ["--plugins-config-file=/etc/epp/plugins.yaml", "--grpc-port=9002"],
+                                "args": [
+                                    "--config-file=/etc/epp/plugins.yaml",
+                                    "--grpc-port=9002",
+                                    f"--pool-name={infpool_name}",
+                                    f"--pool-namespace={spec.namespace}",
+                                ],
                                 "ports": [{"containerPort": 9002, "name": "grpc"}],
                                 "volumeMounts": [
                                     {"name": "config", "mountPath": "/etc/epp/plugins.yaml", "subPath": "plugins.yaml"}

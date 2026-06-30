@@ -50,7 +50,9 @@ def render(spec: DeploymentSpec, *, user: str, cluster: Cluster, routing_only: b
     return objects
 
 
-def render_to_yaml(objects: list[dict]) -> str:
+def render_to_yaml(objects: list[dict], *, header: list[str] | None = None) -> str:
     stream = io.StringIO()
+    for line in header or []:
+        stream.write(f"# {line}\n")
     yaml.safe_dump_all(objects, stream, sort_keys=False, explicit_start=True)
     return stream.getvalue()

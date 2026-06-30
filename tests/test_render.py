@@ -10,7 +10,7 @@ from jllmd.spec import load_spec
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLUSTER = load_cluster(ROOT / "clusters" / "oci-gb200-osaka.yaml")
+CLUSTER = load_cluster(ROOT / "clusters" / "oci-gb200.yaml")
 
 
 def _objects(config: str) -> list[dict]:
@@ -73,12 +73,36 @@ def test_inferencepool_selector_is_instance_scoped():
 def test_epp_uses_current_config_file_flag():
     objects = _objects("deepseek-v4-gb200/pd.yaml")
     deployment = _find(objects, "Deployment", "infpool-epp")
-    args = deployment["spec"]["template"]["spec"]["containers"][0]["args"]
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    args = container["args"]
 
+    assert container["image"] == "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0"
     assert "--config-file=/etc/epp/plugins.yaml" in args
     assert "--pool-name=tester-wide-ep-infpool" in args
     assert "--pool-namespace=vllm" in args
     assert not any(arg.startswith("--plugins-config-file") for arg in args)
+
+
+def test_lws_uses_cluster_routing_sidecar_image():
+    objects = _objects("deepseek-v4-gb200/pd.yaml")
+    lws = _find(objects, "LeaderWorkerSet", "decode")
+    init_container = lws["spec"]["leaderWorkerTemplate"]["workerTemplate"]["spec"]["initContainers"][0]
+
+    assert init_container["image"] == "ghcr.io/llm-d/llm-d-routing-sidecar:v0.8.0"
+
+
+def test_routing_plugin_config_can_be_inline_override():
+    spec = load_spec(ROOT / "models" / "qwen" / "aggregated.yaml", CLUSTER)
+    spec.routing.plugin_config = {
+        "apiVersion": "inference.networking.x-k8s.io/v1alpha1",
+        "kind": "EndpointPickerConfig",
+        "plugins": [{"type": "weighted-random-picker", "name": "custom-picker"}],
+    }
+    objects = render(spec, user="tester", cluster=CLUSTER)
+    config = _find(objects, "ConfigMap", "epp-config")
+
+    assert "custom-picker" in config["data"]["plugins.yaml"]
+    assert "active-request-scorer" not in config["data"]["plugins.yaml"]
 
 
 def test_prefill_launch_uses_global_tp_and_local_gpu_span():

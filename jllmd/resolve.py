@@ -8,7 +8,7 @@ from typing import Any
 from .cluster import Cluster
 from .equations import render_mapping
 from .instance import Instance
-from .ports import RolePorts, derive_ports
+from .dp_ports import RolePorts, derive_ports
 from .parallelism import parallel_layout
 from .spec import DeploymentSpec, RoleSpec
 

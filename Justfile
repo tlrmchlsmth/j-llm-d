@@ -16,7 +16,7 @@ DEV_POD_NAME := NAME_PREFIX + "-vllm-dev"
 GB200_DIR := "gb200"
 DEV_DIR := "dev"
 MONITORING_DIR := "monitoring"
-CLUSTER := env("JLLMD_CLUSTER", "clusters/oci-gb200-osaka.yaml")
+CLUSTER := env("JLLMD_CLUSTER", "clusters/oci-gb200.yaml")
 RENDER_OUT := env("JLLMD_RENDER_OUT", "/tmp/" + NAME_PREFIX + "-jllmd.yaml")
 EDITOR := env("EDITOR", "vi")
 

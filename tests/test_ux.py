@@ -10,7 +10,7 @@ from jllmd.spec import DpLoadBalancing, RoutingKind, load_spec
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLUSTER = load_cluster(ROOT / "clusters" / "oci-gb200-osaka.yaml")
+CLUSTER = load_cluster(ROOT / "clusters" / "oci-gb200.yaml")
 
 
 def test_compact_parallelism_and_equations_resolve_to_runtime_values():
@@ -26,10 +26,23 @@ def test_compact_parallelism_and_equations_resolve_to_runtime_values():
     assert role.dp_load_balancing == DpLoadBalancing.EXTERNAL
 
     assert resolved.env["MAX_TOKENS"] == "1024"
+    assert resolved.env["UCX_NET_DEVICES"] == CLUSTER.ucx_net_devices
     assert resolved.env["NVSHMEM_QP_DEPTH"] == "2050"
     assert resolved.vllm_args["max_num_batched_tokens"] == 1024
     assert resolved.vllm_args["max_num_seqs"] == 1024
     assert resolved.vllm_args["max_cudagraph_capture_size"] == 1024
+
+
+def test_fabric_profiles_are_cluster_config_driven():
+    pd = load_spec(ROOT / "models" / "deepseek-v4-gb200" / "pd.yaml", CLUSTER)
+    decode = resolve_role(pd, Instance("tester", pd.release), CLUSTER, pd.role("decode"))
+    qwen = load_spec(ROOT / "models" / "qwen" / "aggregated.yaml", CLUSTER)
+    standard = resolve_role(qwen, Instance("tester", "qwen"), CLUSTER, qwen.role("decode"))
+
+    assert decode.fabric_profile == "deepep_decode"
+    assert decode.env["NCCL_MNNVL_ENABLE"] == "1"
+    assert standard.fabric_profile == "standard"
+    assert "NCCL_MNNVL_ENABLE" not in standard.env
 
 
 def test_dp_is_global_and_local_dp_is_derived_from_lws_nodes():

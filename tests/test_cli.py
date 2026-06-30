@@ -7,7 +7,7 @@ from jllmd.cli import main
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = ROOT / "models" / "deepseek-v4-gb200" / "pd.yaml"
-CLUSTER = ROOT / "clusters" / "oci-gb200-osaka.yaml"
+CLUSTER = ROOT / "clusters" / "oci-gb200.yaml"
 
 
 def test_cache_path_cli_accepts_cluster_template_override(capsys):

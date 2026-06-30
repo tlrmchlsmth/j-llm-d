@@ -7,18 +7,20 @@ import yaml
 from ..instance import Instance
 from ..cluster import Cluster
 from ..resolve import resolve_role
-from ..spec import DeploymentSpec, RoutingKind
+from ..spec import DeploymentSpec, RoutingKind, RoutingSpec
 
 
-def _plugin_config(kind: RoutingKind) -> str:
-    if kind == RoutingKind.RANDOM:
+def _plugin_config(routing: RoutingSpec) -> str:
+    if routing.plugin_config is not None:
+        return yaml.safe_dump(routing.plugin_config, sort_keys=False)
+    if routing.kind == RoutingKind.RANDOM:
         config = {
             "apiVersion": "inference.networking.x-k8s.io/v1alpha1",
             "kind": "EndpointPickerConfig",
             "plugins": [{"type": "weighted-random-picker"}],
             "schedulingProfiles": [{"name": "default", "plugins": [{"pluginRef": "weighted-random-picker"}]}],
         }
-    elif kind == RoutingKind.PD:
+    elif routing.kind == RoutingKind.PD:
         config = {
             "apiVersion": "inference.networking.x-k8s.io/v1alpha1",
             "kind": "EndpointPickerConfig",
@@ -101,7 +103,7 @@ def render_routing(spec: DeploymentSpec, instance: Instance, cluster: Cluster) -
             "apiVersion": "v1",
             "kind": "ConfigMap",
             "metadata": {"name": instance.name("epp-config"), "labels": instance.labels("routing")},
-            "data": {"plugins.yaml": _plugin_config(spec.routing.kind)},
+            "data": {"plugins.yaml": _plugin_config(spec.routing)},
         },
         {
             "apiVersion": "inference.networking.x-k8s.io/v1alpha2",
@@ -143,7 +145,7 @@ def render_routing(spec: DeploymentSpec, instance: Instance, cluster: Cluster) -
                         "containers": [
                             {
                                 "name": "epp",
-                                "image": spec.routing.epp_image,
+                                "image": spec.routing.epp_image or cluster.llm_d.epp,
                                 "imagePullPolicy": "Always",
                                 "args": [
                                     "--config-file=/etc/epp/plugins.yaml",

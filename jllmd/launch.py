@@ -6,7 +6,7 @@ import json
 import shlex
 from typing import Any
 
-from .ports import RolePorts
+from .dp_ports import RolePorts
 from .parallelism import parallel_layout
 from .spec import DeploymentSpec, RoleSpec
 

@@ -1,0 +1,60 @@
+# Cluster profile for OCI GB200 environments: storage, paths, fabric, and llm-d images.
+name: oci-gb200
+gpus_per_node: 4
+
+llm_d:
+  release: v0.8.0
+  images:
+    epp: ghcr.io/llm-d/llm-d-inference-scheduler:{release}
+    routing_sidecar: ghcr.io/llm-d/llm-d-routing-sidecar:{release}
+
+storage:
+  lustre_pvc: lustre-pvc-vllm
+  local_nvme_path: /mnt/numa0
+
+pod_defaults:
+  shm_size: 2Gi
+
+paths:
+  user_root: /mnt/lustre/{user}
+  cache_root: /mnt/lustre/{user}/jit-cache/{gpu_arch}/{cuda}/{vllm_version}/{release}
+
+dev:
+  venv: /mnt/lustre/{user}/vllm-venv
+  source: /mnt/lustre/{user}/vllm-dev
+
+fabric:
+  ucx_net_devices: mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1
+  imex_resource_claim_template: llm-d-dev-claim
+  default_profile: standard
+  expert_parallel_profiles:
+    decode: deepep_decode
+    prefill: deepep_prefill
+  default_env:
+    TRITON_LIBCUDA_PATH: /usr/lib64
+    NVIDIA_GDRCOPY: enabled
+    UCX_NET_DEVICES: "{ucx_net_devices}"
+    VLLM_ENGINE_READY_TIMEOUT_S: "1800"
+  profiles:
+    standard: {}
+    deepep_decode:
+      env:
+        VLLM_USE_NCCL_SYMM_MEM: "1"
+        NCCL_CUMEM_ENABLE: "1"
+        NCCL_MNNVL_ENABLE: "1"
+        NVSHMEM_DISABLE_CUDA_VMM: "0"
+        NCCL_NVLS_ENABLE: "1"
+        NVSHMEM_CUMEM_HANDLE_TYPE: FABRIC
+        VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL: "1"
+        VLLM_DEEPEP_BUFFER_SIZE_MB: "0"
+      computed_env:
+        NVSHMEM_QP_DEPTH: max_concurrency * 2 + 2
+    deepep_prefill:
+      env:
+        VLLM_USE_NCCL_SYMM_MEM: "1"
+        NCCL_CUMEM_ENABLE: "1"
+        NCCL_MNNVL_ENABLE: "1"
+        NVSHMEM_DISABLE_CUDA_VMM: "0"
+        NCCL_NVLS_ENABLE: "0"
+        VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE: "1"
+        VLLM_USE_DEEP_GEMM: "1"

@@ -4,8 +4,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
+
+from .equations import render_mapping
+
+
+@dataclass(frozen=True)
+class LlmdImages:
+    release: str
+    epp: str
+    routing_sidecar: str
+
+    @classmethod
+    def from_config(cls, data: dict[str, Any]) -> "LlmdImages":
+        release = data.get("release", "v0.8.0")
+        images = data.get("images", {})
+        return cls(
+            release=release,
+            epp=images.get("epp", "ghcr.io/llm-d/llm-d-inference-scheduler:{release}").format(release=release),
+            routing_sidecar=images.get("routing_sidecar", "ghcr.io/llm-d/llm-d-routing-sidecar:{release}").format(
+                release=release
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -16,6 +38,11 @@ class Cluster:
     local_nvme_path: str
     shm_size: str
     ucx_net_devices: str
+    llm_d: LlmdImages
+    fabric_default_profile: str = "standard"
+    fabric_role_profiles: dict[str, str] | None = None
+    fabric_default_env: dict[str, str] | None = None
+    fabric_profiles: dict[str, dict[str, Any]] | None = None
     imex_resource_claim_template: str | None = None
     user_root_template: str = "/mnt/lustre/{user}"
     cache_root_template: str = "/mnt/lustre/{user}/jit-cache/{gpu_arch}/{cuda}/{vllm_version}/{release}"
@@ -72,6 +99,11 @@ class Cluster:
             local_nvme_path=self.local_nvme_path,
             shm_size=self.shm_size,
             ucx_net_devices=self.ucx_net_devices,
+            llm_d=self.llm_d,
+            fabric_default_profile=self.fabric_default_profile,
+            fabric_role_profiles=dict(self.fabric_role_profiles or {}),
+            fabric_default_env=dict(self.fabric_default_env or {}),
+            fabric_profiles=dict(self.fabric_profiles or {}),
             imex_resource_claim_template=self.imex_resource_claim_template,
             user_root_template=user_root or self.user_root_template,
             cache_root_template=cache_root or self.cache_root_template,
@@ -84,41 +116,18 @@ class Cluster:
 
     def fabric_profile_for(self, *, topology: str, role_name: str, expert_parallel: bool) -> str:
         if not expert_parallel:
-            return "standard"
-        if role_name == "prefill":
-            return "deepep_prefill"
-        if role_name == "decode":
-            return "deepep_decode"
-        return "standard"
+            return self.fabric_default_profile
+        return (self.fabric_role_profiles or {}).get(role_name, self.fabric_default_profile)
 
     def fabric_env(self, profile: str, context: dict | None = None) -> dict[str, str]:
-        env = {
-            "TRITON_LIBCUDA_PATH": "/usr/lib64",
-            "NVIDIA_GDRCOPY": "enabled",
-            "UCX_NET_DEVICES": self.ucx_net_devices,
-            "VLLM_ENGINE_READY_TIMEOUT_S": "1800",
-        }
-        if profile in {"deepep_decode", "deepep_prefill"}:
+        format_context = {"ucx_net_devices": self.ucx_net_devices}
+        env = {key: str(value).format(**format_context) for key, value in (self.fabric_default_env or {}).items()}
+        profile_config = (self.fabric_profiles or {}).get(profile, {})
+        env |= {key: str(value) for key, value in profile_config.get("env", {}).items()}
+        if profile_config.get("computed_env"):
             env |= {
-                "VLLM_USE_NCCL_SYMM_MEM": "1",
-                "NCCL_CUMEM_ENABLE": "1",
-                "NCCL_MNNVL_ENABLE": "1",
-                "NVSHMEM_DISABLE_CUDA_VMM": "0",
-            }
-        if profile == "deepep_decode":
-            env |= {
-                "NCCL_NVLS_ENABLE": "1",
-                "NVSHMEM_CUMEM_HANDLE_TYPE": "FABRIC",
-                "VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL": "1",
-                "VLLM_DEEPEP_BUFFER_SIZE_MB": "0",
-            }
-            if context and "max_concurrency" in context:
-                env["NVSHMEM_QP_DEPTH"] = str(int(context["max_concurrency"]) * 2 + 2)
-        if profile == "deepep_prefill":
-            env |= {
-                "NCCL_NVLS_ENABLE": "0",
-                "VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE": "1",
-                "VLLM_USE_DEEP_GEMM": "1",
+                key: str(value)
+                for key, value in render_mapping(profile_config["computed_env"], context or {}).items()
             }
         return env
 
@@ -128,14 +137,20 @@ def load_cluster(path: str | Path) -> Cluster:
         data = yaml.safe_load(fh)
     paths = data.get("paths", {})
     dev = data.get("dev", {})
+    fabric = data.get("fabric", {})
     return Cluster(
         name=data["name"],
         gpus_per_node=int(data.get("gpus_per_node", 4)),
         lustre_pvc=data["storage"]["lustre_pvc"],
         local_nvme_path=data["storage"].get("local_nvme_path", "/mnt/numa0"),
         shm_size=data.get("pod_defaults", {}).get("shm_size", "2Gi"),
-        ucx_net_devices=data["fabric"]["ucx_net_devices"],
-        imex_resource_claim_template=data["fabric"].get("imex_resource_claim_template"),
+        ucx_net_devices=fabric["ucx_net_devices"],
+        llm_d=LlmdImages.from_config(data.get("llm_d", {})),
+        fabric_default_profile=fabric.get("default_profile", "standard"),
+        fabric_role_profiles=fabric.get("expert_parallel_profiles", {}),
+        fabric_default_env=fabric.get("default_env", {}),
+        fabric_profiles=fabric.get("profiles", {}),
+        imex_resource_claim_template=fabric.get("imex_resource_claim_template"),
         user_root_template=paths.get("user_root", "/mnt/lustre/{user}"),
         cache_root_template=paths.get(
             "cache_root",

@@ -1,6 +1,6 @@
 """Tests for implicit port derivation with and without local DP fanout."""
 
-from jllmd.ports import derive_ports
+from jllmd.dp_ports import derive_ports
 
 
 def test_no_dp_has_one_port():

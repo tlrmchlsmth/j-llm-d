@@ -119,7 +119,8 @@ class RuntimeSpec(BaseModel):
 
 class RoutingSpec(BaseModel):
     kind: RoutingKind | None = None
-    epp_image: str = "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0"
+    epp_image: str | None = None
+    plugin_config: dict[str, Any] | None = None
     replicas: int = Field(1, ge=1)
     target_role: str | None = None
 

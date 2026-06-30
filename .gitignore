@@ -22,6 +22,7 @@ guide-llm-results/
 traces/
 
 # Python
+uv.lock
 __pycache__/
 *.py[cod]
 *$py.class

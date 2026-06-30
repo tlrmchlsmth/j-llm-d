@@ -31,7 +31,7 @@ def render_lws(spec: DeploymentSpec, instance: Instance, cluster: Cluster, role:
         init_containers.append(
             {
                 "name": "routing-proxy",
-                "image": "ghcr.io/llm-d/llm-d-routing-sidecar:v0.8.0",
+                "image": cluster.llm_d.routing_sidecar,
                 "imagePullPolicy": "Always",
                 "args": [
                     f"--port={resolved.ports.public[0]}",
@@ -57,6 +57,7 @@ def render_lws(spec: DeploymentSpec, instance: Instance, cluster: Cluster, role:
         "name": "vllm",
         "image": spec.model.image,
         "imagePullPolicy": "Always",
+        # TODO(security): make these capabilities/runAsRoot explicit strategy knobs instead of the default.
         "securityContext": {
             "capabilities": {"add": ["IPC_LOCK", "SYS_RAWIO"]},
             "runAsGroup": 0,
@@ -80,6 +81,7 @@ def render_lws(spec: DeploymentSpec, instance: Instance, cluster: Cluster, role:
                 "command": [
                     "/bin/bash",
                     "-c",
+                    # TODO(readiness): compare with upstream llm-d probes as these templates mature.
                     " && ".join(
                         f"curl -sf http://localhost:{port}/v1/models | grep -q '\"id\"'"
                         for port in readiness_ports

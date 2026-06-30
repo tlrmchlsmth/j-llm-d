@@ -456,9 +456,13 @@ v1-flush-cache:
   {{KN}} exec {{DEV_POD_NAME}} -- bash -c 'rm -rf /mnt/lustre/{{NAME_PREFIX}}/vllm_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/flashinfer_cache_extdp /mnt/lustre/{{NAME_PREFIX}}/fa_cute_dsl_cache /mnt/lustre/{{NAME_PREFIX}}/tilelang_cache /mnt/lustre/{{NAME_PREFIX}}/flashinfer_workspace && echo "Compile caches flushed"'
 
 NYANN_BENCH_DIR := env("NYANN_BENCH_DIR", "")
+NYANN_LOAD_JOB := NAME_PREFIX + "-sharegpt-load"
+NYANN_EVAL_JOB := NAME_PREFIX + "-nyann-eval"
+NYANN_GSM8K_JOB := NAME_PREFIX + "-eval-gsm8k"
+NYANN_GPQA_JOB := NAME_PREFIX + "-eval-gpqa"
 
 # Wait for stack readiness, then launch nyann-bench load + eval jobs
-benchmark-stairs SWEEP_MIN='1600' SWEEP_MAX='14400' STEPS='10' STEP_DURATION='300s' ISL='500' OSL='1500' EVAL_CONCURRENCY='16':
+nyann-stairs SWEEP_MIN='1600' SWEEP_MAX='14400' STEPS='10' STEP_DURATION='300s' ISL='500' OSL='1500' EVAL_CONCURRENCY='16':
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "{{NYANN_BENCH_DIR}}" ]; then
@@ -473,15 +477,15 @@ benchmark-stairs SWEEP_MIN='1600' SWEEP_MAX='14400' STEPS='10' STEP_DURATION='30
       --target "{{EVAL_BASE_URL}}" \
       --config '{"load":{"concurrency":128},"warmup":{"duration":"60s","stagger":true},"sweep":{"min":{{SWEEP_MIN}},"max":{{SWEEP_MAX}},"steps":{{STEPS}},"step_duration":"{{STEP_DURATION}}"},"workload":{"type":"corpus","corpus_path":"{{LUSTRE_DATA}}/corpus/sharegpt.txt","isl":{{ISL}},"osl":{{OSL}},"turns":1}}' \
       --workers auto \
-      --kube --kube.name {{NAME_PREFIX}}-sharegpt-load --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
+      --kube --kube.name {{NYANN_LOAD_JOB}} --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
     go run ./cmd/nyann-bench/ generate \
       --target "{{EVAL_BASE_URL}}" \
       --config "{\"load\":{\"concurrency\":{{EVAL_CONCURRENCY}},\"duration\":\"${EVAL_DURATION}\"},\"workload\":{\"type\":\"gsm8k\",\"gsm8k_path\":\"{{LUSTRE_DATA}}/gsm8k_test.jsonl\",\"gsm8k_train_path\":\"{{LUSTRE_DATA}}/gsm8k_train.jsonl\"}}" \
-      --kube --kube.name {{NAME_PREFIX}}-nyann-eval --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
+      --kube --kube.name {{NYANN_EVAL_JOB}} --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
     wait
-    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-nyann-eval' to follow."
+    echo "nyann-bench jobs submitted. Use 'just nyann-logs load' or 'just nyann-logs eval' to follow."
 
-benchmark-constant CONCURRENCY='14400' DURATION='600s' ISL='500' OSL='1500' EVAL_CONCURRENCY='16':
+nyann CONCURRENCY='14400' DURATION='600s' ISL='500' OSL='1500' EVAL_CONCURRENCY='16':
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "{{NYANN_BENCH_DIR}}" ]; then
@@ -493,13 +497,19 @@ benchmark-constant CONCURRENCY='14400' DURATION='600s' ISL='500' OSL='1500' EVAL
       --target "{{EVAL_BASE_URL}}" \
       --config '{"load":{"concurrency":{{CONCURRENCY}},"duration":"{{DURATION}}","rampup":"30s"},"warmup":{"duration":"60s","stagger":true},"workload":{"type":"corpus","corpus_path":"{{LUSTRE_DATA}}/corpus/sharegpt.txt","isl":{{ISL}},"osl":{{OSL}},"turns":1}}' \
       --workers auto \
-      --kube --kube.name {{NAME_PREFIX}}-sharegpt-load --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
+      --kube --kube.name {{NYANN_LOAD_JOB}} --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
     go run ./cmd/nyann-bench/ generate \
       --target "{{EVAL_BASE_URL}}" \
       --config '{"load":{"concurrency":{{EVAL_CONCURRENCY}},"duration":"{{DURATION}}"},"workload":{"type":"gsm8k","gsm8k_path":"{{LUSTRE_DATA}}/gsm8k_test.jsonl","gsm8k_train_path":"{{LUSTRE_DATA}}/gsm8k_train.jsonl"}}' \
-      --kube --kube.name {{NAME_PREFIX}}-nyann-eval --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
+      --kube --kube.name {{NYANN_EVAL_JOB}} --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}} &
     wait
-    echo "nyann-bench jobs submitted. Use 'just nyann-logs {{NAME_PREFIX}}-sharegpt-load' or 'just nyann-logs {{NAME_PREFIX}}-nyann-eval' to follow."
+    echo "nyann-bench jobs submitted. Use 'just nyann-logs load' or 'just nyann-logs eval' to follow."
+
+benchmark-stairs SWEEP_MIN='1600' SWEEP_MAX='14400' STEPS='10' STEP_DURATION='300s' ISL='500' OSL='1500' EVAL_CONCURRENCY='16':
+  just nyann-stairs {{SWEEP_MIN}} {{SWEEP_MAX}} {{STEPS}} {{STEP_DURATION}} {{ISL}} {{OSL}} {{EVAL_CONCURRENCY}}
+
+benchmark-constant CONCURRENCY='14400' DURATION='600s' ISL='500' OSL='1500' EVAL_CONCURRENCY='16':
+  just nyann {{CONCURRENCY}} {{DURATION}} {{ISL}} {{OSL}} {{EVAL_CONCURRENCY}}
 
 LUSTRE_DATA := "/mnt/lustre/" + NAME_PREFIX
 EVAL_BASE_URL := "http://" + DEPLOY_NAME + "-inference-gateway-istio." + NAMESPACE + ".svc.cluster.local/v1"
@@ -507,7 +517,7 @@ EVAL_BASE_URL := "http://" + DEPLOY_NAME + "-inference-gateway-istio." + NAMESPA
 NYANN_IMAGE_TAG := env("NYANN_IMAGE_TAG", "latest")
 
 # Run GSM8K eval (1319 math problems, ~30 min)
-eval-gsm8k CONCURRENCY='64':
+nyann-eval-gsm8k CONCURRENCY='64':
     cd {{NYANN_BENCH_DIR}} && NYANN_NAME_PREFIX={{NAME_PREFIX}} go run ./cmd/nyann-bench/ eval gsm8k \
       --target "{{EVAL_BASE_URL}}" \
       --gsm8k-path {{LUSTRE_DATA}}/gsm8k_test.jsonl \
@@ -517,7 +527,7 @@ eval-gsm8k CONCURRENCY='64':
       --kube --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}}
 
 # Run GPQA Diamond eval (198 grad-level science questions)
-eval-gpqa CONCURRENCY='64':
+nyann-eval-gpqa CONCURRENCY='64':
     cd {{NYANN_BENCH_DIR}} && NYANN_NAME_PREFIX={{NAME_PREFIX}} go run ./cmd/nyann-bench/ eval gpqa \
       --target "{{EVAL_BASE_URL}}" \
       --gpqa-path {{LUSTRE_DATA}}/gpqa_diamond.jsonl \
@@ -526,26 +536,49 @@ eval-gpqa CONCURRENCY='64':
       --kube --kube.volume lustre --kube.image {{NYANN_IMAGE_TAG}} --kube.namespace {{NAMESPACE}}
 
 # Run both evals in parallel
-eval: (eval-gsm8k) (eval-gpqa)
+nyann-eval: (nyann-eval-gsm8k) (nyann-eval-gpqa)
+
+eval-gsm8k CONCURRENCY='64':
+  just nyann-eval-gsm8k {{CONCURRENCY}}
+
+eval-gpqa CONCURRENCY='64':
+  just nyann-eval-gpqa {{CONCURRENCY}}
+
+eval: (nyann-eval)
 
 # Prep GPQA dataset on Lustre (if missing or empty)
-prep-gpqa:
+nyann-prep-gpqa:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{NYANN_BENCH_DIR}}"
     just prep-gpqa "{{LUSTRE_DATA}}" {{NAMESPACE}}
 
+prep-gpqa:
+  just nyann-prep-gpqa
+
 # Stop nyann-bench benchmark jobs
-stop-nyann:
-  {{KN}} delete jobset -l app={{NAME_PREFIX}}-sharegpt-load --ignore-not-found=true &
-  {{KN}} delete jobset -l app={{NAME_PREFIX}}-nyann-eval --ignore-not-found=true &
-  {{KN}} delete jobset -l app={{NAME_PREFIX}}-eval-gsm8k --ignore-not-found=true &
-  {{KN}} delete jobset -l app={{NAME_PREFIX}}-eval-gpqa --ignore-not-found=true &
+nyann-stop:
+  {{KN}} delete jobset -l app={{NYANN_LOAD_JOB}} --ignore-not-found=true &
+  {{KN}} delete jobset -l app={{NYANN_EVAL_JOB}} --ignore-not-found=true &
+  {{KN}} delete jobset -l app={{NYANN_GSM8K_JOB}} --ignore-not-found=true &
+  {{KN}} delete jobset -l app={{NYANN_GPQA_JOB}} --ignore-not-found=true &
   wait
 
 # Tail nyann-bench job logs
-nyann-logs NAME:
-  {{KN}} logs -l app={{NAME}} -c nyann-bench --tail=50 -f --max-log-requests=20
+nyann-logs TARGET='load':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  case "{{TARGET}}" in
+    load) APP="{{NYANN_LOAD_JOB}}" ;;
+    eval) APP="{{NYANN_EVAL_JOB}}" ;;
+    gsm8k) APP="{{NYANN_GSM8K_JOB}}" ;;
+    gpqa) APP="{{NYANN_GPQA_JOB}}" ;;
+    *) APP="{{TARGET}}" ;;
+  esac
+  {{KN}} logs -l app="$APP" -c nyann-bench --tail=50 -f --max-log-requests=20
+
+stop-nyann:
+  just nyann-stop
 
 # Query Prometheus for per-stage benchmark metrics (requires port-forward: just prometheus)
 query-prometheus CLIENT_JOB=(NAME_PREFIX + "-sharegpt-load") DEPLOYMENT=DEPLOY_NAME EVAL_JOB=(NAME_PREFIX + "-nyann-eval") *ARGS='':

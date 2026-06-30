@@ -1,3 +1,4 @@
+# Python package metadata and tool configuration for the j-llm-d renderer.
 [project]
 name = "j-llm-d"
 version = "0.2.0"

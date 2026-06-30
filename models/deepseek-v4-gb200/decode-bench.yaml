@@ -1,3 +1,4 @@
+# DeepSeek V4 GB200 decode-bench deployment: decode-only stack with synthetic KV transfer.
 release: wide-ep
 topology: decode_bench
 

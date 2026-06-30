@@ -1,3 +1,5 @@
+"""Build the per-pod shell script that prepares the environment and starts vLLM."""
+
 from __future__ import annotations
 
 import json

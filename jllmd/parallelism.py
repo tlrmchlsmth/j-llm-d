@@ -1,3 +1,5 @@
+"""Derive local and global TP/DP layout from a role's parallelism settings."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,3 +1,5 @@
+"""Instance identity helpers for names, labels, selectors, and user-scoped paths."""
+
 from __future__ import annotations
 
 import hashlib

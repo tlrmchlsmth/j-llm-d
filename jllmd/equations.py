@@ -1,3 +1,5 @@
+"""Small expression evaluator for computed spec values such as scheduler limits."""
+
 from __future__ import annotations
 
 import ast

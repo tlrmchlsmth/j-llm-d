@@ -1,3 +1,5 @@
+"""Structural tests for rendered Kubernetes objects and YAML serialization."""
+
 from pathlib import Path
 
 import yaml

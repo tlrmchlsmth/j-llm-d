@@ -1,3 +1,5 @@
+"""Command-line entrypoints for rendering manifests and printing derived names/paths."""
+
 from __future__ import annotations
 
 import argparse

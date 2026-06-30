@@ -1,3 +1,5 @@
+"""Tests for warning-only validation around risky parallelism combinations."""
+
 from jllmd.spec import DeploymentSpec
 from jllmd.warnings import collect_warnings
 

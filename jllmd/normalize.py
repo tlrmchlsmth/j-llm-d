@@ -1,3 +1,5 @@
+"""Backward-compatible YAML normalization for compact user-facing spec syntax."""
+
 from __future__ import annotations
 
 from typing import Any

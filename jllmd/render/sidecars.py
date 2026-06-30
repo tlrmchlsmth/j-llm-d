@@ -1,3 +1,5 @@
+"""Optional monitoring sidecar container definitions for rendered vLLM pods."""
+
 from __future__ import annotations
 
 

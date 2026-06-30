@@ -1,3 +1,4 @@
+# Qwen aggregated smoke-test deployment for a simple single-role vLLM stack.
 release: qwen
 topology: aggregated
 

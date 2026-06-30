@@ -1,3 +1,5 @@
+"""Non-fatal render warnings for risky or surprising deployment configurations."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

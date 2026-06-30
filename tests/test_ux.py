@@ -1,3 +1,5 @@
+"""UX-level tests for compact YAML syntax, equations, and generated manifests."""
+
 from pathlib import Path
 
 from jllmd.cluster import load_cluster

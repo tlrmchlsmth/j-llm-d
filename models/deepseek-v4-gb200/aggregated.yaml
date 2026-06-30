@@ -1,3 +1,4 @@
+# DeepSeek V4 GB200 aggregated deployment: one decode role handles serving and routing.
 release: wide-ep
 topology: aggregated
 

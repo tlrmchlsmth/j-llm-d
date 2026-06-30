@@ -1,3 +1,5 @@
+"""Tests for the multi-tenant instance naming, selector, and path invariants."""
+
 from jllmd.instance import Instance
 
 

@@ -1,3 +1,5 @@
+"""CLI regression tests for derived paths, overrides, and routing-only rendering."""
+
 from pathlib import Path
 
 from jllmd.cli import main

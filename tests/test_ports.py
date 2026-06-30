@@ -1,3 +1,5 @@
+"""Tests for implicit port derivation with and without local DP fanout."""
+
 from jllmd.ports import derive_ports
 
 

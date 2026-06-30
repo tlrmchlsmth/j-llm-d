@@ -1,3 +1,5 @@
+"""Resolve a spec role into concrete ports, paths, env vars, and vLLM arguments."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

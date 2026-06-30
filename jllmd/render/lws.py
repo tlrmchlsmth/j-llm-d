@@ -1,3 +1,5 @@
+"""LeaderWorkerSet renderer for vLLM roles, including sidecars and fabric mounts."""
+
 from __future__ import annotations
 
 from .common import env_list, secret_env

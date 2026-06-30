@@ -1,3 +1,5 @@
+"""Pydantic models and loader for user-authored deployment YAML specs."""
+
 from __future__ import annotations
 
 from enum import StrEnum

@@ -1,3 +1,5 @@
+"""Derive public/backend serving ports from the local data-parallel layout."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

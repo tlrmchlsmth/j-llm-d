@@ -1,3 +1,4 @@
+# Cluster profile for the OCI GB200 Osaka environment: storage, paths, and fabric defaults.
 name: oci-gb200-osaka
 gpus_per_node: 4
 

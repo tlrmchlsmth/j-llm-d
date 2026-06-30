@@ -1,3 +1,5 @@
+"""Gateway API, InferencePool, and EPP manifests for instance-scoped routing."""
+
 from __future__ import annotations
 
 import yaml

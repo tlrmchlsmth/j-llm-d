@@ -1,3 +1,5 @@
+"""Top-level render pipeline that emits one YAML-ready object list per deployment."""
+
 from __future__ import annotations
 
 import io

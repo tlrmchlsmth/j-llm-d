@@ -1,3 +1,4 @@
+# DeepSeek V4 GB200 P/D deployment: separate decode and prefill LWS roles with KV transfer.
 release: wide-ep
 topology: pd
 
